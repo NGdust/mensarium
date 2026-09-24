@@ -9,20 +9,16 @@
 Core (один раз, на сервере или ноутбуке):
 
 ```sh
-git clone https://github.com/NGdust/mensarium.git && sh mensarium/install.sh
-```
-
-или с уже развёрнутого Core:
-
-```sh
-curl -fsSL http://<core-host>/install.sh | sh -s -- --role core
+curl -fsSL https://mensarium.com/install.sh | sh -s -- --role core
 ```
 
 Target (на каждой машине, где агент будет работать). Код пары создаётся в UI Core (Targets → Pair new target) или командой `mensarium core pair-code`:
 
 ```sh
-curl -fsSL http://<core-host>/install.sh | sh -s -- --code WOLF-SKY-4821
+curl -fsSL https://mensarium.com/install.sh | sh -s -- --server http://<core-host>:8787 --code WOLF-SKY-4821
 ```
+
+UI Core показывает готовую команду для target — она берёт установщик прямо с вашего Core и `--server` не требует.
 
 Установщик сам ставит [uv](https://docs.astral.sh/uv/) и Python 3.12 в `~/.mensarium`, кладёт команду `mensarium` в `~/.local/bin`, спрашивает настройки и регистрирует фоновый сервис (launchd на macOS, systemd на Linux). Docker не нужен.
 
