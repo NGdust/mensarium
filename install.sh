@@ -225,4 +225,3 @@ if ( : </dev/tty ) 2>/dev/null; then
   MENSARIUM_HOME="$MENSARIUM_HOME" exec "$VENV/bin/mensarium" "$@" </dev/tty
 fi
 say "  No terminal for the interactive setup. Configure later with: ${B}mensarium setup${R}"
-say "  Non-interactive Core setup: ${B}mensarium core configure --help${R}"
