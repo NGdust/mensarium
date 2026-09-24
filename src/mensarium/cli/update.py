@@ -14,6 +14,7 @@ from mensarium import __version__
 from mensarium.cli import service
 from mensarium.core.config import CorePaths
 from mensarium.shared.paths import mensarium_home
+from mensarium.shared.versions import parse_version
 from mensarium.target.config import TargetPaths, load_target_config
 
 DEFAULT_UPDATE_URL = "https://mensarium.com"
@@ -21,10 +22,6 @@ DEFAULT_UPDATE_URL = "https://mensarium.com"
 
 class UpdateError(Exception):
     pass
-
-
-def parse_version(value: str) -> tuple[int, ...]:
-    return tuple(int(p) for p in value.split(".") if p.isdigit())
 
 
 def update_source() -> str:

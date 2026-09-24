@@ -24,7 +24,7 @@ from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secre
 from mensarium.core.db import Database
 from mensarium.core.events import EventBus
 from mensarium.core.local_target import ensure_local_target, local_target_paths
-from mensarium.core.orchestrator import Orchestrator, TaskError
+from mensarium.core.orchestrator import Orchestrator, TaskError, full_access
 from mensarium.core.repo import Repo
 from mensarium.core.target_hub import TargetHub
 from mensarium.llm_providers.factory import build_provider
@@ -296,6 +296,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
                 "roots": policy.get("roots", []),
                 "command_allowlist": policy.get("command_allowlist", []),
                 "allow_full_access": policy.get("allow_full_access", False),
+                "full_access": full_access(t),
             },
         }
 

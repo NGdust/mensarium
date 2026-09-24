@@ -25,12 +25,25 @@ from mensarium.llm_providers.base import LLMError, LLMProvider
 from mensarium.policy_engine.engine import Decision, evaluate
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import iso_in, now_iso, parse_iso, utcnow
+from mensarium.shared.versions import parse_version
 from mensarium.tool_runtime.registry import REGISTRY
 
 log = logging.getLogger(__name__)
 
 OBSERVATION_LIMIT = 12000
 ARTIFACT_THRESHOLD = 4000
+FULL_ACCESS_SINCE = (0, 3, 0)
+FULL_ACCESS_ERRORS = {
+    "outdated": "full access is not available: the agent on this device is outdated, update it",
+    "disabled": "full access is disabled in this device's config (allow_full_access)",
+}
+
+
+def full_access(target: dict[str, Any]) -> str:
+    """Whether a device executes full-access requests: allowed, disabled by its owner, or too old to know the mode."""
+    if parse_version(target.get("agent_version") or "0") < FULL_ACCESS_SINCE:
+        return "outdated"
+    return "allowed" if (target.get("policy") or {}).get("allow_full_access") else "disabled"
 
 
 class TaskError(Exception):
@@ -83,6 +96,8 @@ class Orchestrator:
         platform = str(target["platform"]).split("-")[0]
         if platform not in profile.allowed_targets:
             raise TaskError(f"profile {profile.id} does not allow {platform} targets")
+        if mode == "full" and (access := full_access(target)) != "allowed":
+            raise TaskError(FULL_ACCESS_ERRORS[access])
         task_id = new_id("task")
         now = now_iso()
         await self.repo.create_task(
@@ -125,6 +140,9 @@ class Orchestrator:
 
     async def set_mode(self, task_id: str, mode: AccessMode) -> dict[str, Any]:
         task = await self._task(task_id)
+        target = await self.repo.get_target(task["target_id"])
+        if mode == "full" and (access := full_access(target or {})) != "allowed":
+            raise TaskError(FULL_ACCESS_ERRORS[access])
         if task["mode"] != mode:
             await self.repo.update_task(task_id, {"mode": mode})
             await self.repo.audit(self.workspace_id, "user", "task.mode", {"task_id": task_id, "mode": mode})

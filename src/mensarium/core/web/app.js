@@ -257,6 +257,10 @@ const reasonText = (r) => REASONS[r] || r;
 const statusOf = (s) => STATUS[s] || [s, '', false];
 const isRunning = (s) => statusOf(s)[2];
 const isLocal = (t) => t && t.id === state.system?.local_target_id;
+const fullAccessOf = (t) => t?.capabilities?.full_access || 'disabled';
+const fullAccessBlock = (t) => (fullAccessOf(t) === 'outdated'
+  ? `Агент на устройстве устарел (v${t.agent_version}). Обновите его командой mensarium update на устройстве.`
+  : 'Выключен на устройстве: allow_full_access в его конфиге.');
 const devices = () => state.targets.filter((t) => t.status !== 'revoked').sort((a, b) => isLocal(b) - isLocal(a));
 const taskTitle = (t) => ((t.input || '').split('\n')[0] || 'Без названия').slice(0, 80);
 
@@ -528,26 +532,29 @@ function composer({ placeholder, chips, onSend }) {
 }
 
 // Chip + popover to switch between access modes; onPick resolves after the change is applied.
+// A device that cannot run full access (disabled by its owner or an agent too old) keeps the chat in "ask".
 function modeSwitch(initial, { target, onPick }) {
   let mode = initial;
   const label = h('span', { class: 'chip-label' });
   const chip = h('button', { class: 'chip chip-compact', title: 'Режим доступа', 'aria-haspopup': 'menu' });
+  const effective = () => (mode === 'full' && fullAccessOf(target()) !== 'allowed' ? 'ask' : mode);
   const render = () => {
-    const m = MODES[mode];
+    const m = MODES[effective()];
     chip.className = `chip chip-compact ${m.cls}`;
     label.textContent = m.label;
     chip.replaceChildren(icon(m.icon), label, icon('chevron'));
   };
   chip.addEventListener('click', () => {
-    const allowFull = target()?.capabilities?.allow_full_access !== false;
+    const blocked = fullAccessOf(target()) !== 'allowed' ? fullAccessBlock(target()) : null;
+    const current = effective();
     openPopover(chip, Object.entries(MODES).map(([key, m]) => h('button', {
-      class: `menu-item mode-item${key === mode ? ' selected' : ''}`,
+      class: `menu-item mode-item${key === current ? ' selected' : ''}`,
       role: 'menuitemradio',
-      'aria-checked': String(key === mode),
-      disabled: key === 'full' && !allowFull,
+      'aria-checked': String(key === current),
+      disabled: key === 'full' && blocked,
       onclick: async () => {
         closeLayer();
-        if (key === mode) return;
+        if (key === current) return;
         if (key === 'full' && !await confirmDialog({
           title: 'Включить полный доступ?',
           text: `Агент будет запускать команды, менять файлы и ходить в сеть на «${target()?.name || 'устройстве'}» без вопросов. Вернуть режим с подтверждением можно в любой момент.`,
@@ -556,11 +563,11 @@ function modeSwitch(initial, { target, onPick }) {
         try { await onPick(key); mode = key; render(); } catch (err) { fail(err); }
       },
     }, icon(m.icon), h('span', { class: 'mi-text' }, h('span', {}, m.label),
-      h('span', { class: 'mi-desc' }, key === 'full' && !allowFull ? 'Выключен в настройках устройства' : m.desc)),
-    key === mode ? icon('check') : null)));
+      h('span', { class: 'mi-desc' }, key === 'full' && blocked ? blocked : m.desc)),
+    key === current ? icon('check') : null)));
   });
   render();
-  return { el: chip, set(value) { mode = value; render(); } };
+  return { el: chip, effective, refresh: render, set(value) { mode = value; render(); } };
 }
 
 // ---------- new chat ----------
@@ -581,24 +588,23 @@ async function viewNewChat() {
   function pickTarget() {
     const items = devices().map((t) => h('button', {
       class: `menu-item${selected && t.id === selected.id ? ' selected' : ''}`, disabled: t.status !== 'online',
-      onclick: () => { selected = t; localStorageSet('target', t.id); renderChip(); closeLayer(); },
+      onclick: () => { selected = t; localStorageSet('target', t.id); renderChip(); modeCtl.refresh(); hint.textContent = hintText(); closeLayer(); },
     }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.name, h('span', { class: 'popover-sub' }, isLocal(t) ? 'сервер Core' : t.status === 'online' ? t.platform.split('-')[0] : 'не в сети')));
     items.push(h('div', { class: 'menu-sep' }), h('button', { class: 'menu-item', onclick: () => { closeLayer(); openPairing(); } }, icon('link'), 'Сопрячь новое устройство'));
     openPopover(targetChip, items);
   }
   renderChip();
 
-  let mode = localStorageGet('mode') === 'full' ? 'full' : 'ask';
   const hint = h('p', { class: 'welcome-hint' });
-  const hintText = () => {
+  const hintText = (mode = modeCtl.effective()) => {
     if (!online.length) return 'Все устройства сейчас не в сети. Запустите на нужной машине mensarium target run.';
     return mode === 'full'
       ? 'Полный доступ: агент сам запускает команды и меняет файлы, не спрашивая.'
       : 'Агент изучит проект сам и спросит разрешения перед запуском команд и изменением файлов.';
   };
-  const modeCtl = modeSwitch(mode, {
+  const modeCtl = modeSwitch(localStorageGet('mode') === 'full' ? 'full' : 'ask', {
     target: () => selected,
-    onPick: async (value) => { mode = value; localStorageSet('mode', value); hint.textContent = hintText(); },
+    onPick: async (value) => { localStorageSet('mode', value); hint.textContent = hintText(value); },
   });
   hint.textContent = hintText();
 
@@ -607,8 +613,7 @@ async function viewNewChat() {
     chips: [targetChip, h('span', { class: 'divider' }), modeCtl.el],
     onSend: async (text) => {
       if (!selected) throw new Error('Выберите устройство, на котором агент будет работать');
-      const allowFull = selected.capabilities?.allow_full_access !== false;
-      const task = await post('/v1/tasks', { target_id: selected.id, input: text, mode: mode === 'full' && allowFull ? 'full' : 'ask' });
+      const task = await post('/v1/tasks', { target_id: selected.id, input: text, mode: modeCtl.effective() });
       state.tasks.unshift(task);
       go(`#/chat/${task.id}`);
     },
@@ -1016,7 +1021,8 @@ async function settingsDevices(shell) {
         h('div', { class: 'row-extra' },
           (caps.roots || []).map((r) => h('span', { class: 'pill tag', title: `Папка, доступная агенту: ${r}` }, r)),
           h('span', { class: 'pill', title: programs.join(', ') }, programs.includes('*') ? 'любые программы' : `${programs.length} программ`),
-          caps.allow_full_access ? null : h('span', { class: 'pill' }, 'без полного доступа')),
+          caps.full_access === 'outdated' ? h('span', { class: 'pill warn', title: fullAccessBlock(t) }, 'полный доступ: обновите агент')
+            : caps.full_access === 'allowed' ? null : h('span', { class: 'pill', title: fullAccessBlock(t) }, 'без полного доступа')),
       ];
     })));
   };
