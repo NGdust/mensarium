@@ -289,12 +289,20 @@ def target_pair(
     code: Annotated[str, typer.Option(help="Pairing code from the Core")],
     root: Annotated[list[str], typer.Option(help="Allowed workspace root (repeatable)")],
     name: Annotated[str | None, typer.Option(help="Target name")] = None,
+    full_access: Annotated[bool, typer.Option("--full-access/--no-full-access", help="Allow full-access chats")] = True,
 ) -> None:
     """Pair this machine with a Core non-interactively."""
     from mensarium.target.pairing import PairingError, pair
 
     try:
-        cfg = pair(TargetPaths(), server=server, code=code, name=name or socket.gethostname().split(".")[0], roots=root)
+        cfg = pair(
+            TargetPaths(),
+            server=server,
+            code=code,
+            name=name or socket.gethostname().split(".")[0],
+            roots=root,
+            allow_full_access=full_access,
+        )
     except PairingError as e:
         fail(str(e))
         raise typer.Exit(1) from e

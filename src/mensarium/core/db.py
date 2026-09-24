@@ -4,7 +4,9 @@ from typing import Any
 
 import aiosqlite
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+COLUMN_MIGRATIONS = [("tasks", "mode", "TEXT NOT NULL DEFAULT 'ask'")]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -27,7 +29,7 @@ CREATE TABLE IF NOT EXISTS agent_profiles (
 );
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, profile_id TEXT NOT NULL, target_id TEXT NOT NULL,
-    input TEXT NOT NULL, status TEXT NOT NULL, status_reason TEXT, result TEXT,
+    input TEXT NOT NULL, status TEXT NOT NULL, status_reason TEXT, result TEXT, mode TEXT NOT NULL DEFAULT 'ask',
     budget TEXT NOT NULL DEFAULT '{}', policy_snapshot_hash TEXT, trace_id TEXT NOT NULL,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
@@ -100,8 +102,12 @@ class Database:
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA foreign_keys=ON")
         await self._conn.executescript(SCHEMA)
+        for table, column, ddl in COLUMN_MIGRATIONS:
+            async with self._conn.execute(f"PRAGMA table_info({table})") as cur:
+                if column not in {row[1] for row in await cur.fetchall()}:
+                    await self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
         await self._conn.execute(
-            "INSERT OR IGNORE INTO kv(key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),)
+            "INSERT OR REPLACE INTO kv(key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),)
         )
         await self._conn.commit()
 

@@ -387,6 +387,12 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .chip:hover:not(:disabled) { background: var(--surface-hover); }
 .chip:disabled { cursor: default; }
 .chip.accent { color: var(--accent); }
+.chip.full { color: var(--orange); }
+.mode-item { align-items: flex-start; min-width: 300px; }
+.mode-item .icon { margin-top: 2px; }
+.mode-item.selected { background: var(--accent-soft); color: var(--text); }
+.mi-text { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.mi-desc { font-size: 12.5px; color: var(--muted); line-height: 1.4; white-space: normal; }
 .chip-label { overflow: hidden; text-overflow: ellipsis; }
 .composer-bar .spacer { flex: 1; }
 .send {

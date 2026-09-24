@@ -7,6 +7,7 @@ from mensarium.shared.crypto import canonical_json, sha256_hex
 PROTOCOL_VERSION = "1.0"
 
 ExecStatus = Literal["succeeded", "failed", "timeout", "canceled", "rejected"]
+AccessMode = Literal["ask", "full"]
 
 
 class TargetInfo(BaseModel):
@@ -26,6 +27,7 @@ class TargetLimits(BaseModel):
 class TargetPolicy(BaseModel):
     roots: list[str]
     command_allowlist: list[str]
+    allow_full_access: bool = False
 
 
 class Capabilities(BaseModel):
@@ -76,6 +78,7 @@ class ExecutionRequest(BaseModel):
     tool: str
     arguments: dict[str, Any]
     approval_ref: str | None = None
+    mode: AccessMode = "ask"
     signature: str = ""
 
 
@@ -127,4 +130,5 @@ class PairResponse(BaseModel):
 
 def policy_snapshot_hash(policy: TargetPolicy, tools: list[str]) -> str:
     """Hash of the target policy the Core decided against; the target recomputes it from its own config."""
-    return sha256_hex(canonical_json({"target": policy.model_dump(), "tools": sorted(tools)}))
+    # exclude_defaults keeps the hash identical for targets that predate optional policy fields
+    return sha256_hex(canonical_json({"target": policy.model_dump(exclude_defaults=True), "tools": sorted(tools)}))

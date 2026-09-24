@@ -86,6 +86,7 @@ const ICONS = {
   alert: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
   ban: '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
   check: '<path d="m5 12 5 5 9-10"/>',
+  bolt: '<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
 };
 
@@ -229,6 +230,8 @@ function statusPill(status) {
   const [label, kind, live] = statusOf(status);
   return h('span', { class: `pill ${kind}` }, h('span', { class: `dot ${kind}${live ? ' live' : ''}` }), label);
 }
+const isLocal = (t) => t && t.id === state.system?.local_target_id;
+const devices = () => state.targets.filter((t) => t.status !== 'revoked').sort((a, b) => isLocal(b) - isLocal(a));
 const taskTitle = (t) => ((t.input || '').split('\n')[0] || 'Без названия').slice(0, 80);
 
 // ---------- theme ----------
@@ -515,8 +518,44 @@ function composer({ placeholder, chips, onSend }) {
   };
 }
 
-const modeChip = () => h('span', { class: 'chip accent chip-compact', title: 'Чтение выполняется сразу. Запуск программ, изменения и сеть требуют вашего подтверждения.' },
-  icon('shield'), h('span', { class: 'chip-label' }, 'С подтверждением действий'));
+const MODES = {
+  ask: { label: 'С запросом действий', icon: 'shield', cls: 'accent', desc: 'Чтение сразу. Запуск программ, изменения файлов и сеть ждут вашего подтверждения.' },
+  full: { label: 'Полный доступ', icon: 'bolt', cls: 'full', desc: 'Агент выполняет всё без вопросов. Запрещены только sudo и системные настройки.' },
+};
+
+// Chip + popover to switch between access modes; onPick resolves after the change is applied.
+function modeSwitch(initial, { target, onPick }) {
+  let mode = initial;
+  const label = h('span', { class: 'chip-label' });
+  const chip = h('button', { class: 'chip chip-compact', title: 'Режим доступа' });
+  const render = () => {
+    const m = MODES[mode];
+    chip.className = `chip chip-compact ${m.cls}`;
+    chip.replaceChildren(icon(m.icon), label, icon('chevron'));
+    label.textContent = m.label;
+  };
+  chip.addEventListener('click', () => {
+    const allowFull = target()?.capabilities?.allow_full_access !== false;
+    openPopover(chip, Object.entries(MODES).map(([key, m]) => h('button', {
+      class: `menu-item mode-item${key === mode ? ' selected' : ''}`,
+      disabled: key === 'full' && !allowFull,
+      onclick: async () => {
+        closeLayer();
+        if (key === mode) return;
+        if (key === 'full' && !await confirmDialog({
+          title: 'Включить полный доступ?',
+          text: `Агент будет запускать команды, менять файлы и ходить в сеть на «${target()?.name || 'устройстве'}» без вопросов. Переключиться обратно можно в любой момент.`,
+          action: 'Включить',
+        })) return;
+        try { await onPick(key); mode = key; render(); } catch (err) { fail(err); }
+      },
+    }, icon(m.icon), h('span', { class: 'mi-text' }, h('span', {}, m.label),
+      h('span', { class: 'mi-desc' }, key === 'full' && !allowFull ? 'Выключен в настройках устройства' : m.desc)),
+    key === mode ? icon('check') : null)));
+  });
+  render();
+  return { el: chip, set(value) { mode = value; render(); } };
+}
 
 // ---------- new chat ----------
 
@@ -524,7 +563,7 @@ async function viewNewChat() {
   const shell = ensureAppShell();
   shell.setActive('new');
   const online = state.targets.filter((t) => t.status === 'online');
-  let selected = online.find((t) => t.id === localStorageGet('target')) || online[0] || null;
+  let selected = online.find((t) => t.id === localStorageGet('target')) || online.find(isLocal) || online[0] || null;
 
   const chipLabel = h('span', { class: 'chip-label' });
   const chipDot = h('span', { class: 'dot' });
@@ -534,21 +573,35 @@ async function viewNewChat() {
     chipDot.className = `dot${selected ? ' ok' : ''}`;
   };
   function pickTarget() {
-    const items = state.targets.filter((t) => t.status !== 'revoked').map((t) => h('button', {
+    const items = devices().map((t) => h('button', {
       class: 'menu-item', disabled: t.status !== 'online',
       onclick: () => { selected = t; localStorageSet('target', t.id); renderChip(); closeLayer(); },
-    }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.name, h('span', { class: 'popover-sub' }, t.status === 'online' ? t.platform : 'не в сети')));
+    }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.name, h('span', { class: 'popover-sub' }, isLocal(t) ? 'сервер Core' : t.status === 'online' ? t.platform : 'не в сети')));
     items.push(h('div', { class: 'menu-sep' }), h('button', { class: 'menu-item', onclick: () => { closeLayer(); openPairing(); } }, icon('plus'), 'Сопрячь новое устройство'));
     openPopover(targetChip, items);
   }
   renderChip();
 
+  let mode = localStorageGet('mode') === 'full' ? 'full' : 'ask';
+  const modeCtl = modeSwitch(mode, {
+    target: () => selected,
+    onPick: async (value) => { mode = value; localStorageSet('mode', value); hint.textContent = hintText(); },
+  });
+  const hint = h('p', { class: 'welcome-hint' });
+  const hintText = () => (!online.length
+    ? 'Все устройства сейчас не в сети. Запустите на нужной машине mensarium target run.'
+    : mode === 'full'
+      ? 'Полный доступ: агент сам запускает команды и меняет файлы, не спрашивая.'
+      : 'Агент изучит проект сам. Перед запуском команд и изменением файлов он спросит разрешения.');
+  hint.textContent = hintText();
+
   const c = composer({
     placeholder: 'Сообщение для Mensarium',
-    chips: [targetChip, modeChip()],
+    chips: [targetChip, modeCtl.el],
     onSend: async (text) => {
       if (!selected) throw new Error('Выберите устройство, на котором агент будет работать');
-      const task = await post('/v1/tasks', { target_id: selected.id, input: text });
+      const allowFull = selected.capabilities?.allow_full_access !== false;
+      const task = await post('/v1/tasks', { target_id: selected.id, input: text, mode: mode === 'full' && allowFull ? 'full' : 'ask' });
       state.tasks.unshift(task);
       go(`#/chat/${task.id}`);
     },
@@ -559,9 +612,7 @@ async function viewNewChat() {
     ? h('div', { class: 'welcome-inner' },
       h('div', { class: 'welcome-head' }, agentAvatar(), h('h1', {}, 'Что нужно сделать?')),
       c.el,
-      h('p', { class: 'welcome-hint' }, online.length
-        ? 'Агент изучит проект сам. Перед запуском команд и изменением файлов он спросит разрешения.'
-        : 'Все устройства сейчас не в сети. Запустите на нужной машине mensarium target run.'))
+      hint)
     : h('div', { class: 'welcome-inner' }, h('div', { class: 'rows' }, h('div', { class: 'empty' },
       h('h3', {}, 'Подключите первое устройство'),
       h('p', {}, 'Агент работает на ваших машинах через Mensarium Target. Сопряжение займёт минуту.'),
@@ -597,9 +648,13 @@ async function viewChat(taskId) {
   const roots = (state.targets.find((t) => t.id === task.target_id)?.capabilities?.roots || []).slice().sort((a, b) => b.length - a.length);
   const short = (text) => roots.reduce((acc, r) => acc.split(r).join(r.split('/').pop() || r), String(text || ''));
   const deviceChip = h('span', { class: 'chip', title: 'Устройство задачи' }, icon('laptop'), h('span', { class: 'chip-label' }, task.target_name || task.target_id));
+  const modeCtl = modeSwitch(task.mode || 'ask', {
+    target: () => state.targets.find((t) => t.id === task.target_id),
+    onPick: async (value) => { await post(`/v1/tasks/${taskId}/mode`, { mode: value }); localStorageSet('mode', value); },
+  });
   const c = composer({
     placeholder: 'Ответить Mensarium',
-    chips: [deviceChip, modeChip()],
+    chips: [deviceChip, modeCtl.el],
     onSend: (text) => post(`/v1/tasks/${taskId}/messages`, { input: text }),
   });
 
@@ -748,6 +803,10 @@ async function viewChat(taskId) {
         if (p.text && p.tool_call) agentMsg(h('div', { class: 'prose', html: markdown(p.text) }));
         break;
       }
+      case 'task.mode':
+        modeCtl.set(p.mode);
+        note(MODES[p.mode]?.icon || 'shield', `Режим: ${(MODES[p.mode]?.label || p.mode).toLowerCase()}`);
+        break;
       case 'tool_call.denied':
         note('ban', `Политика не разрешила ${p.tool}: ${p.reason}`);
         break;
@@ -928,7 +987,7 @@ async function settingsDevices(shell) {
   const s = state.system || await get('/v1/system');
   const listHost = h('div', {});
   const render = () => {
-    const targets = state.targets.filter((t) => t.status !== 'revoked');
+    const targets = devices();
     if (!targets.length) {
       listHost.replaceChildren(h('div', { class: 'rows' }, h('div', { class: 'empty' },
         h('h3', {}, 'Устройств пока нет'), h('p', {}, 'Сопрягите машину, на которой агент будет работать.'),
@@ -945,7 +1004,7 @@ async function settingsDevices(shell) {
       return [
         h('div', { class: 'row' },
           h('div', { class: 'row-text' },
-            h('div', { class: 'row-title' }, t.name, outdated ? h('span', { class: 'pill warn', title: 'Выполните на устройстве: mensarium update' }, `v${t.agent_version}, есть обновление`) : null),
+            h('div', { class: 'row-title' }, t.name, isLocal(t) ? h('span', { class: 'pill accent', title: 'Машина, на которой установлен Core. Подключена всегда.' }, 'Core') : null, outdated ? h('span', { class: 'pill warn', title: 'Выполните на устройстве: mensarium update' }, `v${t.agent_version}, есть обновление`) : null),
             h('div', { class: 'row-desc' }, `${t.platform} · ${t.hostname} · ${t.status === 'online' ? 'в сети' : `был в сети ${relTime(t.last_seen_at)}`}`)),
           h('div', { class: 'row-value' }, h('span', { class: 'status' }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.status === 'online' ? 'В сети' : 'Не в сети'), revoke)),
         h('div', { class: 'row-extra' },
@@ -986,7 +1045,7 @@ async function settingsAudit(shell) {
     'tool.execute': 'Отправлено на устройство', 'tool.result': 'Результат от устройства', 'tool.denied': 'Запрещено политикой',
     'approval.requested': 'Запрошено подтверждение', 'approval.approved': 'Подтверждено', 'approval.rejected': 'Отклонено',
     'target.paired': 'Устройство сопряжено', 'target.revoked': 'Доступ устройства отозван', 'pairing.code_created': 'Создан код сопряжения',
-    'core.started': 'Core запущен', 'task.deleted': 'Чат удалён', 'task.cancel': 'Отмена задачи', 'task.pause': 'Пауза задачи', 'task.resume': 'Задача продолжена',
+    'core.started': 'Core запущен', 'task.deleted': 'Чат удалён', 'task.mode': 'Смена режима доступа', 'task.cancel': 'Отмена задачи', 'task.pause': 'Пауза задачи', 'task.resume': 'Задача продолжена',
   };
   page(shell, 'Журнал действий', 'Каждое событие связано с предыдущим хешем, поэтому запись нельзя незаметно изменить или удалить.', refreshBtn(() => viewSettings('audit')),
     events.length ? h('div', { class: 'rows' }, events.map((e) => h('div', { class: 'audit-item' },

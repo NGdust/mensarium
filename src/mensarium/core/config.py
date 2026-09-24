@@ -30,8 +30,15 @@ class ExecutionConfig(BaseModel):
     request_ttl_s: int = 120
 
 
+class LocalTargetConfig(BaseModel):
+    enabled: bool = True
+    roots: list[str] = Field(default_factory=lambda: ["~"])
+    allow_full_access: bool = True
+
+
 class CoreConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
+    local_target: LocalTargetConfig = Field(default_factory=LocalTargetConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     log_level: str = "INFO"

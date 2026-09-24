@@ -48,6 +48,7 @@ LLM proposal → schema validation → target capability check → policy evalua
 ```
 
 - LLM-провайдеры: Ollama Cloud, локальный Ollama, llama.cpp — все через OpenAI-совместимый API; смена провайдера меняет только конфиг.
+- Режимы доступа в каждом чате: «С запросом действий» (по умолчанию) и «Полный доступ». Машина с Core всегда доступна агенту как устройство.
 - Tools v0.1: `files.list`, `files.read`, `files.search`, `git.status`, `git.diff` (read, без подтверждения) и `shell.exec` (всегда с подтверждением «Approve once»). Правки файлов — через `git apply` с патчем в stdin.
 - Target проверяет подпись, nonce, срок жизни запроса, хеш политики и наличие approval; пути ограничены выбранными папками, программы — allowlist-ом; `.env`, ключи и токены не читаются и вычищаются из вывода.
 - Хранилище Core — SQLite в `~/.mensarium/core`; секреты — файлы с правами 0600, в UI, промпты и на target не попадают.

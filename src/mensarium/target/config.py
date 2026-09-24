@@ -23,11 +23,14 @@ class TargetConfig(BaseModel):
     core_fingerprint: str
     roots: list[str]
     command_allowlist: list[str] = Field(default_factory=lambda: list(DEFAULT_COMMAND_ALLOWLIST))
+    allow_full_access: bool = True
     limits: TargetLimits = Field(default_factory=TargetLimits)
 
     @property
     def policy(self) -> TargetPolicy:
-        return TargetPolicy(roots=self.roots, command_allowlist=self.command_allowlist)
+        return TargetPolicy(
+            roots=self.roots, command_allowlist=self.command_allowlist, allow_full_access=self.allow_full_access
+        )
 
 
 class TargetPaths:

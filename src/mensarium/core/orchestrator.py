@@ -10,7 +10,13 @@ from mensarium.agent_core.actions import ToolCallAction, parse_action
 from mensarium.agent_core.context import build_messages, build_system_prompt
 from mensarium.agent_core.profile import AgentProfile
 from mensarium.contracts.llm import ChatRequest
-from mensarium.contracts.protocol import ExecutionRequest, ExecutionResult, TargetPolicy, policy_snapshot_hash
+from mensarium.contracts.protocol import (
+    AccessMode,
+    ExecutionRequest,
+    ExecutionResult,
+    TargetPolicy,
+    policy_snapshot_hash,
+)
 from mensarium.core.config import CoreConfig
 from mensarium.core.events import EventBus
 from mensarium.core.repo import TERMINAL_STATUSES, Repo
@@ -69,7 +75,7 @@ class Orchestrator:
             await self.bus.emit(task["id"], "task.status", {"status": "PAUSED", "reason": "core restarted"})
         await self.repo.expire_open_approvals()
 
-    async def create_task(self, profile_id: str, target_id: str, text: str) -> dict[str, Any]:
+    async def create_task(self, profile_id: str, target_id: str, text: str, mode: AccessMode = "ask") -> dict[str, Any]:
         profile = await self.load_profile(profile_id)
         target = await self.repo.get_target(target_id)
         if not target or target["status"] == "revoked":
@@ -87,6 +93,7 @@ class Orchestrator:
                 "target_id": target_id,
                 "input": text,
                 "status": "NEW",
+                "mode": mode,
                 "budget": profile.limits.model_dump(),
                 "trace_id": new_id("tr"),
                 "created_at": now,
@@ -114,6 +121,19 @@ class Orchestrator:
 
     async def pause(self, task_id: str) -> dict[str, Any]:
         await self._control(task_id, "pause")
+        return await self._task(task_id)
+
+    async def set_mode(self, task_id: str, mode: AccessMode) -> dict[str, Any]:
+        task = await self._task(task_id)
+        if task["mode"] != mode:
+            await self.repo.update_task(task_id, {"mode": mode})
+            await self.repo.audit(self.workspace_id, "user", "task.mode", {"task_id": task_id, "mode": mode})
+            await self.bus.emit(task_id, "task.mode", {"mode": mode})
+        if mode == "full":
+            for approval_id, waiter in list(self.approval_waiters.items()):
+                approval = await self.repo.get_approval(approval_id)
+                if approval and approval["task_id"] == task_id and not waiter.done():
+                    await self.decide(approval_id, "approve", "full access enabled", confirm=True)
         return await self._task(task_id)
 
     async def resume(self, task_id: str) -> dict[str, Any]:
@@ -378,13 +398,16 @@ class Orchestrator:
                 "status": "proposed",
             }
         )
+        mode: AccessMode = (await self._task(task_id))["mode"]
+        if mode == "full" and not policy.allow_full_access:
+            mode = "ask"
         approval_ref = None
-        if decision.requires_approval:
+        if decision.requires_approval and mode == "ask":
             approval_ref = await self._await_approval(task, target, call, tc_id, decision)
             if approval_ref is None:
                 return
 
-        await self._execute(task, profile, policy, call, tc_id, decision, approval_ref)
+        await self._execute(task, profile, policy, call, tc_id, decision, approval_ref, mode)
 
     async def _await_approval(
         self, task: dict[str, Any], target: dict[str, Any], call: ToolCallAction, tc_id: str, decision: Decision
@@ -463,6 +486,7 @@ class Orchestrator:
         tc_id: str,
         decision: Decision,
         approval_ref: str | None,
+        mode: AccessMode,
     ) -> None:
         task_id = task["id"]
         hello = self.hub.hello(task["target_id"])
@@ -484,6 +508,7 @@ class Orchestrator:
             tool=call.tool,
             arguments=decision.arguments,
             approval_ref=approval_ref,
+            mode=mode,
         )
         await self.repo.update_tool_call(tc_id, {"status": "executing", "request_id": request.request_id})
         await self._set_status(task_id, "EXECUTING")
@@ -501,6 +526,7 @@ class Orchestrator:
                 "risk": decision.risk,
                 "display": decision.display,
                 "approval_ref": approval_ref,
+                "mode": mode,
                 "policy_snapshot_hash": request.policy_snapshot_hash,
             },
         )

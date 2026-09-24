@@ -18,11 +18,12 @@ from pydantic import BaseModel, ValidationError
 
 from mensarium import __version__
 from mensarium.agent_core.profile import AgentProfile, builtin_profiles
-from mensarium.contracts.protocol import PairRequest, PairResponse
+from mensarium.contracts.protocol import AccessMode, PairRequest, PairResponse
 from mensarium.core import distribution, pairing
 from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secret
 from mensarium.core.db import Database
 from mensarium.core.events import EventBus
+from mensarium.core.local_target import ensure_local_target, local_target_paths
 from mensarium.core.orchestrator import Orchestrator, TaskError
 from mensarium.core.repo import Repo
 from mensarium.core.target_hub import TargetHub
@@ -31,6 +32,7 @@ from mensarium.llm_providers.openai_compat import OpenAICompatibleProvider
 from mensarium.shared.crypto import fingerprint, load_or_create_private_key, public_key_b64
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import iso_in, now_iso, parse_iso, utcnow
+from mensarium.target.agent import TargetAgent
 
 PAIRING_TTL_S = 600
 SESSION_COOKIE = "hd_session"
@@ -50,6 +52,7 @@ class Core:
     core_public_key: str
     admin_token: str
     pair_failures: deque[float]
+    local_target_id: str | None
 
 
 class LoginBody(BaseModel):
@@ -60,6 +63,11 @@ class TaskCreate(BaseModel):
     target_id: str
     input: str
     profile_id: str = "coding-agent-v1"
+    mode: AccessMode = "ask"
+
+
+class ModeBody(BaseModel):
+    mode: AccessMode
 
 
 class MessageBody(BaseModel):
@@ -108,6 +116,10 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         orchestrator = Orchestrator(repo, hub, bus, provider, cfg, workspace_id, paths.artifacts)
         await orchestrator.recover_after_restart()
         await repo.audit(workspace_id, "core", "core.started", {"version": __version__})
+        local = await ensure_local_target(repo, paths, cfg, public_key_b64(key), workspace_id)
+        local_agent = None
+        if local:
+            local_agent = asyncio.create_task(TargetAgent(local[0], local_target_paths(paths), local[1]).run_forever())
         app.state.core = Core(
             cfg=cfg,
             paths=paths,
@@ -121,12 +133,15 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             core_public_key=public_key_b64(key),
             admin_token=admin_token,
             pair_failures=deque(maxlen=50),
+            local_target_id=local[0].target_id if local else None,
         )
         try:
             yield
         finally:
             for runner in list(orchestrator.runners.values()):
                 runner.cancel()
+            if local_agent:
+                local_agent.cancel()
             await provider.aclose()
             await db.close()
 
@@ -246,6 +261,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             "workspace_id": c.workspace_id,
             "public_url": c.cfg.server.public_url,
             "core_key_fingerprint": fingerprint(c.core_public_key),
+            "local_target_id": c.local_target_id,
             "provider": {
                 "name": c.provider.name,
                 "base_url": c.provider.base_url,
@@ -279,6 +295,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
                 "shells": caps.get("shells", []),
                 "roots": policy.get("roots", []),
                 "command_allowlist": policy.get("command_allowlist", []),
+                "allow_full_access": policy.get("allow_full_access", False),
             },
         }
 
@@ -338,7 +355,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         return {"id": profile.id}
 
     def task_view(t: dict[str, Any]) -> dict[str, Any]:
-        keys = ("id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result")
+        keys = ("id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result", "mode")
         return {k: t.get(k) for k in keys} | {"created_at": t["created_at"], "updated_at": t["updated_at"]}
 
     @app.get("/v1/tasks")
@@ -350,7 +367,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         if not body.input.strip():
             raise HTTPException(422, "input is empty")
         try:
-            return task_view(await c.orchestrator.create_task(body.profile_id, body.target_id, body.input))
+            return task_view(await c.orchestrator.create_task(body.profile_id, body.target_id, body.input, body.mode))
         except TaskError as e:
             raise task_error(e) from e
 
@@ -360,6 +377,13 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         if not t:
             raise HTTPException(404, "task not found")
         return task_view(t)
+
+    @app.post("/v1/tasks/{task_id}/mode")
+    async def set_mode(task_id: str, body: ModeBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return task_view(await c.orchestrator.set_mode(task_id, body.mode))
+        except TaskError as e:
+            raise task_error(e) from e
 
     @app.delete("/v1/tasks/{task_id}")
     async def delete_task(task_id: str, c: Core = Depends(auth)) -> dict[str, bool]:

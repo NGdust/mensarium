@@ -71,7 +71,11 @@ class TargetAgent:
         self.key = key
         self.executor = Executor(cfg)
         self.audit = AuditLog(paths)
-        self.policy = TargetPolicy(roots=[str(r) for r in self.executor.roots], command_allowlist=cfg.command_allowlist)
+        self.policy = TargetPolicy(
+            roots=[str(r) for r in self.executor.roots],
+            command_allowlist=cfg.command_allowlist,
+            allow_full_access=cfg.allow_full_access,
+        )
         self.policy_hash = policy_snapshot_hash(self.policy, TOOLS)
         self.started_at = utcnow()
         self.seen_nonces: dict[str, float] = {}
@@ -184,8 +188,9 @@ class TargetAgent:
             return "policy snapshot mismatch; core must refresh target policy"
         if req.tool not in TOOLS:
             return f"tool {req.tool} is not enabled on this target"
-        if req.tool in APPROVAL_REQUIRED and not req.approval_ref:
-            return f"tool {req.tool} requires an approval reference"
+        full_access = req.mode == "full" and self.cfg.allow_full_access
+        if req.tool in APPROVAL_REQUIRED and not req.approval_ref and not full_access:
+            return f"tool {req.tool} requires an approval reference (full access is disabled on this device)"
         return None
 
     async def _execute(self, req: ExecutionRequest, raw: dict[str, Any]) -> None:
@@ -218,6 +223,7 @@ class TargetAgent:
                 "tool": req.tool,
                 "arguments_hash": sha256_hex(canonical_json(req.arguments)),
                 "approval_ref": req.approval_ref,
+                "mode": req.mode,
                 "status": status,
                 "exit_code": output.exit_code,
                 "error": error,

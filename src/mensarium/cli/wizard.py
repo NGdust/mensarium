@@ -15,6 +15,7 @@ from mensarium.core.config import (
     CoreConfig,
     CorePaths,
     LLMConfig,
+    LocalTargetConfig,
     ProviderConfig,
     ServerConfig,
     load_config,
@@ -168,6 +169,15 @@ def setup_core(start_service: bool | None = None) -> None:
     else:
         model = ask(questionary.text("Default model:", default=defaults["default_model"], style=STYLE))
 
+    current_roots = ", ".join(existing.local_target.roots) if existing else "~"
+    local_roots = ask(
+        questionary.text(
+            "Folders on THIS machine the agent may work in (comma separated; this machine is always listed as a device):",
+            default=current_roots,
+            style=STYLE,
+        )
+    )
+
     step(3, total, "Security")
     paths.ensure()
     if api_key and api_key_ref:
@@ -182,6 +192,7 @@ def setup_core(start_service: bool | None = None) -> None:
 
     cfg = CoreConfig(
         server=ServerConfig(host=bind, port=port, public_url=public_url),
+        local_target=LocalTargetConfig(roots=[r.strip() for r in local_roots.split(",") if r.strip()]),
         llm=LLMConfig(
             active_provider=provider,
             providers={
@@ -326,6 +337,14 @@ def setup_target(server: str | None, code: str | None, name: str | None, start_s
         raw = ask(questionary.text("Programs, comma separated:", default=", ".join(allowlist), style=STYLE))
         allowlist = [p.strip() for p in raw.split(",") if p.strip()]
 
+    full_access = ask(
+        questionary.confirm(
+            "Allow full-access mode on this machine (the agent runs commands without asking when a chat is switched to it)?",
+            default=True,
+            style=STYLE,
+        )
+    )
+
     step(3, total, "Pairing")
     name = name or ask(questionary.text("Name for this machine:", default=socket.gethostname().split(".")[0], style=STYLE))
     while True:
@@ -338,7 +357,15 @@ def setup_target(server: str | None, code: str | None, name: str | None, start_s
         )
         try:
             with console.status("Pairing..."):
-                cfg = pair(paths, server=server, code=code.strip(), name=name, roots=roots, command_allowlist=allowlist)
+                cfg = pair(
+                    paths,
+                    server=server,
+                    code=code.strip(),
+                    name=name,
+                    roots=roots,
+                    command_allowlist=allowlist,
+                    allow_full_access=full_access,
+                )
             break
         except PairingError as e:
             fail(str(e))
@@ -372,6 +399,7 @@ def _finish_target(paths: TargetPaths, start_service: bool | None) -> None:
             ("Core", cfg.server),
             ("Roots", ", ".join(cfg.roots)),
             ("Programs", ", ".join(cfg.command_allowlist)),
+            ("Full access", "allowed" if cfg.allow_full_access else "disabled"),
             ("Logs", str(service.log_file("target"))),
         ],
         footer="The target appears as online in the Core web UI within a few seconds."
