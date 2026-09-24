@@ -254,7 +254,11 @@ def core_backup(
     except BackupError as e:
         fail(str(e))
         raise typer.Exit(1) from e
-    summary("Backup created", [(k, str(v)) for k, v in info.items() if k != "encryption"])
+    summary(
+        "Backup created",
+        [(k, str(v)) for k, v in info.items() if k != "encryption"],
+        footer=f"Restore on this or another host: mensarium core restore {out}",
+    )
 
 
 @core_app.command("restore")

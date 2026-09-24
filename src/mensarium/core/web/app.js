@@ -960,8 +960,11 @@ async function settingsOverview(shell) {
     )),
     section('Обслуживание', 'Команды выполняются на сервере Core.', h('div', { class: 'rows' },
       row('Обновить Mensarium', 'Скачивает свежую версию и перезапускает сервис.', cmdValue('mensarium update'), true),
-      row('Резервная копия', 'Зашифрованный архив для переноса Core на другой сервер.', cmdValue('mensarium core backup'), true),
       row('Токен входа', 'Показывает токен администратора.', cmdValue('mensarium core token'), true),
+    )),
+    section('Резервная копия', 'Архив с базой, ключами, секретами и настройками, зашифрованный паролем, который вы зададите. Им же Core переносится на другой сервер.', h('div', { class: 'rows' },
+      row('Создать копию', 'Сохраняет архив в текущую папку.', cmdValue('mensarium core backup -o mensarium.pab'), true),
+      row('Восстановить из копии', 'Останавливает Core, заменяет его данные содержимым архива и запускает снова. Прежние данные остаются рядом, в папке core.before-restore-….', cmdValue('mensarium core restore mensarium.pab'), true),
     )),
   );
 }
