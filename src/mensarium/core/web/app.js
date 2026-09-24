@@ -240,6 +240,7 @@ const POLICY_REASONS = [
   [/^access to secret files is not allowed$/, () => 'чтение секретных файлов запрещено'],
   [/^unknown tool '(.+)'$/, (m) => `неизвестный инструмент ${m[1]}`],
   [/^tool '(.+)' is not allowed by the active profile$/, (m) => `инструмент ${m[1]} не разрешён профилем`],
+  [/^tool '(.+)' is disabled for this device$/, (m) => `инструмент ${m[1]} выключен для этого устройства`],
   [/^target does not support tool '(.+)'$/, (m) => `устройство не поддерживает ${m[1]}`],
   [/^path '(.+)' is outside allowed roots/, (m) => `путь ${m[1]} вне разрешённых папок`],
   [/^program '(.+)' is not in the target command allowlist$/, (m) => `программа ${m[1]} не разрешена на устройстве`],
@@ -1075,11 +1076,73 @@ async function settingsModel(shell) {
   }
 }
 
+const TOOL_INFO = {
+  'files.list': ['Список файлов', 'Смотрит содержимое папок.'],
+  'files.read': ['Чтение файлов', 'Открывает текстовые файлы, секреты вычищаются.'],
+  'files.search': ['Поиск по файлам', 'Ищет текст в проекте.'],
+  'git.status': ['Состояние git', 'Ветка и изменённые файлы.'],
+  'git.diff': ['Изменения git', 'Показывает diff.'],
+  'shell.exec': ['Запуск команд', 'Запускает разрешённые программы, файлы меняет через git apply.'],
+};
+
+function toggleSwitch(checked, { label, onChange }) {
+  const sw = h('button', { class: 'switch', role: 'switch', 'aria-checked': String(checked), 'aria-label': label, title: label });
+  sw.addEventListener('click', async () => {
+    const next = sw.getAttribute('aria-checked') !== 'true';
+    sw.disabled = true;
+    sw.setAttribute('aria-checked', String(next));
+    try { await onChange(next); } catch (err) { sw.setAttribute('aria-checked', String(!next)); fail(err); } finally { sw.disabled = false; }
+  });
+  return sw;
+}
+
 async function settingsDevices(shell) {
   const s = state.system || await get('/v1/system');
   const listHost = h('div', {});
-  const render = () => {
+  const expanded = new Set(JSON.parse(localStorageGet('devices-open') || '[]'));
+  let signature = '';
+
+  function deviceBody(t) {
+    const caps = t.capabilities || {};
+    const disabled = new Set(caps.disabled_tools || []);
+    const programs = caps.command_allowlist || [];
+    const access = { allowed: 'Разрешён: в чате можно включить режим без подтверждений.', disabled: fullAccessBlock(t), outdated: fullAccessBlock(t) }[caps.full_access] || '';
+    const revoke = h('button', { class: 'btn btn-sm btn-danger', onclick: async () => {
+      if (!await confirmDialog({ title: `Отозвать «${t.name}»?`, text: 'Устройство сразу потеряет доступ. Чтобы вернуть его, понадобится новое сопряжение по коду.', action: 'Отозвать', danger: true })) return;
+      try { await post(`/v1/targets/${t.id}/revoke`); toast('Доступ отозван'); await refresh(true); } catch (err) { fail(err); }
+    } }, 'Отозвать доступ');
+    return h('div', { class: 'device-body' },
+      h('div', { class: 'device-sub' }, 'Инструменты агента', h('span', {}, 'Выключенный инструмент агент на этом устройстве не видит и вызвать не может.')),
+      h('div', { class: 'tool-rows' }, (caps.tools || []).map((tool) => {
+        const [name, desc] = TOOL_INFO[tool] || [tool, ''];
+        return h('div', { class: 'tool-row' },
+          icon(TOOL_ICON[tool] || 'terminal'),
+          h('div', { class: 'row-text' }, h('div', { class: 'tool-row-title' }, name, h('code', {}, tool)), desc ? h('div', { class: 'row-desc' }, desc) : null),
+          toggleSwitch(!disabled.has(tool), {
+            label: `${name} на «${t.name}»`,
+            onChange: async (enabled) => {
+              const view = await api(`/v1/targets/${t.id}/tools`, { method: 'PUT', body: JSON.stringify({ tool, enabled }) });
+              Object.assign(t, view);
+              signature = '';
+              render();
+            },
+          }));
+      })),
+      h('div', { class: 'device-sub' }, 'Папки'),
+      h('div', { class: 'device-tags' }, (caps.roots || []).map((r) => h('span', { class: 'pill tag', title: r }, r))),
+      h('div', { class: 'device-sub' }, 'Программы для запуска команд'),
+      h('div', { class: 'device-tags' }, programs.includes('*') ? h('span', { class: 'pill' }, 'любые программы') : programs.map((pr) => h('span', { class: 'pill tag' }, pr))),
+      h('div', { class: 'device-sub' }, 'Полный доступ'),
+      h('p', { class: 'device-text' }, access),
+      h('div', { class: 'device-actions' }, revoke),
+    );
+  }
+
+  function render() {
     const targets = devices();
+    const sig = JSON.stringify([targets, [...expanded]]);
+    if (sig === signature) return;
+    signature = sig;
     if (!targets.length) {
       listHost.replaceChildren(h('div', { class: 'rows' }, h('div', { class: 'empty' },
         h('h3', {}, 'Устройств пока нет'), h('p', {}, 'Сопрягите машину, на которой агент будет работать.'),
@@ -1089,29 +1152,33 @@ async function settingsDevices(shell) {
     listHost.replaceChildren(h('div', { class: 'rows' }, targets.map((t) => {
       const caps = t.capabilities || {};
       const outdated = t.agent_version && s.version && t.agent_version !== s.version;
-      const programs = caps.command_allowlist || [];
-      const revoke = h('button', { class: 'btn btn-sm btn-danger', onclick: async () => {
-        if (!await confirmDialog({ title: `Отозвать «${t.name}»?`, text: 'Устройство сразу потеряет доступ. Чтобы вернуть его, понадобится новое сопряжение по коду.', action: 'Отозвать', danger: true })) return;
-        try { await post(`/v1/targets/${t.id}/revoke`); toast('Доступ отозван'); await refreshData(); render(); } catch (err) { fail(err); }
-      } }, 'Отозвать');
-      return [
-        h('div', { class: 'row' },
-          h('div', { class: 'row-text' },
-            h('div', { class: 'row-title' }, t.name,
-              isLocal(t) ? h('span', { class: 'pill accent', title: 'Машина, на которой установлен Core. Подключена всегда.' }, 'Core') : null,
-              outdated ? h('span', { class: 'pill warn', title: 'Выполните на устройстве: mensarium update' }, `v${t.agent_version}, есть обновление`) : null),
-            h('div', { class: 'row-desc' }, t.status === 'online' ? t.platform : `${t.platform} · был в сети ${relTime(t.last_seen_at)}`)),
-          h('div', { class: 'row-value' }, h('span', { class: 'status' }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.status === 'online' ? 'В сети' : 'Не в сети'), revoke)),
-        h('div', { class: 'row-extra' },
-          (caps.roots || []).map((r) => h('span', { class: 'pill tag', title: `Папка, доступная агенту: ${r}` }, r)),
-          h('span', { class: 'pill', title: programs.join(', ') }, programs.includes('*') ? 'любые программы' : `${programs.length} программ`),
-          caps.full_access === 'outdated' ? h('span', { class: 'pill warn', title: fullAccessBlock(t) }, 'полный доступ: обновите агент')
-            : caps.full_access === 'allowed' ? null : h('span', { class: 'pill', title: fullAccessBlock(t) }, 'без полного доступа')),
-      ];
+      const tools = caps.tools || [];
+      const enabled = tools.filter((x) => !(caps.disabled_tools || []).includes(x)).length;
+      const open = expanded.has(t.id);
+      const head = h('button', { class: 'device-head', 'aria-expanded': String(open), onclick: () => {
+        if (expanded.has(t.id)) expanded.delete(t.id); else expanded.add(t.id);
+        localStorageSet('devices-open', JSON.stringify([...expanded]));
+        render();
+      } },
+        icon('chevron'),
+        h('div', { class: 'row-text' },
+          h('div', { class: 'row-title' }, t.name,
+            isLocal(t) ? h('span', { class: 'pill accent', title: 'Машина, на которой установлен Core. Подключена всегда.' }, 'Core') : null,
+            outdated ? h('span', { class: 'pill warn', title: 'Выполните на устройстве: mensarium update' }, `v${t.agent_version}, есть обновление`) : null),
+          h('div', { class: 'row-desc' }, [
+            t.status === 'online' ? t.platform : `${t.platform} · был в сети ${relTime(t.last_seen_at)}`,
+            `инструменты: ${enabled} из ${tools.length}`,
+            caps.full_access === 'allowed' ? 'полный доступ разрешён' : null,
+          ].filter(Boolean).join(' · '))),
+        h('span', { class: 'status', title: t.status === 'online' ? 'В сети' : 'Не в сети' }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), h('span', { class: 'status-label' }, t.status === 'online' ? 'В сети' : 'Не в сети')));
+      return h('div', { class: `device${open ? ' open' : ''}` }, head, open ? deviceBody(t) : null);
     })));
-  };
-  const refresh = async () => { try { await refreshData(); render(); } catch (err) { fail(err); } };
-  page(shell, 'Устройства', 'Машины, на которых агент читает проекты и выполняет команды.',
+  }
+
+  async function refresh(force = false) {
+    try { await refreshData(); if (force) signature = ''; render(); } catch (err) { fail(err); }
+  }
+  page(shell, 'Устройства', 'Машины, на которых агент читает проекты и выполняет команды. Нажмите на устройство, чтобы настроить его инструменты.',
     h('button', { class: 'btn btn-primary', onclick: openPairing }, icon('link'), 'Сопрячь устройство'),
     listHost,
   );
@@ -1142,6 +1209,7 @@ async function settingsAudit(shell) {
     'core.started': 'Core запущен', 'task.cancel': 'Отмена задачи', 'task.pause': 'Пауза задачи', 'task.resume': 'Задача продолжена',
     'task.deleted': 'Чат удалён', 'task.mode': 'Смена режима доступа', 'profile.imported': 'Импортирован профиль',
     'task.model': 'Смена модели в чате', 'llm.default_model': 'Смена модели по умолчанию',
+    'target.tool': 'Инструмент устройства переключён',
   };
   const ACTORS = { core: 'Core', target: 'устройство', user: 'вы' };
   const describe = (p) => {
@@ -1153,6 +1221,7 @@ async function settingsAudit(shell) {
       p.exit_code != null && `код ${p.exit_code}`,
       p.mode && (MODES[p.mode]?.label || p.mode),
       p.model,
+      p.enabled != null && `${p.tool}: ${p.enabled ? 'включён' : 'выключен'}`,
       p.reason && policyText(reasonText(p.reason)),
       p.version && `версия ${p.version}`,
       p.task_id && (title ? `«${taskTitle(title)}»` : 'удалённый чат'),

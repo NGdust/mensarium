@@ -8,7 +8,9 @@ KEEP_FULL_OBSERVATIONS = 8
 MAX_OBSERVATION_CHARS = 8000
 
 
-def build_system_prompt(profile: AgentProfile, target_name: str, platform: str, policy: TargetPolicy) -> str:
+def build_system_prompt(
+    profile: AgentProfile, target_name: str, platform: str, policy: TargetPolicy, tools: list[str]
+) -> str:
     allow = ", ".join(policy.command_allowlist) if policy.command_allowlist else "(none)"
     return (
         f"{profile.instructions.strip()}\n\n"
@@ -18,7 +20,7 @@ def build_system_prompt(profile: AgentProfile, target_name: str, platform: str, 
         f"- workspace root (base for relative paths): {policy.roots[0] if policy.roots else '(none)'}\n"
         f"- allowed roots: {', '.join(policy.roots)}\n"
         f"- programs allowed for shell.exec: {allow}\n"
-        f"- available tools: {', '.join(profile.allowed_tools)}\n"
+        f"- available tools: {', '.join(tools) or '(none)'}\n"
     )
 
 

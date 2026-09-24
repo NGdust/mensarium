@@ -39,6 +39,13 @@ FULL_ACCESS_ERRORS = {
 }
 
 
+def available_tools(profile: AgentProfile, target: dict[str, Any]) -> list[str]:
+    """Tools the model is offered: allowed by the profile, reported by the device and not switched off for it."""
+    reported = (target.get("capabilities") or {}).get("tools", [])
+    disabled = target.get("disabled_tools") or []
+    return [t for t in profile.allowed_tools if t in REGISTRY and t in reported and t not in disabled]
+
+
 def full_access(target: dict[str, Any]) -> str:
     """Whether a device executes full-access requests: allowed, disabled by its owner, or too old to know the mode."""
     if parse_version(target.get("agent_version") or "0") < FULL_ACCESS_SINCE:
@@ -291,7 +298,6 @@ class Orchestrator:
         task_id = task["id"]
         started = time.monotonic()
         llm_steps = tool_calls = 0
-        tools = [REGISTRY[t].definition() for t in profile.allowed_tools if t in REGISTRY]
 
         while True:
             self._check_control(task_id)
@@ -306,13 +312,14 @@ class Orchestrator:
                 raise Stop("FAILED", "target revoked")
             hello = self.hub.hello(task["target_id"])
             policy = hello.policy if hello else TargetPolicy.model_validate(target["policy"] or {"roots": [], "command_allowlist": []})
+            available = available_tools(profile, target)
 
             await self._set_status(task_id, "PLANNING")
             llm_steps += 1
             steps = await self.repo.list_steps(task_id)
             request = ChatRequest(
                 model=model,
-                system=build_system_prompt(profile, target["name"], target["platform"], policy),
+                system=build_system_prompt(profile, target["name"], target["platform"], policy, available),
                 messages=build_messages(steps, profile.llm.max_context_tokens),
                 temperature=profile.llm.temperature,
                 max_output_tokens=profile.llm.max_output_tokens,
@@ -323,7 +330,8 @@ class Orchestrator:
             t0 = time.monotonic()
             try:
                 resp = await self._interruptible(
-                    task_id, self.provider.chat(request, tools=tools, response_schema=None)
+                    task_id,
+                self.provider.chat(request, tools=[REGISTRY[t].definition() for t in available], response_schema=None),
                 )
             except LLMError as e:
                 await self.bus.emit(task_id, "task.error", {"message": f"LLM call failed: {e}"})
@@ -403,6 +411,7 @@ class Orchestrator:
             required_risks=profile.approval.required_risks,
             target_tools=target_tools,
             target_policy=policy,
+            disabled_tools=target.get("disabled_tools") or [],
         )
         if not decision.allowed:
             await self._observe(task_id, call, f"DENIED by policy: {decision.reason}", f"{call.tool} denied")

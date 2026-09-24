@@ -91,12 +91,15 @@ def evaluate(
     required_risks: list[str],
     target_tools: list[str],
     target_policy: TargetPolicy,
+    disabled_tools: list[str] | None = None,
 ) -> Decision:
     spec = REGISTRY.get(tool)
     if spec is None:
         return _deny(f"unknown tool {tool!r}")
     if tool not in profile_tools:
         return _deny(f"tool {tool!r} is not allowed by the active profile")
+    if tool in (disabled_tools or []):
+        return _deny(f"tool {tool!r} is disabled for this device")
     if tool not in target_tools:
         return _deny(f"target does not support tool {tool!r}")
     if raw_args is None:

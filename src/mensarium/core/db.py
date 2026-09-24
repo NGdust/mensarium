@@ -4,9 +4,13 @@ from typing import Any
 
 import aiosqlite
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
-COLUMN_MIGRATIONS = [("tasks", "mode", "TEXT NOT NULL DEFAULT 'ask'"), ("tasks", "model", "TEXT")]
+COLUMN_MIGRATIONS = [
+    ("tasks", "mode", "TEXT NOT NULL DEFAULT 'ask'"),
+    ("tasks", "model", "TEXT"),
+    ("targets", "disabled_tools", "TEXT NOT NULL DEFAULT '[]'"),
+]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -17,7 +21,7 @@ CREATE TABLE IF NOT EXISTS targets (
     id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL, platform TEXT NOT NULL,
     hostname TEXT NOT NULL, status TEXT NOT NULL, public_key TEXT NOT NULL,
     capabilities TEXT NOT NULL DEFAULT '{}', policy TEXT NOT NULL DEFAULT '{}', agent_version TEXT,
-    last_seen_at TEXT, created_at TEXT NOT NULL, revoked_at TEXT
+    last_seen_at TEXT, created_at TEXT NOT NULL, revoked_at TEXT, disabled_tools TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS target_pairings (
     id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, target_id TEXT, expires_at TEXT NOT NULL,
@@ -65,7 +69,7 @@ CREATE INDEX IF NOT EXISTS task_events_task ON task_events(task_id, seq);
 
 JSON_COLUMNS = {
     "settings", "capabilities", "policy", "body", "budget", "input", "output", "params", "usage",
-    "arguments", "metadata", "payload",
+    "arguments", "metadata", "payload", "disabled_tools",
 }
 
 

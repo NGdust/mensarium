@@ -33,6 +33,7 @@ from mensarium.shared.crypto import fingerprint, load_or_create_private_key, pub
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import iso_in, now_iso, parse_iso, utcnow
 from mensarium.target.agent import TargetAgent
+from mensarium.tool_runtime.registry import REGISTRY
 
 PAIRING_TTL_S = 600
 SESSION_COOKIE = "hd_session"
@@ -73,6 +74,11 @@ class ModeBody(BaseModel):
 
 class ModelBody(BaseModel):
     model: str = Field(min_length=1, max_length=200)
+
+
+class ToolToggle(BaseModel):
+    tool: str
+    enabled: bool
 
 
 class MessageBody(BaseModel):
@@ -310,6 +316,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
                 "command_allowlist": policy.get("command_allowlist", []),
                 "allow_full_access": policy.get("allow_full_access", False),
                 "full_access": full_access(t),
+                "disabled_tools": t.get("disabled_tools") or [],
             },
         }
 
@@ -330,6 +337,24 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             "install_command": f"curl -fsSL {url}/install.sh | sh -s -- --code {code}",
             "pair_command": f"mensarium target pair --server {url} --code {code}",
         }
+
+    @app.put("/v1/targets/{target_id}/tools")
+    async def toggle_tool(target_id: str, body: ToolToggle, c: Core = Depends(auth)) -> dict[str, Any]:
+        t = await c.repo.get_target(target_id)
+        if not t or t["status"] == "revoked":
+            raise HTTPException(404, "target not found")
+        if body.tool not in REGISTRY:
+            raise HTTPException(422, f"unknown tool {body.tool!r}")
+        disabled = set(t.get("disabled_tools") or [])
+        if body.enabled:
+            disabled.discard(body.tool)
+        else:
+            disabled.add(body.tool)
+        await c.repo.update_target(target_id, {"disabled_tools": sorted(disabled)})
+        await c.repo.audit(
+            c.workspace_id, "user", "target.tool", {"target_id": target_id, "tool": body.tool, "enabled": body.enabled}
+        )
+        return target_view(c, {**t, "disabled_tools": sorted(disabled)})
 
     @app.post("/v1/targets/{target_id}/revoke")
     async def revoke_target(target_id: str, c: Core = Depends(auth)) -> dict[str, bool]:
