@@ -92,8 +92,9 @@ def install(base: str, latest: dict[str, Any]) -> list[str]:
         raise UpdateError(f"install failed: {result.stderr.strip()[-800:]}")
 
     restarted = []
+    configured = {"core": CorePaths().config.exists(), "target": TargetPaths().config.exists()}
     for role in ("core", "target"):
-        if service.is_installed(role):  # type: ignore[arg-type]
+        if configured[role] and service.is_installed(role):  # type: ignore[arg-type]
             service.restart(role)  # type: ignore[arg-type]
             restarted.append(role)
     return restarted
