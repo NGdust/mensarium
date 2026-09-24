@@ -18,11 +18,14 @@ from pydantic import BaseModel, Field, ValidationError
 
 from mensarium import __version__
 from mensarium.agent_core.profile import AgentProfile, builtin_profiles
+from mensarium.contracts.extensions import Extension
 from mensarium.contracts.protocol import AccessMode, PairRequest, PairResponse
 from mensarium.core import distribution, pairing
+from mensarium.core.catalog import Catalog
 from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secret, save_config
 from mensarium.core.db import Database
 from mensarium.core.events import EventBus
+from mensarium.core.extensions import ExtensionError, check_conflicts, listing, parse_manifests
 from mensarium.core.local_target import ensure_local_target, local_target_paths
 from mensarium.core.orchestrator import Orchestrator, TaskError, full_access
 from mensarium.core.repo import Repo
@@ -54,6 +57,7 @@ class Core:
     admin_token: str
     pair_failures: deque[float]
     local_target_id: str | None
+    catalog: Catalog
 
 
 class LoginBody(BaseModel):
@@ -78,6 +82,14 @@ class ModelBody(BaseModel):
 
 class ToolToggle(BaseModel):
     tool: str
+    enabled: bool
+
+
+class InstallBody(BaseModel):
+    id: str
+
+
+class EnabledBody(BaseModel):
     enabled: bool
 
 
@@ -145,6 +157,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             admin_token=admin_token,
             pair_failures=deque(maxlen=50),
             local_target_id=local[0].target_id if local else None,
+            catalog=Catalog(cfg.marketplace.url),
         )
         try:
             yield
@@ -343,7 +356,8 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         t = await c.repo.get_target(target_id)
         if not t or t["status"] == "revoked":
             raise HTTPException(404, "target not found")
-        if body.tool not in REGISTRY:
+        known = set(REGISTRY) | {x.name for e in parse_manifests(await c.repo.list_extensions()) for x in e.tools}
+        if body.tool not in known:
             raise HTTPException(422, f"unknown tool {body.tool!r}")
         disabled = set(t.get("disabled_tools") or [])
         if body.enabled:
@@ -392,6 +406,68 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         await c.repo.upsert_profile(c.workspace_id, profile.model_dump())
         await c.repo.audit(c.workspace_id, "user", "profile.imported", {"id": profile.id, "version": profile.version})
         return {"id": profile.id}
+
+    @app.get("/v1/marketplace")
+    async def marketplace(c: Core = Depends(auth)) -> dict[str, Any]:
+        catalog, error = await c.catalog.load()
+        return {"items": listing(catalog, await c.repo.list_extensions()), "error": error}
+
+    @app.get("/v1/extensions")
+    async def installed_extensions(c: Core = Depends(auth)) -> list[dict[str, Any]]:
+        rows = {r["id"]: r for r in await c.repo.list_extensions()}
+        return [
+            {**e.model_dump(), "enabled": bool(rows[e.id]["enabled"]), "source": rows[e.id]["source"]}
+            for e in parse_manifests(list(rows.values()))
+        ]
+
+    async def save_extension(c: Core, ext: Extension, source: str) -> dict[str, str]:
+        try:
+            await check_conflicts(c.repo, ext)
+        except ExtensionError as e:
+            raise HTTPException(409, str(e)) from e
+        await c.repo.save_extension(ext.model_dump(exclude_defaults=True), source)
+        await c.repo.audit(
+            c.workspace_id, "user", "extension.installed", {"id": ext.id, "version": ext.version, "source": source}
+        )
+        return {"id": ext.id, "version": ext.version}
+
+    @app.post("/v1/extensions")
+    async def install_extension(body: InstallBody, c: Core = Depends(auth)) -> dict[str, str]:
+        catalog, _ = await c.catalog.load()
+        ext = catalog.get(body.id)
+        if ext is None:
+            raise HTTPException(404, f"extension {body.id!r} is not in the catalog")
+        row = await c.repo.get_extension(body.id)
+        if row and row["source"] == "custom":
+            raise HTTPException(409, f"a custom extension {body.id!r} is installed; remove it first")
+        return await save_extension(c, ext, "catalog")
+
+    @app.post("/v1/extensions/custom")
+    async def install_custom_extension(request: Request, c: Core = Depends(auth)) -> dict[str, str]:
+        try:
+            ext = Extension.model_validate(yaml.safe_load(await request.body()))
+        except (yaml.YAMLError, ValidationError) as e:
+            raise HTTPException(422, f"invalid extension: {e}") from e
+        catalog, _ = await c.catalog.load()
+        if ext.id in catalog:
+            raise HTTPException(409, f"id {ext.id!r} belongs to a catalog extension; pick another id")
+        return await save_extension(c, ext, "custom")
+
+    @app.patch("/v1/extensions/{ext_id}")
+    async def toggle_extension(ext_id: str, body: EnabledBody, c: Core = Depends(auth)) -> dict[str, bool]:
+        if not await c.repo.get_extension(ext_id):
+            raise HTTPException(404, "extension not found")
+        await c.repo.set_extension_enabled(ext_id, body.enabled)
+        await c.repo.audit(c.workspace_id, "user", "extension.toggled", {"id": ext_id, "enabled": body.enabled})
+        return {"enabled": body.enabled}
+
+    @app.delete("/v1/extensions/{ext_id}")
+    async def remove_extension(ext_id: str, c: Core = Depends(auth)) -> dict[str, bool]:
+        if not await c.repo.get_extension(ext_id):
+            raise HTTPException(404, "extension not found")
+        await c.repo.delete_extension(ext_id)
+        await c.repo.audit(c.workspace_id, "user", "extension.removed", {"id": ext_id})
+        return {"ok": True}
 
     def task_view(t: dict[str, Any]) -> dict[str, Any]:
         keys = ("id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result", "mode", "model")

@@ -29,6 +29,7 @@ dist:
 	cp dist/mensarium-$(VERSION).tar.gz dist/mensarium.tar.gz
 	sed 's|^MENSARIUM_SOURCE_DEFAULT=""|MENSARIUM_SOURCE_DEFAULT="$(DIST_URL)/dist/mensarium.tar.gz"|' install.sh > dist/install.sh
 	printf '{"version": "%s", "file": "mensarium-%s.tar.gz", "sha256": "%s"}\n' $(VERSION) $(VERSION) $$(shasum -a 256 dist/mensarium.tar.gz | cut -d' ' -f1) > dist/latest.json
+	.venv/bin/python -c "from mensarium.marketplace import export_index; export_index('dist/marketplace.json')"
 
 release: dist
 	git tag -a v$(VERSION) -m "v$(VERSION)"

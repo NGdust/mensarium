@@ -1,0 +1,31 @@
+id: commit-message
+name: {en: Commit message, ru: Сообщение коммита}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Draft a commit message for the current changes in the project's own style.
+  ru: Готовит сообщение коммита для текущих изменений в стиле проекта.
+description:
+  en: Reads the staged diff and recent commit history, then drafts a concise imperative commit message. Does not commit unless explicitly asked.
+  ru: Читает staged diff и историю коммитов и готовит короткое сообщение в повелительном наклонении. Коммитит только по явной просьбе.
+tags: [git]
+instructions: |
+  # Commit message
+
+  Goal: write a commit message that matches this repo's style, grounded in the actual diff.
+
+  1. Run git.status to see what is staged and what is not.
+  2. Run git.diff with staged=true to read exactly what will be committed. If nothing is staged, say so
+     and stop instead of drafting a message for unstaged changes.
+  3. Run shell.exec with a single program to see recent style: program `git`, args `log --oneline -10`
+     (one program, no pipes) — match the tense, prefix and length conventions already in use.
+  4. If the diff alone does not explain why the change was made, read the touched files with files.read
+     for context, or ask the user.
+  5. Draft a short subject line in imperative mood, lowercase start, under about 70 characters.
+  6. Only describe what is actually in the diff — do not mention files or effects that are not there.
+  7. Do not add a body unless the "why" needs more than the subject line explains.
+  8. Show the drafted message to the user. Only run `git commit -m "..."` via shell.exec if the user
+     explicitly asked you to commit, not just to draft a message.
+
+  Stop after presenting the message (or after the requested commit finishes). Report the message and,
+  if you committed, the resulting commit output.

@@ -4,19 +4,25 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from mensarium.contracts.extensions import CommandTool
 from mensarium.contracts.llm import ToolDefinition
-from mensarium.contracts.tools import TOOL_ARGS
+from mensarium.contracts.tools import CORE_TOOL_ARGS, TOOL_ARGS
 
 Risk = Literal["read", "write", "execute", "network", "destructive", "privileged"]
+RunsOn = Literal["target", "core"]
 
 
 @dataclass(frozen=True)
 class ToolSpec:
+    """`runs_on="core"` tools touch only Core data; `command` tools run on the device as shell.exec."""
+
     name: str
     description: str
     risk: Risk
     args_model: type[BaseModel]
     display: Callable[[dict[str, Any]], str]
+    runs_on: RunsOn = "target"
+    command: CommandTool | None = None
 
     def definition(self) -> ToolDefinition:
         schema = self.args_model.model_json_schema()
@@ -80,3 +86,14 @@ _SPECS = [
 ]
 
 REGISTRY: dict[str, ToolSpec] = {s.name: s for s in _SPECS}
+
+CORE_TOOLS: dict[str, ToolSpec] = {
+    "skills.read": ToolSpec(
+        "skills.read",
+        "Load the full instructions of an installed skill. Call it before doing work a listed skill covers.",
+        "read",
+        CORE_TOOL_ARGS["skills.read"],
+        lambda a: f"skill {a['id']}",
+        runs_on="core",
+    ),
+}

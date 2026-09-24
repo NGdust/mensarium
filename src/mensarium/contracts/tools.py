@@ -44,6 +44,10 @@ class ShellExecArgs(_Args):
     timeout_s: int = Field(120, ge=1, le=3600)
 
 
+class SkillsReadArgs(_Args):
+    id: str = Field(min_length=1, description="Skill id from the skills list in the system prompt")
+
+
 TOOL_ARGS: dict[str, type[_Args]] = {
     "files.list": FilesListArgs,
     "files.read": FilesReadArgs,
@@ -52,6 +56,8 @@ TOOL_ARGS: dict[str, type[_Args]] = {
     "git.diff": GitDiffArgs,
     "shell.exec": ShellExecArgs,
 }
+
+CORE_TOOL_ARGS: dict[str, type[_Args]] = {"skills.read": SkillsReadArgs}
 
 PATH_FIELDS: dict[str, tuple[str, ...]] = {
     "files.list": ("path",),

@@ -1,5 +1,6 @@
 import posixpath
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -8,7 +9,8 @@ from pydantic import ValidationError
 from mensarium.contracts.protocol import TargetPolicy
 from mensarium.contracts.tools import PATH_FIELDS
 from mensarium.shared.redaction import is_secret_path
-from mensarium.tool_runtime.registry import REGISTRY, Risk
+from mensarium.tool_runtime.commands import render
+from mensarium.tool_runtime.registry import REGISTRY, Risk, ToolSpec
 
 RISK_ORDER: list[Risk] = ["read", "execute", "write", "network", "destructive", "privileged"]
 PRIVILEGED_PROGRAMS = {"sudo", "su", "doas", "pkexec", "security", "launchctl", "systemctl", "chown"}
@@ -41,6 +43,8 @@ class Decision:
     requires_approval: bool = False
     arguments: dict[str, Any] = field(default_factory=dict)
     display: str = ""
+    exec_tool: str = ""
+    runs_on: str = "target"
 
 
 def _deny(reason: str, risk: Risk = "read") -> Decision:
@@ -92,35 +96,52 @@ def evaluate(
     target_tools: list[str],
     target_policy: TargetPolicy,
     disabled_tools: list[str] | None = None,
+    registry: Mapping[str, ToolSpec] = REGISTRY,
 ) -> Decision:
-    spec = REGISTRY.get(tool)
+    """`arguments` and `exec_tool` of an allowed decision are what is sent to the device (or run in Core)."""
+    spec = registry.get(tool)
     if spec is None:
         return _deny(f"unknown tool {tool!r}")
     if tool not in profile_tools:
         return _deny(f"tool {tool!r} is not allowed by the active profile")
-    if tool in (disabled_tools or []):
+    disabled = disabled_tools or []
+    if tool in disabled:
         return _deny(f"tool {tool!r} is disabled for this device")
-    if tool not in target_tools:
-        return _deny(f"target does not support tool {tool!r}")
     if raw_args is None:
         return _deny("arguments are not valid JSON")
     try:
         args = spec.args_model.model_validate(raw_args).model_dump()
     except ValidationError as e:
         return _deny(f"invalid arguments: {e.errors(include_url=False)}")
+    if spec.runs_on == "core":
+        return Decision(
+            allowed=True, risk=spec.risk, arguments=args, display=spec.display(args), exec_tool=tool, runs_on="core"
+        )
+
+    exec_tool = tool
+    if spec.command:
+        try:
+            args = render(spec.command, args)
+        except ValueError as e:
+            return _deny(f"invalid arguments: {e}")
+        exec_tool = "shell.exec"
+        if exec_tool in disabled:
+            return _deny(f"tool {tool!r} runs through shell.exec, which is disabled for this device")
+    if exec_tool not in target_tools:
+        return _deny(f"target does not support tool {exec_tool!r}")
     if not target_policy.roots:
         return _deny("target has no allowed roots")
     try:
-        for f in PATH_FIELDS.get(tool, ()):
+        for f in PATH_FIELDS.get(exec_tool, ()):
             if args.get(f) is not None:
                 args[f] = _normalize_path(args[f], target_policy.roots)
     except ValueError as e:
         return _deny(str(e))
 
     risk: Risk = spec.risk
-    if tool in ("files.read", "files.list", "files.search") and is_secret_path(args["path"]):
+    if exec_tool in ("files.read", "files.list", "files.search") and is_secret_path(args["path"]):
         return _deny("access to secret files is not allowed")
-    if tool == "shell.exec":
+    if exec_tool == "shell.exec":
         try:
             argv = shlex.split(args["command"])
         except ValueError as e:
@@ -137,7 +158,7 @@ def evaluate(
             return _deny("run programs by name, not by path")
         if "*" not in allow and program not in allow:
             return _deny(f"program {program!r} is not in the target command allowlist")
-        risk = max(classify_command(argv), risk, key=RISK_ORDER.index)
+        risk = max(classify_command(argv), risk, REGISTRY["shell.exec"].risk, key=RISK_ORDER.index)
     if risk == "privileged":
         return _deny("privileged actions are denied", risk)
 
@@ -147,4 +168,5 @@ def evaluate(
         requires_approval=risk in required_risks,
         arguments=args,
         display=spec.display(args),
+        exec_tool=exec_tool,
     )

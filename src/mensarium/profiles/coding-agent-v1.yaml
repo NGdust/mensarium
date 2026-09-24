@@ -1,6 +1,6 @@
 id: coding-agent-v1
 name: Coding Agent
-version: 1.0.0
+version: 1.1.0
 instructions_ref: coding.md
 
 llm:
@@ -20,6 +20,8 @@ allowed_tools:
   - git.status
   - git.diff
   - shell.exec
+
+allow_extensions: true
 
 default_mode: propose_then_execute
 

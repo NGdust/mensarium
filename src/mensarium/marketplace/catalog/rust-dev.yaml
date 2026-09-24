@@ -1,0 +1,33 @@
+id: rust-dev
+name: {en: Rust dev tools, ru: Инструменты Rust-разработки}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Run cargo test, cargo check and cargo clippy as dedicated tools.
+  ru: Запускает cargo test, cargo check и cargo clippy отдельными инструментами.
+description:
+  en: Gives the agent structured tools for a Rust crate's tests, type-checking and lints.
+  ru: Даёт агенту инструменты для тестов, проверки типов и линтов Rust-крейта.
+tags: [rust, testing, lint]
+tools:
+  - name: cargo.test
+    description: Run the crate's test suite with cargo test.
+    risk: execute
+    argv: [cargo, test]
+    cwd: "{dir}"
+    parameters:
+      dir: {description: Project directory, default: "."}
+  - name: cargo.check
+    description: Type-check the crate without producing a binary.
+    risk: read
+    argv: [cargo, check]
+    cwd: "{dir}"
+    parameters:
+      dir: {description: Project directory, default: "."}
+  - name: cargo.clippy
+    description: Run Clippy lints on the crate.
+    risk: read
+    argv: [cargo, clippy]
+    cwd: "{dir}"
+    parameters:
+      dir: {description: Project directory, default: "."}

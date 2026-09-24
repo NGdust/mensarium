@@ -468,6 +468,44 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .empty h3 { margin: 0 0 6px; color: var(--text); font-size: 16px; font-weight: 600; }
 .empty p { margin: 0 0 18px; }
 
+/* marketplace */
+.market-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+.market-search { flex: 1; min-width: 220px; margin: 0; }
+.segmented { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface); }
+.seg { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 14px; border: 0; border-radius: 999px; background: none; color: var(--muted); font: 500 13.5px var(--font); cursor: pointer; }
+.seg:hover { color: var(--text); }
+.seg.active { background: var(--surface-3); color: var(--text); }
+.seg-count { font-size: 12px; color: var(--muted); }
+.market-note { margin: -4px 0 14px; font-size: 13px; color: var(--warn); }
+.market-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.market-grid > .empty { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: var(--r-lg); }
+.market-card {
+  display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; border-radius: var(--r-lg); cursor: pointer;
+  border: 1px solid var(--line); background: rgba(22, 20, 28, 0.7); transition: border-color 0.15s, background 0.15s;
+}
+.market-card:hover { border-color: var(--line-strong); background: var(--surface); }
+.market-card.installed { border-color: var(--accent-line); }
+.market-card-head { display: flex; align-items: center; gap: 12px; }
+.market-icon { display: grid; place-items: center; width: 36px; height: 36px; flex: none; border-radius: 10px; background: var(--accent-soft); color: var(--accent-strong); }
+.market-title { min-width: 0; font-weight: 600; }
+.market-meta { font-size: 12.5px; font-weight: 400; color: var(--muted); }
+.market-summary { flex: 1; margin: 0; font-size: 13.5px; color: var(--text-2); }
+.market-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill.tag-kind { height: 24px; font-size: 12px; padding: 0 10px; }
+.market-foot { display: flex; align-items: center; min-height: 30px; }
+.market-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.switch-label { display: inline-flex; align-items: center; gap: 9px; font-size: 13.5px; color: var(--text-2); cursor: pointer; }
+.modal.modal-wide { max-width: 680px; max-height: calc(100vh - 32px); overflow-y: auto; }
+.modal .market-meta { margin: -2px 0 12px; }
+.market-tools { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.market-tool { padding: 10px 12px; border-radius: var(--r); border: 1px solid var(--line); background: var(--frame); }
+.market-tool-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 2px; }
+.market-tool-head code { font-size: 13px; color: var(--text); }
+.market-tool .pill { height: 22px; font-size: 12px; padding: 0 9px; }
+.market-argv { margin: 8px 0 0; font: 12.5px/1.5 var(--mono); color: var(--text-2); white-space: pre-wrap; word-break: break-word; }
+.market-instructions { max-height: 320px; overflow-y: auto; padding: 12px 14px; margin-bottom: 18px; border-radius: var(--r); border: 1px solid var(--line); background: var(--frame); font-size: 14px; }
+.market-yaml { font: 13px/1.5 var(--mono); resize: vertical; margin-bottom: 16px; background: var(--frame); }
+
 /* modal */
 .backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 16px; background: rgba(3, 2, 6, 0.7); }
 .modal { width: 100%; max-width: 540px; padding: 24px; border-radius: var(--r-xl); background: var(--surface); box-shadow: var(--pop); }
@@ -529,6 +567,10 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
   .row { flex-direction: column; align-items: flex-start; gap: 8px; }
   .row-value { max-width: 100%; text-align: left; }
   .audit-item { grid-template-columns: 1fr; gap: 4px; }
+  .segmented { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .segmented::-webkit-scrollbar { display: none; }
+  .seg { flex: none; padding: 0 11px; }
+  .market-grid { grid-template-columns: 1fr; }
   .device-head { padding: 14px 16px; gap: 10px; }
   .device-head .status-label { display: none; }
   .device-body { padding: 0 16px 16px; }

@@ -1,0 +1,45 @@
+id: python-dev
+name: {en: Python dev tools, ru: Инструменты Python-разработки}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Run pytest, ruff and mypy on the project as dedicated tools.
+  ru: Запускает pytest, ruff и mypy для проекта отдельными инструментами.
+description:
+  en: Adds a test runner plus read-only lint, format-check and type-check tools for Python projects. Each one runs a single allowlisted program on the device.
+  ru: Добавляет запуск тестов и инструменты для линта, проверки форматирования и типов Python-проекта только на чтение. Каждый запускает одну разрешённую программу на устройстве.
+tags: [python, testing, lint]
+tools:
+  - name: python.test
+    description: Run pytest, optionally scoped to a path and filtered by a -k expression.
+    risk: execute
+    argv: [pytest, -q, "{path}", "-k{filter}"]
+    cwd: "{dir}"
+    parameters:
+      dir: {description: Project directory, default: "."}
+      path: {description: Test file or directory to run (optional)}
+      filter: {description: Only run tests matching this -k expression (optional)}
+  - name: python.lint
+    description: Run ruff check for lint errors, optionally scoped to a path.
+    risk: read
+    argv: [ruff, check, "{path}"]
+    cwd: "{dir}"
+    parameters:
+      dir: {description: Project directory, default: "."}
+      path: {description: File or directory to check (optional)}
+  - name: python.format_check
+    description: Check formatting with ruff format --check, without modifying files.
+    risk: read
+    argv: [ruff, format, --check, "{path}"]
+    cwd: "{dir}"
+    parameters:
+      dir: {description: Project directory, default: "."}
+      path: {description: File or directory to check (optional)}
+  - name: python.types
+    description: Run mypy type checking, optionally scoped to a path.
+    risk: read
+    argv: [mypy, "{path}"]
+    cwd: "{dir}"
+    parameters:
+      dir: {description: Project directory, default: "."}
+      path: {description: File or directory to check (optional)}

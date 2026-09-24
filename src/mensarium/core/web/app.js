@@ -86,6 +86,8 @@ const ICONS = {
   ban: '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
   check: '<path d="m5 12 5 5 9-10"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+  package: '<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>',
+  book: '<path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5z"/><path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19v-3"/>',
   robot: '<rect x="4.5" y="8" width="15" height="11" rx="3"/><path d="M12 8V5.2M2.5 12.5v3M21.5 12.5v3M9.5 16h5"/><circle cx="12" cy="4.2" r="1"/><circle cx="9.3" cy="12.4" r=".9"/><circle cx="14.7" cy="12.4" r=".9"/>',
 };
 
@@ -123,7 +125,10 @@ function markdown(text) {
   let para = [];
   let list = null;
   const flushPara = () => { if (para.length) out.push(`<p>${para.map(inlineMd).join('<br>')}</p>`); para = []; };
-  const flushList = () => { if (list) out.push(`<${list.tag}>${list.items.map((i) => `<li>${inlineMd(i)}</li>`).join('')}</${list.tag}>`); list = null; };
+  const flushList = () => {
+    if (list) out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ''}>${list.items.map((i) => `<li>${i.split('\n').map(inlineMd).join('<br>')}</li>`).join('')}</${list.tag}>`);
+    list = null;
+  };
   const lines = String(text || '').split('\n');
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -134,19 +139,26 @@ function markdown(text) {
       out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
       continue;
     }
-    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
-    const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    const bullet = line.match(/^(\s*)[-*]\s+(.*)$/);
+    const numbered = line.match(/^(\s*)(\d+)[.)]\s+(.*)$/);
     const heading = line.match(/^\s*#{1,6}\s+(.*)$/);
-    if (bullet || numbered) {
+    const item = bullet || numbered;
+    // Indented lines and nested items continue the current list item instead of breaking the list.
+    if (list && item && item[1].length >= 2) {
+      list.items[list.items.length - 1] += `\n• ${bullet ? bullet[2] : numbered[3]}`;
+    } else if (list && !item && /^\s{2,}\S/.test(line)) {
+      list.items[list.items.length - 1] += ` ${line.trim()}`;
+    } else if (item) {
       flushPara();
       const tag = bullet ? 'ul' : 'ol';
-      if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
-      list.items.push((bullet || numbered)[1]);
+      if (!list || list.tag !== tag) { flushList(); list = { tag, items: [], start: numbered ? Number(numbered[2]) : 1 }; }
+      list.items.push(bullet ? bullet[2] : numbered[3]);
     } else if (heading) {
       flushPara(); flushList();
       out.push(`<h3>${inlineMd(heading[1])}</h3>`);
     } else if (!line.trim()) {
-      flushPara(); flushList();
+      flushPara();
+      if (list && !/^\s*([-*]|\d+[.)])\s+/.test(lines[i + 1] || '')) flushList();
     } else {
       flushList();
       para.push(line);
@@ -233,7 +245,9 @@ const TEMPLATES = [
   ['folder', 'Как устроен проект', 'Изучи структуру проекта и расскажи, как он устроен: точки входа, основные модули, как запускать.'],
   ['search', 'Исправить ошибку', 'Найди причину ошибки и предложи минимальное исправление: '],
 ];
-const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'git.status': 'git', 'git.diff': 'git', 'shell.exec': 'terminal' };
+const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'git.status': 'git', 'git.diff': 'git', 'shell.exec': 'terminal', 'skills.read': 'book' };
+// Marketplace texts are either plain strings or {en, ru} maps.
+const txt = (v) => (typeof v === 'string' ? v : (v?.ru || v?.en || ''));
 const RESUMABLE = ['PAUSED', 'FAILED_RECOVERABLE'];
 
 const POLICY_REASONS = [
@@ -815,8 +829,9 @@ async function viewChat(taskId) {
     let confirmBox = null;
     const card = h('div', { class: `approval${tc.risk === 'destructive' ? ' risk-destructive' : ''}`, role: 'group', 'aria-label': 'Запрос подтверждения' },
       h('div', { class: 'approval-top' }, h('span', { class: 'approval-title' }, 'Нужно ваше решение'), h('span', { class: `pill ${riskKind}` }, riskLabel), timer),
-      h('pre', { class: 'approval-cmd' }, tc.tool === 'shell.exec' ? `$ ${args.command}` : short(tc.display)),
+      h('pre', { class: 'approval-cmd' }, args.command ? `$ ${args.command}` : short(tc.display)),
       h('dl', { class: 'approval-meta' },
+        tc.tool !== 'shell.exec' ? [h('dt', {}, 'Инструмент'), h('dd', {}, tc.tool)] : null,
         h('dt', {}, 'Устройство'), h('dd', {}, tc.target_name || ''),
         args.cwd ? [h('dt', {}, 'Папка'), h('dd', { title: args.cwd }, short(args.cwd))] : null,
         args.timeout_s ? [h('dt', {}, 'Лимит'), h('dd', {}, `${args.timeout_s} с`)] : null,
@@ -951,6 +966,7 @@ const SETTINGS = [
   ['overview', 'pulse', 'Обзор'],
   ['model', 'robot', 'Модель'],
   ['devices', 'laptop', 'Устройства'],
+  ['marketplace', 'package', 'Маркетплейс'],
   ['profiles', 'layers', 'Профили'],
   ['audit', 'list', 'Журнал действий'],
 ];
@@ -1007,7 +1023,7 @@ const cmdValue = (cmd) => [h('code', {}, cmd), copyBtn(cmd)];
 async function viewSettings(key) {
   const shell = ensureSettingsShell();
   shell.setActive();
-  const views = { overview: settingsOverview, model: settingsModel, devices: settingsDevices, profiles: settingsProfiles, audit: settingsAudit };
+  const views = { overview: settingsOverview, model: settingsModel, devices: settingsDevices, marketplace: settingsMarketplace, profiles: settingsProfiles, audit: settingsAudit };
   await (views[key] || settingsOverview)(shell);
 }
 
@@ -1099,6 +1115,7 @@ function toggleSwitch(checked, { label, onChange }) {
 async function settingsDevices(shell) {
   const s = state.system || await get('/v1/system');
   const listHost = h('div', {});
+  const extTools = (await get('/v1/extensions').catch(() => [])).filter((e) => e.enabled).flatMap((e) => e.tools.map((t) => ({ ...t, ext: txt(e.name) })));
   const expanded = new Set(JSON.parse(localStorageGet('devices-open') || '[]'));
   let signature = '';
 
@@ -1128,6 +1145,21 @@ async function settingsDevices(shell) {
             },
           }));
       })),
+      extTools.length ? [
+        h('div', { class: 'device-sub' }, 'Инструменты из маркетплейса', h('span', {}, 'Запускаются как команды, поэтому нужен включённый «Запуск команд» и программа в списке разрешённых.')),
+        h('div', { class: 'tool-rows' }, extTools.map((tool) => h('div', { class: 'tool-row' },
+          icon('terminal'),
+          h('div', { class: 'row-text' }, h('div', { class: 'tool-row-title' }, tool.name, h('code', {}, tool.ext)), h('div', { class: 'row-desc' }, tool.description)),
+          programs.includes('*') || programs.includes(tool.argv[0]) ? null : h('span', { class: 'pill warn', title: 'Программы нет в списке разрешённых на устройстве' }, `нет ${tool.argv[0]}`),
+          toggleSwitch(!disabled.has(tool.name), {
+            label: `${tool.name} на «${t.name}»`,
+            onChange: async (enabled) => {
+              Object.assign(t, await api(`/v1/targets/${t.id}/tools`, { method: 'PUT', body: JSON.stringify({ tool: tool.name, enabled }) }));
+              signature = '';
+              render();
+            },
+          })))),
+      ] : null,
       h('div', { class: 'device-sub' }, 'Папки'),
       h('div', { class: 'device-tags' }, (caps.roots || []).map((r) => h('span', { class: 'pill tag', title: r }, r))),
       h('div', { class: 'device-sub' }, 'Программы для запуска команд'),
@@ -1187,6 +1219,113 @@ async function settingsDevices(shell) {
   viewCleanups.push(() => clearInterval(iv));
 }
 
+const RISK_SHORT = { read: 'чтение', write: 'изменения', execute: 'запуск', network: 'сеть', destructive: 'необратимое' };
+const extKind = (e) => [e.instructions ? 'Навык' : null, e.tools.length ? `Инструменты: ${e.tools.length}` : null].filter(Boolean);
+const extIcon = (e) => (e.instructions && e.tools.length ? 'layers' : e.instructions ? 'book' : 'terminal');
+
+async function settingsMarketplace(shell) {
+  const grid = h('div', { class: 'market-grid' }, h('div', { class: 'empty' }, 'Загружаем каталог...'));
+  const note = h('p', { class: 'market-note hidden' });
+  const search = h('input', { type: 'search', placeholder: 'Поиск по названию и описанию', 'aria-label': 'Поиск в маркетплейсе' });
+  const FILTERS = [['all', 'Все'], ['skills', 'Навыки'], ['tools', 'Инструменты'], ['installed', 'Установленные']];
+  let filter = localStorageGet('market-filter') || 'all';
+  let items = [];
+  const filterBar = h('div', { class: 'segmented', role: 'tablist' });
+  const renderFilters = () => filterBar.replaceChildren(...FILTERS.map(([key, label]) => h('button', {
+    class: `seg${key === filter ? ' active' : ''}`, role: 'tab', 'aria-selected': String(key === filter),
+    onclick: () => { filter = key; localStorageSet('market-filter', key); renderFilters(); render(); },
+  }, label, key === 'installed' ? h('span', { class: 'seg-count' }, String(items.filter((i) => i.installed).length)) : null)));
+
+  async function act(fn, done) {
+    try { await fn(); if (done) toast(done); await load(); } catch (err) { fail(err); }
+  }
+  const install = (e) => act(() => post('/v1/extensions', { id: e.id }), e.installed ? `Обновлено: ${txt(e.name)}` : `Установлено: ${txt(e.name)}`);
+  const remove = async (e) => {
+    if (!await confirmDialog({ title: `Удалить «${txt(e.name)}»?`, text: e.installed.source === 'custom' ? 'Это ваш пакет, его содержимое удалится из Core.' : 'Агент перестанет им пользоваться. Установить снова можно в любой момент.', action: 'Удалить', danger: true })) return;
+    closeLayer();
+    act(() => del(`/v1/extensions/${e.id}`), 'Удалено');
+  };
+  const setEnabled = (e, enabled) => api(`/v1/extensions/${e.id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }).then(() => { e.installed.enabled = enabled; });
+
+  function actions(e, big = false) {
+    const size = big ? '' : ' btn-sm';
+    if (!e.installed) return h('button', { class: `btn btn-primary${size}`, onclick: (ev) => { ev.stopPropagation(); closeLayer(); install(e); } }, icon('plus'), 'Установить');
+    return h('div', { class: 'market-actions', onclick: (ev) => ev.stopPropagation() },
+      e.update ? h('button', { class: `btn btn-primary${size}`, onclick: () => { closeLayer(); install(e); } }, `Обновить до ${e.version}`) : null,
+      h('label', { class: 'switch-label' }, toggleSwitch(e.installed.enabled, { label: `Включить «${txt(e.name)}»`, onChange: (v) => setEnabled(e, v) }), 'Включён'),
+      big ? h('button', { class: 'btn btn-danger btn-sm', onclick: () => remove(e) }, 'Удалить') : null);
+  }
+
+  function details(e) {
+    openModal(
+      h('div', { class: 'modal-head' }, h('h2', {}, txt(e.name)), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': 'Закрыть' }, icon('x'))),
+      h('div', { class: 'market-meta' }, [e.author, `версия ${e.installed ? e.installed.version : e.version}`, e.installed?.source === 'custom' ? 'ваш пакет' : null].filter(Boolean).join(' · ')),
+      h('p', {}, txt(e.description) || txt(e.summary)),
+      e.tools.length ? [h('div', { class: 'field-label' }, 'Инструменты'), h('div', { class: 'market-tools' }, e.tools.map((t) => h('div', { class: 'market-tool' },
+        h('div', { class: 'market-tool-head' }, h('code', {}, t.name), h('span', { class: 'pill' }, RISK_SHORT[t.risk] || t.risk)),
+        h('div', { class: 'row-desc' }, t.description),
+        h('pre', { class: 'market-argv' }, `$ ${t.argv.join(' ')}`))))] : null,
+      e.instructions ? [h('div', { class: 'field-label' }, 'Инструкция для агента'), h('div', { class: 'prose market-instructions', html: markdown(e.instructions) })] : null,
+      h('div', { class: 'modal-actions' }, actions(e, true)),
+    ).classList.add('modal-wide');
+  }
+
+  function card(e) {
+    return h('div', { class: `market-card${e.installed ? ' installed' : ''}`, role: 'button', tabindex: '0', onclick: () => details(e), onkeydown: (ev) => { if (ev.key === 'Enter') details(e); } },
+      h('div', { class: 'market-card-head' }, h('span', { class: 'market-icon' }, icon(extIcon(e))), h('div', { class: 'market-title' }, h('div', {}, txt(e.name)), h('div', { class: 'market-meta' }, [e.author, e.installed?.source === 'custom' ? 'ваш пакет' : `v${e.version}`].filter(Boolean).join(' · ')))),
+      h('p', { class: 'market-summary' }, txt(e.summary)),
+      h('div', { class: 'market-tags' }, extKind(e).map((k) => h('span', { class: 'pill tag-kind' }, k))),
+      h('div', { class: 'market-foot' }, actions(e)));
+  }
+
+  function render() {
+    const q = search.value.trim().toLowerCase();
+    const shown = items.filter((e) => ({ all: true, skills: !!e.instructions, tools: e.tools.length > 0, installed: !!e.installed }[filter]))
+      .filter((e) => !q || [txt(e.name), txt(e.summary), txt(e.description), e.id, ...(e.tags || []), ...e.tools.map((t) => t.name)].join(' ').toLowerCase().includes(q));
+    grid.replaceChildren(...(shown.length ? shown.map(card) : [h('div', { class: 'empty' }, filter === 'installed' && !q ? 'Пока ничего не установлено.' : 'Ничего не нашлось.')]));
+  }
+
+  async function load() {
+    const data = await get('/v1/marketplace');
+    items = data.items;
+    note.textContent = data.error ? 'Каталог mensarium.com сейчас недоступен, показаны пакеты из этой версии Mensarium.' : '';
+    note.classList.toggle('hidden', !data.error);
+    renderFilters();
+    render();
+  }
+
+  function addCustom() {
+    const ta = h('textarea', { class: 'market-yaml', rows: 14, spellcheck: 'false', 'aria-label': 'Манифест пакета',
+      placeholder: 'id: my-skill\nname: {en: My skill, ru: Мой навык}\nversion: 1.0.0\nsummary: Коротко, что делает\ninstructions: |\n  # Как работать\n  1. ...' });
+    const save = h('button', { class: 'btn btn-primary' }, 'Установить');
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      try {
+        await api('/v1/extensions/custom', { method: 'POST', body: ta.value, headers: { 'Content-Type': 'text/plain' } });
+        closeLayer();
+        toast('Пакет установлен');
+        await load();
+      } catch (err) { fail(err); } finally { save.disabled = false; }
+    });
+    openModal(
+      h('div', { class: 'modal-head' }, h('h2', {}, 'Свой навык или инструмент'), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': 'Закрыть' }, icon('x'))),
+      h('p', {}, 'Вставьте манифест в YAML. Навык — это поле instructions с инструкцией для агента, инструмент — список tools с командой в argv; можно и то и другое. Формат тот же, что у пакетов каталога.'),
+      ta,
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, 'Отмена'), save),
+    ).classList.add('modal-wide');
+    ta.focus();
+  }
+
+  search.addEventListener('input', render);
+  page(shell, 'Маркетплейс', 'Навыки подсказывают агенту, как делать работу, инструменты дают ему готовые команды. Установленное агент видит со следующего шага; команды по-прежнему идут через подтверждение и списки разрешённых программ устройства.',
+    h('button', { class: 'btn', onclick: addCustom }, icon('plus'), 'Добавить свой'),
+    h('div', { class: 'market-bar' }, filterBar, h('div', { class: 'settings-search market-search' }, icon('search'), search)),
+    note,
+    grid,
+  );
+  await load();
+}
+
 async function settingsProfiles(shell) {
   const profiles = await get('/v1/agent-profiles');
   page(shell, 'Профили', 'Профиль задаёт инструменты агента, его лимиты и действия, которые в режиме с запросом ждут подтверждения.', null,
@@ -1210,6 +1349,8 @@ async function settingsAudit(shell) {
     'task.deleted': 'Чат удалён', 'task.mode': 'Смена режима доступа', 'profile.imported': 'Импортирован профиль',
     'task.model': 'Смена модели в чате', 'llm.default_model': 'Смена модели по умолчанию',
     'target.tool': 'Инструмент устройства переключён',
+    'extension.installed': 'Установлен пакет', 'extension.toggled': 'Пакет включён или выключен', 'extension.removed': 'Удалён пакет',
+    'tool.core': 'Инструмент Core',
   };
   const ACTORS = { core: 'Core', target: 'устройство', user: 'вы' };
   const describe = (p) => {
@@ -1217,6 +1358,8 @@ async function settingsAudit(shell) {
     return [
       p.display || p.tool,
       p.name,
+      p.id && !p.task_id && p.id,
+      p.source === 'custom' && 'свой пакет',
       p.status && (EXEC_STATUS[p.status] || statusOf(p.status)[0]),
       p.exit_code != null && `код ${p.exit_code}`,
       p.mode && (MODES[p.mode]?.label || p.mode),

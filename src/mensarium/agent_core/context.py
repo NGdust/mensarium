@@ -9,10 +9,15 @@ MAX_OBSERVATION_CHARS = 8000
 
 
 def build_system_prompt(
-    profile: AgentProfile, target_name: str, platform: str, policy: TargetPolicy, tools: list[str]
+    profile: AgentProfile,
+    target_name: str,
+    platform: str,
+    policy: TargetPolicy,
+    tools: list[str],
+    skills: list[tuple[str, str]] | None = None,
 ) -> str:
     allow = ", ".join(policy.command_allowlist) if policy.command_allowlist else "(none)"
-    return (
+    prompt = (
         f"{profile.instructions.strip()}\n\n"
         "## Active target (set by the harness, not by you)\n"
         f"- name: {target_name}\n"
@@ -22,6 +27,13 @@ def build_system_prompt(
         f"- programs allowed for shell.exec: {allow}\n"
         f"- available tools: {', '.join(tools) or '(none)'}\n"
     )
+    if skills:
+        prompt += (
+            "\n## Skills installed by the user\n"
+            "When the task matches a skill, load it with skills.read first and follow it.\n"
+            + "".join(f"- {skill_id}: {summary}\n" for skill_id, summary in skills)
+        )
+    return prompt
 
 
 def build_messages(steps: list[dict[str, Any]], max_context_tokens: int) -> list[Message]:

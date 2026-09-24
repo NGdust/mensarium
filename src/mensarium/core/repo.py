@@ -196,6 +196,29 @@ class Repo:
     async def get_artifact(self, artifact_id: str) -> dict[str, Any] | None:
         return await self.db.fetchone("SELECT * FROM artifacts WHERE id = ?", (artifact_id,))
 
+    # extensions
+    async def list_extensions(self, enabled_only: bool = False) -> list[dict[str, Any]]:
+        where = " WHERE enabled = 1" if enabled_only else ""
+        return await self.db.fetchall(f"SELECT * FROM extensions{where} ORDER BY id")
+
+    async def get_extension(self, ext_id: str) -> dict[str, Any] | None:
+        return await self.db.fetchone("SELECT * FROM extensions WHERE id = ?", (ext_id,))
+
+    async def save_extension(self, manifest: dict[str, Any], source: str) -> None:
+        now = now_iso()
+        await self.db.execute(
+            "INSERT INTO extensions(id, version, source, enabled, manifest, installed_at, updated_at) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET version = excluded.version, "
+            "source = excluded.source, manifest = excluded.manifest, updated_at = excluded.updated_at",
+            (manifest["id"], manifest["version"], source, canonical_json(manifest).decode(), now, now),
+        )
+
+    async def set_extension_enabled(self, ext_id: str, enabled: bool) -> None:
+        await self.db.update("extensions", ext_id, {"enabled": int(enabled), "updated_at": now_iso()})
+
+    async def delete_extension(self, ext_id: str) -> None:
+        await self.db.execute("DELETE FROM extensions WHERE id = ?", (ext_id,))
+
     # events
     async def add_event(self, task_id: str, event: str, payload: dict[str, Any]) -> dict[str, Any]:
         created = now_iso()

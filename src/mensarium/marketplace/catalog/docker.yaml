@@ -1,0 +1,42 @@
+id: docker
+name: {en: Docker inspect, ru: Просмотр Docker}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Inspect containers, images and compose services as read-only tools.
+  ru: Проверяет контейнеры, образы и сервисы compose инструментами только для чтения.
+description:
+  en: Gives the agent read-only visibility into Docker; running and stopped containers, a container's recent logs, local images and a compose project's status. Nothing here starts, stops or modifies a container.
+  ru: Даёт агенту доступ только на чтение к Docker; запущенные и остановленные контейнеры, последние логи контейнера, локальные образы и статус compose-проекта. Ничего не запускает, не останавливает и не меняет.
+tags: [docker, containers]
+tools:
+  - name: docker.ps
+    description: List containers, including stopped ones, in a compact table.
+    risk: read
+    argv: [docker, ps, --all, --format, "table {{.Names}}\t{{.Status}}\t{{.Image}}"]
+    cwd: "{dir}"
+    parameters:
+      dir: {description: Working directory, default: "."}
+  - name: docker.logs
+    description: Show the last N lines of a container's logs.
+    risk: read
+    argv: [docker, logs, "--tail={lines}", "{container}"]
+    cwd: "{dir}"
+    parameters:
+      dir: {description: Working directory, default: "."}
+      lines: {type: integer, default: 200, minimum: 1, maximum: 100000, description: Number of lines to show}
+      container: {description: Container name or id, required: true}
+  - name: docker.images
+    description: List local docker images.
+    risk: read
+    argv: [docker, images]
+    cwd: "{dir}"
+    parameters:
+      dir: {description: Working directory, default: "."}
+  - name: docker.compose_ps
+    description: List containers managed by the docker compose project in this directory.
+    risk: read
+    argv: [docker, compose, ps]
+    cwd: "{dir}"
+    parameters:
+      dir: {description: Directory containing the compose file, default: "."}

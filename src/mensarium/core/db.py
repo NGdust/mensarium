@@ -4,7 +4,7 @@ from typing import Any
 
 import aiosqlite
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 COLUMN_MIGRATIONS = [
     ("tasks", "mode", "TEXT NOT NULL DEFAULT 'ask'"),
@@ -65,11 +65,15 @@ CREATE TABLE IF NOT EXISTS task_events (
     payload TEXT NOT NULL, created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS task_events_task ON task_events(task_id, seq);
+CREATE TABLE IF NOT EXISTS extensions (
+    id TEXT PRIMARY KEY, version TEXT NOT NULL, source TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+    manifest TEXT NOT NULL, installed_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
 """
 
 JSON_COLUMNS = {
     "settings", "capabilities", "policy", "body", "budget", "input", "output", "params", "usage",
-    "arguments", "metadata", "payload", "disabled_tools",
+    "arguments", "metadata", "payload", "disabled_tools", "manifest",
 }
 
 

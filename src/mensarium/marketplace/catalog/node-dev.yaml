@@ -1,0 +1,34 @@
+id: node-dev
+name: {en: Node dev tools, ru: Инструменты Node-разработки}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Run npm test, npm scripts and list installed packages as dedicated tools.
+  ru: Запускает npm test, npm-скрипты и список установленных пакетов отдельными инструментами.
+description:
+  en: Gives the agent structured tools for a Node.js project's test suite, arbitrary npm scripts and installed packages. Never installs or updates dependencies.
+  ru: Даёт агенту инструменты для тестов Node.js-проекта, произвольных npm-скриптов и списка установленных пакетов. Никогда не устанавливает и не обновляет зависимости.
+tags: [node, javascript, testing]
+tools:
+  - name: npm.test
+    description: Run the project test suite with npm test --silent.
+    risk: execute
+    argv: [npm, test, --silent]
+    cwd: "{dir}"
+    parameters:
+      dir: {description: Project directory, default: "."}
+  - name: npm.run
+    description: Run an npm script defined in package.json.
+    risk: execute
+    argv: [npm, run, "{script}"]
+    cwd: "{dir}"
+    parameters:
+      dir: {description: Project directory, default: "."}
+      script: {description: Script name from package.json, required: true}
+  - name: npm.list
+    description: List top-level installed packages without installing anything.
+    risk: read
+    argv: [npm, ls, --depth=0]
+    cwd: "{dir}"
+    parameters:
+      dir: {description: Project directory, default: "."}

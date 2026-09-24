@@ -1,0 +1,49 @@
+id: git-history
+name: {en: Git history, ru: История git}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Commit log, commit details, branches and blame as dedicated tools.
+  ru: Лог коммитов, детали коммита, ветки и blame отдельными инструментами.
+description:
+  en: Gives the agent structured git history tools instead of free-form commands. Each call runs `git` on the device and follows the usual approval rules.
+  ru: Даёт агенту инструменты для истории git вместо произвольных команд. Каждый вызов запускает `git` на устройстве и подчиняется обычным правилам подтверждения.
+tags: [git]
+tools:
+  - name: git.log
+    description: Show recent commits, one line each.
+    risk: read
+    argv: [git, log, --oneline, --decorate, "--max-count={limit}", "--author={author}", "{rev}", --, "{path}"]
+    cwd: "{repo}"
+    parameters:
+      repo: {description: Path inside the git worktree, default: "."}
+      limit: {type: integer, default: 30, minimum: 1, maximum: 500, description: Number of commits}
+      author: {description: Only commits by this author (substring)}
+      rev: {description: "Revision or range, e.g. main..HEAD"}
+      path: {description: Only commits touching this path}
+  - name: git.show
+    description: Show one commit with its message and changed files; set patch=true for the full diff.
+    risk: read
+    argv: [git, show, --stat, "{patch}", "{rev}"]
+    cwd: "{repo}"
+    parameters:
+      repo: {description: Path inside the git worktree, default: "."}
+      rev: {description: "Commit, tag or branch", default: HEAD}
+      patch: {type: boolean, default: false, flag: --patch, description: Include the full diff}
+  - name: git.branches
+    description: List local and remote branches with their last commit.
+    risk: read
+    argv: [git, branch, --all, -vv]
+    cwd: "{repo}"
+    parameters:
+      repo: {description: Path inside the git worktree, default: "."}
+  - name: git.blame
+    description: Show who last changed each line of a file range.
+    risk: read
+    argv: [git, blame, "-L", "{start},{end}", --, "{file}"]
+    cwd: "{repo}"
+    parameters:
+      repo: {description: Path inside the git worktree, default: "."}
+      file: {description: File path relative to the repo, required: true}
+      start: {type: integer, required: true, minimum: 1, description: First line}
+      end: {type: integer, required: true, minimum: 1, description: Last line}

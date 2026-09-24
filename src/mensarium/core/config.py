@@ -36,8 +36,13 @@ class LocalTargetConfig(BaseModel):
     allow_full_access: bool = True
 
 
+class MarketplaceConfig(BaseModel):
+    url: str | None = "https://mensarium.com/dist/marketplace.json"
+
+
 class CoreConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
+    marketplace: MarketplaceConfig = Field(default_factory=MarketplaceConfig)
     local_target: LocalTargetConfig = Field(default_factory=LocalTargetConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)

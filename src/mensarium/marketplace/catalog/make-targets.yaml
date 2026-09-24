@@ -1,0 +1,28 @@
+id: make-targets
+name: {en: Make targets, ru: Цели Make}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Run and preview Makefile targets as dedicated tools.
+  ru: Запускает и показывает план make-целей отдельными инструментами.
+description:
+  en: Runs a make target on the device, or previews the commands it would run with make -n, without guessing at shell syntax.
+  ru: Запускает make-цель на устройстве или показывает через make -n, какие команды она выполнит, без угадывания синтаксиса shell.
+tags: [make, build]
+tools:
+  - name: make.run
+    description: Run a make target, or the default target when none is given.
+    risk: execute
+    argv: [make, "{target}"]
+    cwd: "{dir}"
+    parameters:
+      dir: {description: Project directory, default: "."}
+      target: {description: "Makefile target to run; omit to run the default target"}
+  - name: make.dry_run
+    description: Show the commands a make target would run, without executing them.
+    risk: read
+    argv: [make, -n, "{target}"]
+    cwd: "{dir}"
+    parameters:
+      dir: {description: Project directory, default: "."}
+      target: {description: "Makefile target to preview; omit for the default target"}

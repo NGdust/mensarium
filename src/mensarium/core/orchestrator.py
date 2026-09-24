@@ -19,6 +19,7 @@ from mensarium.contracts.protocol import (
 )
 from mensarium.core.config import CoreConfig
 from mensarium.core.events import EventBus
+from mensarium.core.extensions import Toolbox, parse_manifests
 from mensarium.core.repo import TERMINAL_STATUSES, Repo
 from mensarium.core.target_hub import TargetHub, TargetUnavailable
 from mensarium.llm_providers.base import LLMError, LLMProvider
@@ -26,7 +27,6 @@ from mensarium.policy_engine.engine import Decision, evaluate
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import iso_in, now_iso, parse_iso, utcnow
 from mensarium.shared.versions import parse_version
-from mensarium.tool_runtime.registry import REGISTRY
 
 log = logging.getLogger(__name__)
 
@@ -37,13 +37,6 @@ FULL_ACCESS_ERRORS = {
     "outdated": "full access is not available: the agent on this device is outdated, update it",
     "disabled": "full access is disabled in this device's config (allow_full_access)",
 }
-
-
-def available_tools(profile: AgentProfile, target: dict[str, Any]) -> list[str]:
-    """Tools the model is offered: allowed by the profile, reported by the device and not switched off for it."""
-    reported = (target.get("capabilities") or {}).get("tools", [])
-    disabled = target.get("disabled_tools") or []
-    return [t for t in profile.allowed_tools if t in REGISTRY and t in reported and t not in disabled]
 
 
 def full_access(target: dict[str, Any]) -> str:
@@ -312,14 +305,16 @@ class Orchestrator:
                 raise Stop("FAILED", "target revoked")
             hello = self.hub.hello(task["target_id"])
             policy = hello.policy if hello else TargetPolicy.model_validate(target["policy"] or {"roots": [], "command_allowlist": []})
-            available = available_tools(profile, target)
+            toolbox = Toolbox(profile, parse_manifests(await self.repo.list_extensions(enabled_only=True)))
+            available = toolbox.available(target)
+            skills = toolbox.skills if "skills.read" in available else []
 
             await self._set_status(task_id, "PLANNING")
             llm_steps += 1
             steps = await self.repo.list_steps(task_id)
             request = ChatRequest(
                 model=model,
-                system=build_system_prompt(profile, target["name"], target["platform"], policy, available),
+                system=build_system_prompt(profile, target["name"], target["platform"], policy, available, skills),
                 messages=build_messages(steps, profile.llm.max_context_tokens),
                 temperature=profile.llm.temperature,
                 max_output_tokens=profile.llm.max_output_tokens,
@@ -331,7 +326,9 @@ class Orchestrator:
             try:
                 resp = await self._interruptible(
                     task_id,
-                self.provider.chat(request, tools=[REGISTRY[t].definition() for t in available], response_schema=None),
+                self.provider.chat(
+                    request, tools=[toolbox.registry[t].definition() for t in available], response_schema=None
+                ),
                 )
             except LLMError as e:
                 await self.bus.emit(task_id, "task.error", {"message": f"LLM call failed: {e}"})
@@ -378,7 +375,7 @@ class Orchestrator:
             if tool_calls > profile.limits.max_tool_calls:
                 raise Stop("FAILED", "tool call budget exhausted")
             assert action.call is not None
-            await self._handle_tool_call(task, profile, target, policy, llm_step_id, action.call)
+            await self._handle_tool_call(task, profile, toolbox, target, policy, llm_step_id, action.call)
 
     async def _observe(self, task_id: str, call: ToolCallAction, content: str, summary: str) -> None:
         await self.repo.add_step(
@@ -391,6 +388,7 @@ class Orchestrator:
         self,
         task: dict[str, Any],
         profile: AgentProfile,
+        toolbox: Toolbox,
         target: dict[str, Any],
         policy: TargetPolicy,
         llm_step_id: str,
@@ -407,11 +405,12 @@ class Orchestrator:
         decision: Decision = evaluate(
             call.tool,
             call.arguments,
-            profile_tools=profile.allowed_tools,
+            profile_tools=toolbox.profile_tools,
             required_risks=profile.approval.required_risks,
             target_tools=target_tools,
             target_policy=policy,
             disabled_tools=target.get("disabled_tools") or [],
+            registry=toolbox.registry,
         )
         if not decision.allowed:
             await self._observe(task_id, call, f"DENIED by policy: {decision.reason}", f"{call.tool} denied")
@@ -436,6 +435,9 @@ class Orchestrator:
                 "status": "proposed",
             }
         )
+        if decision.runs_on == "core":
+            await self._run_core_tool(task_id, call, tc_id, decision, toolbox)
+            return
         mode: AccessMode = (await self._task(task_id))["mode"]
         if mode == "full" and not policy.allow_full_access:
             mode = "ask"
@@ -543,7 +545,7 @@ class Orchestrator:
             expires_at=iso_in(self.cfg.execution.request_ttl_s),
             nonce=secrets.token_hex(32),
             policy_snapshot_hash=policy_snapshot_hash(hello.policy, hello.capabilities.tools),
-            tool=call.tool,
+            tool=decision.exec_tool,
             arguments=decision.arguments,
             approval_ref=approval_ref,
             mode=mode,
@@ -627,6 +629,36 @@ class Orchestrator:
                 "artifact_id": artifact_id,
             },
         )
+
+    async def _run_core_tool(
+        self, task_id: str, call: ToolCallAction, tc_id: str, decision: Decision, toolbox: Toolbox
+    ) -> None:
+        await self.repo.update_tool_call(tc_id, {"status": "executing"})
+        await self.bus.emit(task_id, "tool_call.executing", {"tool_call_id": tc_id, "tool": call.tool, "display": decision.display})
+        try:
+            content, status = self._core_tool(call.tool, decision.arguments, toolbox), "succeeded"
+        except TaskError as e:
+            content, status = f"ERROR: {e}", "failed"
+        await self.repo.update_tool_call(tc_id, {"status": status})
+        await self._observe(task_id, call, content, f"{call.tool} {decision.display} -> {status}")
+        await self.bus.emit(
+            task_id,
+            "tool_call.result",
+            {"tool_call_id": tc_id, "tool": call.tool, "status": status, "exit_code": None, "output": content, "truncated": False, "artifact_id": None},
+        )
+        await self.repo.audit(
+            self.workspace_id, "core", "tool.core", {"task_id": task_id, "tool": call.tool, "display": decision.display, "status": status}
+        )
+
+    @staticmethod
+    def _core_tool(tool: str, args: dict[str, Any], toolbox: Toolbox) -> str:
+        if tool == "skills.read":
+            skill = next((e for e in toolbox.extensions if e.id == args["id"] and e.instructions), None)
+            if skill is None:
+                names = ", ".join(skill_id for skill_id, _ in toolbox.skills) or "none"
+                raise TaskError(f"no installed skill {args['id']!r}; installed skills: {names}")
+            return f"[skill {skill.id} {skill.version}, installed by the user]\n{skill.instructions}"
+        raise TaskError(f"unknown core tool {tool!r}")
 
     @staticmethod
     def _format_result(result: ExecutionResult) -> tuple[str, bool]:
