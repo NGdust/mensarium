@@ -1,19 +1,16 @@
-// Mensarium control UI. Vanilla ES module, no build step, no dependencies.
+// Mensarium web UI. Vanilla ES module, no build step, no dependencies.
 
-const $main = document.getElementById('main');
+const $app = document.getElementById('app');
 const $toasts = document.getElementById('toasts');
-const $modalRoot = document.getElementById('modal-root');
-const $logoutBtn = document.getElementById('logout-btn');
+const $layer = document.getElementById('layer');
 
-let isAuthed = false;
-let viewCleanup = [];
-
-function onCleanup(fn) { viewCleanup.push(fn); }
-function runCleanup() { viewCleanup.forEach((fn) => { try { fn(); } catch (err) { /* noop */ } }); viewCleanup = []; }
+const state = { system: null, targets: [], tasks: [], shell: null, lastChat: '#/' };
+let viewCleanups = [];
+let shellCleanups = [];
 
 class AuthError extends Error {}
 
-// ===== API =====
+// ---------- API ----------
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -21,1045 +18,982 @@ async function api(path, opts = {}) {
     headers: opts.body ? { 'Content-Type': 'application/json' } : undefined,
     ...opts,
   });
-  if (res.status === 401) {
-    isAuthed = false;
-    throw new AuthError('unauthorized');
-  }
+  if (res.status === 401) throw new AuthError('unauthorized');
   const text = await res.text();
   let data = null;
-  if (text) { try { data = JSON.parse(text); } catch (err) { data = text; } }
-  if (!res.ok) {
-    const msg = (data && data.detail) ? data.detail : `Request failed (${res.status})`;
-    throw new Error(msg);
-  }
+  if (text) { try { data = JSON.parse(text); } catch { data = text; } }
+  if (!res.ok) throw new Error((data && data.detail) || `Ошибка запроса (${res.status})`);
   return data;
 }
-function apiGet(path) { return api(path); }
-function apiPost(path, body) { return api(path, { method: 'POST', body: JSON.stringify(body || {}) }); }
+const get = (path) => api(path);
+const post = (path, body) => api(path, { method: 'POST', body: JSON.stringify(body || {}) });
 
-async function safe(promise, fallback) {
-  try { return await promise; }
-  catch (err) {
-    if (err instanceof AuthError) throw err;
-    return fallback;
+function fail(err) {
+  if (err instanceof AuthError) { showLogin(); return; }
+  toast(err.message || String(err), true);
+}
+
+// ---------- DOM helpers ----------
+
+function h(tag, attrs, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === 'class') e.className = v;
+    else if (k === 'html') e.innerHTML = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true ? '' : v);
   }
-}
-
-// ===== Toast =====
-
-function toast(message, isError = false) {
-  const el = document.createElement('div');
-  el.className = `toast${isError ? ' error' : ''}`;
-  el.textContent = message;
-  $toasts.appendChild(el);
-  setTimeout(() => el.remove(), 5000);
-}
-
-// ===== Escaping / safe markdown-lite =====
-
-function esc(s) {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
-}
-
-function renderMarkdownLite(text) {
-  // Text is untrusted (model output). Escape first, then apply a minimal safe transform.
-  let escaped = esc(text);
-  escaped = escaped.replace(/```([\s\S]*?)```/g, (m, code) => `<pre>${code}</pre>`);
-  escaped = escaped.replace(/`([^`\n]+)`/g, (m, code) => `<code class="inline">${code}</code>`);
-  const parts = escaped.split(/(<pre>[\s\S]*?<\/pre>)/g);
-  return parts.map((p) => (p.startsWith('<pre>') ? p : p.replace(/\n/g, '<br>'))).join('');
-}
-
-function relativeTime(iso) {
-  if (!iso) return 'never';
-  const diffSec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-  if (diffSec < 5) return 'just now';
-  if (diffSec < 60) return `${diffSec}s ago`;
-  const min = Math.round(diffSec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  return `${Math.round(hr / 24)}d ago`;
-}
-
-function formatDuration(sec) {
-  const s = Math.max(0, sec);
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  return `${m}:${String(r).padStart(2, '0')}`;
-}
-
-async function copyText(text, btn) {
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-    }
-    const original = btn.textContent;
-    btn.textContent = 'Copied';
-    setTimeout(() => { btn.textContent = original; }, 1500);
-  } catch (err) {
-    toast('Copy failed', true);
+  for (const c of children.flat(Infinity)) {
+    if (c == null || c === false) continue;
+    e.append(c instanceof Node ? c : String(c));
   }
+  return e;
 }
 
-// ===== Badges =====
-
-const TARGET_STATUS_BADGE = { online: 'ok', offline: 'neutral', revoked: 'danger' };
-const RISK_BADGE = { read: 'neutral', write: 'warn', execute: 'orange', network: 'purple', destructive: 'danger' };
-const TASK_STATUS_BADGE = {
-  NEW: 'neutral', VALIDATING: 'neutral', PLANNING: 'accent',
-  WAITING_APPROVAL: 'warn', EXECUTING: 'accent', OBSERVING: 'accent',
-  SUCCEEDED: 'ok', FAILED: 'danger', FAILED_RECOVERABLE: 'danger',
-  CANCELED: 'neutral', PAUSED: 'purple',
+const ICONS = {
+  home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  laptop: '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>',
+  sliders: '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  chevronRight: '<path d="m9 6 6 6-6 6"/>',
+  arrowLeft: '<path d="M19 12H5M11 18l-6-6 6-6"/>',
+  arrowUp: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+  shield: '<path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"/><path d="m9 12 2 2 4-4"/>',
+  sparkle: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
+  pause: '<path d="M9 5v14M15 5v14"/>',
+  play: '<path d="M7 5v14l12-7z"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  logout: '<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5M5 12h11"/>',
+  moon: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  terminal: '<path d="m5 8 4 4-4 4M12 17h7"/>',
+  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+  git: '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="9" r="2.5"/><path d="M6 8.5v7M18 11.5c0 3-3 4-9.5 5"/>',
+  list: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+  cpu: '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
+  layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
+  pulse: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+  x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/>',
+  refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  alert: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
+  ban: '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
+  check: '<path d="m5 12 5 5 9-10"/>',
 };
 
-function badge(text, kind) {
+function icon(name) {
   const span = document.createElement('span');
-  span.className = `badge badge-${kind || 'neutral'}`;
-  const dot = document.createElement('span');
-  dot.className = 'badge-dot';
-  span.appendChild(dot);
-  span.appendChild(document.createTextNode(text || ''));
-  return span;
+  span.innerHTML = `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+  return span.firstChild;
 }
 
-// ===== Modal =====
+const AGENT_FACE = '<svg viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="10" width="24" height="12" rx="6" fill="#17161f"/><circle cx="11.5" cy="16" r="2.6" fill="#e8c35a"/><circle cx="20.5" cy="16" r="2.6" fill="#e8c35a"/></svg>';
+const agentAvatar = (cls = '') => h('div', { class: `avatar agent ${cls}`, html: AGENT_FACE });
+const userAvatar = (cls = '') => h('div', { class: `avatar ${cls}` }, 'А');
 
-function openModal(contentEl) {
-  const backdrop = document.createElement('div');
-  backdrop.className = 'modal-backdrop';
-  const modal = document.createElement('div');
-  modal.className = 'modal';
-  modal.appendChild(contentEl);
-  backdrop.appendChild(modal);
-  backdrop.addEventListener('click', (ev) => { if (ev.target === backdrop) closeModal(); });
-  $modalRoot.appendChild(backdrop);
-  return backdrop;
+function toast(message, isError = false) {
+  const t = h('div', { class: `toast${isError ? ' error' : ''}` }, message);
+  $toasts.append(t);
+  setTimeout(() => t.remove(), 5000);
 }
-function closeModal() { $modalRoot.innerHTML = ''; }
 
-// ===== Login =====
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// Model output is untrusted: everything is escaped first, then a tiny markdown subset is applied.
+function inlineMd(s) {
+  return esc(s)
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+}
+
+function markdown(text) {
+  const out = [];
+  let para = [];
+  let list = null;
+  const flushPara = () => { if (para.length) out.push(`<p>${para.map(inlineMd).join('<br>')}</p>`); para = []; };
+  const flushList = () => { if (list) out.push(`<${list.tag}>${list.items.map((i) => `<li>${inlineMd(i)}</li>`).join('')}</${list.tag}>`); list = null; };
+  const lines = String(text || '').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*```/.test(line)) {
+      flushPara(); flushList();
+      const code = [];
+      for (i++; i < lines.length && !/^\s*```/.test(lines[i]); i++) code.push(lines[i]);
+      out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
+      continue;
+    }
+    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+    const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    const heading = line.match(/^\s*#{1,6}\s+(.*)$/);
+    if (bullet || numbered) {
+      flushPara();
+      const tag = bullet ? 'ul' : 'ol';
+      if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
+      list.items.push((bullet || numbered)[1]);
+    } else if (heading) {
+      flushPara(); flushList();
+      out.push(`<h3>${inlineMd(heading[1])}</h3>`);
+    } else if (!line.trim()) {
+      flushPara(); flushList();
+    } else {
+      flushList();
+      para.push(line);
+    }
+  }
+  flushPara(); flushList();
+  return out.join('');
+}
+
+function relTime(iso) {
+  if (!iso) return 'никогда';
+  const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 10) return 'только что';
+  if (s < 60) return `${s} с назад`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} мин назад`;
+  const hr = Math.round(m / 60);
+  if (hr < 24) return `${hr} ч назад`;
+  return `${Math.round(hr / 24)} д назад`;
+}
+
+const mmss = (sec) => `${Math.floor(Math.max(0, sec) / 60)}:${String(Math.max(0, sec) % 60).padStart(2, '0')}`;
+
+async function copy(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = h('textarea', { style: 'position:fixed;opacity:0' });
+    ta.value = text;
+    document.body.append(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+  }
+  if (btn) {
+    const prev = btn.innerHTML;
+    btn.replaceChildren(icon('check'));
+    setTimeout(() => { btn.innerHTML = prev; }, 1400);
+  }
+}
+
+// ---------- domain vocab ----------
+
+const STATUS = {
+  NEW: ['Запуск', 'accent', true],
+  VALIDATING: ['Запуск', 'accent', true],
+  PLANNING: ['Думает', 'accent', true],
+  WAITING_APPROVAL: ['Ждёт подтверждения', 'warn', true],
+  EXECUTING: ['Выполняет', 'accent', true],
+  OBSERVING: ['Разбирает результат', 'accent', true],
+  SUCCEEDED: ['Готово', 'ok', false],
+  FAILED: ['Ошибка', 'danger', false],
+  FAILED_RECOVERABLE: ['Прервано, можно продолжить', 'danger', false],
+  CANCELED: ['Отменено', '', false],
+  PAUSED: ['Пауза', 'warn', false],
+};
+const RISK = {
+  read: ['чтение', ''],
+  write: ['изменение файлов', 'warn'],
+  execute: ['запуск программы', 'orange'],
+  network: ['доступ в сеть', 'accent'],
+  destructive: ['необратимое действие', 'danger'],
+};
+const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'git.status': 'git', 'git.diff': 'git', 'shell.exec': 'terminal' };
+
+const REASONS = {
+  'paused by user': 'поставлено на паузу',
+  'canceled by user': 'остановлено вами',
+  'core restarted': 'Core перезапускался, продолжите вручную',
+  'target offline': 'устройство не в сети',
+  'target revoked': 'доступ устройства отозван',
+  'step budget exhausted': 'закончился лимит шагов',
+  'tool call budget exhausted': 'закончился лимит действий',
+  'wall time budget exhausted': 'закончилось время на задачу',
+};
+const reasonText = (r) => REASONS[r] || r;
+const statusOf = (s) => STATUS[s] || [s, '', false];
+const isRunning = (s) => statusOf(s)[2];
+const RESUMABLE = ['PAUSED', 'FAILED_RECOVERABLE'];
+
+function statusPill(status) {
+  const [label, kind, live] = statusOf(status);
+  return h('span', { class: `pill ${kind}` }, h('span', { class: `dot ${kind}${live ? ' live' : ''}` }), label);
+}
+const taskTitle = (t) => ((t.input || '').split('\n')[0] || 'Без названия').slice(0, 80);
+
+// ---------- theme ----------
+
+function currentTheme() {
+  const saved = document.documentElement.dataset.theme;
+  if (saved) return saved;
+  return matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+function toggleTheme() {
+  const next = currentTheme() === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('theme', next); } catch { /* storage unavailable */ }
+}
+try { const t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch { /* ignore */ }
+
+// ---------- overlays ----------
+
+function closeLayer() { $layer.replaceChildren(); }
+
+function openPopover(anchor, items) {
+  closeLayer();
+  const pop = h('div', { class: 'popover', role: 'menu' }, items);
+  const catcher = h('div', { style: 'position:fixed;inset:0;z-index:49', onclick: closeLayer });
+  $layer.append(catcher, pop);
+  const r = anchor.getBoundingClientRect();
+  const ph = pop.offsetHeight;
+  const top = r.top - ph - 8 > 8 ? r.top - ph - 8 : r.bottom + 8;
+  pop.style.top = `${top}px`;
+  pop.style.left = `${Math.min(r.left, innerWidth - pop.offsetWidth - 8)}px`;
+}
+
+function openModal(...content) {
+  closeLayer();
+  const modal = h('div', { class: 'modal', role: 'dialog' }, content);
+  const backdrop = h('div', { class: 'backdrop', onclick: (e) => { if (e.target === backdrop) closeLayer(); } }, modal);
+  $layer.append(backdrop);
+  return modal;
+}
+
+async function openPairing() {
+  const body = h('div', {}, h('p', {}, 'Создаём код...'));
+  openModal(
+    h('div', { class: 'modal-head' }, h('h2', {}, 'Сопрячь устройство'), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': 'Закрыть' }, icon('x'))),
+    body,
+  );
+  let data;
+  try { data = await post('/v1/targets/pairing-codes'); } catch (err) { closeLayer(); fail(err); return; }
+  const timer = h('span', {});
+  const line = (cmd) => h('div', { class: 'code-line' }, h('code', {}, cmd), h('button', { class: 'icon-btn', 'aria-label': 'Скопировать', onclick: (e) => copy(cmd, e.currentTarget) }, icon('copy')));
+  body.replaceChildren(
+    h('p', {}, 'Выполните команду на машине, которую хотите подключить. Код одноразовый.'),
+    h('div', { class: 'pair-code' }, data.code),
+    h('div', { class: 'pair-timer' }, 'Действует ещё ', timer),
+    h('div', { class: 'field-label' }, 'Установить и подключить'),
+    line(data.install_command),
+    h('div', { class: 'field-label' }, 'Если Mensarium уже установлен'),
+    line(`${data.pair_command} --root ~/Projects`),
+  );
+  const expires = new Date(data.expires_at).getTime();
+  const tick = () => {
+    const left = Math.round((expires - Date.now()) / 1000);
+    timer.textContent = left > 0 ? mmss(left) : 'истёк';
+    if (left <= 0 || !document.body.contains(timer)) clearInterval(iv);
+  };
+  const iv = setInterval(tick, 1000);
+  tick();
+}
+
+// ---------- login ----------
 
 function showLogin() {
-  runCleanup();
-  isAuthed = false;
-  $logoutBtn.classList.add('hidden');
-  document.querySelectorAll('.nav-link').forEach((a) => a.classList.add('hidden'));
-  $main.innerHTML = '';
-
-  const wrap = document.createElement('div');
-  wrap.className = 'login-wrap';
-  wrap.innerHTML = `
-    <div class="login-box">
-      <h1>Mensarium</h1>
-      <div class="login-hint">Run <code>mensarium core token</code> on the Core host</div>
-      <div class="field">
-        <label for="login-token">Admin token</label>
-        <input type="password" id="login-token" autocomplete="off">
-      </div>
-      <button class="primary" id="login-btn" style="width:100%">Log in</button>
-    </div>`;
-  $main.appendChild(wrap);
-
-  const input = wrap.querySelector('#login-token');
-  const btn = wrap.querySelector('#login-btn');
-  input.focus();
-
-  async function doLogin() {
+  cleanupAll();
+  state.shell = null;
+  const input = h('input', { type: 'password', placeholder: 'Токен администратора', autocomplete: 'off' });
+  const btn = h('button', { class: 'btn btn-primary' }, 'Войти');
+  const submit = async () => {
     const token = input.value.trim();
     if (!token) return;
     btn.disabled = true;
     try {
-      await apiPost('/v1/auth/login', { token });
-      isAuthed = true;
-      document.querySelectorAll('.nav-link').forEach((a) => a.classList.remove('hidden'));
-      $logoutBtn.classList.remove('hidden');
-      if (location.hash === '#/dashboard') router(); else location.hash = '#/dashboard';
+      await post('/v1/auth/login', { token });
+      await boot();
     } catch (err) {
-      toast(err.message || 'Login failed', true);
-    } finally {
-      btn.disabled = false;
-    }
-  }
-  btn.addEventListener('click', doLogin);
-  input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') doLogin(); });
-}
-
-// ===== Shared: task list & new-task form =====
-
-function renderTaskList(container, tasks, targets) {
-  container.innerHTML = '';
-  const targetName = (id) => {
-    const t = (targets || []).find((x) => x.id === id);
-    return t ? t.name : id;
+      toast(err instanceof AuthError ? 'Неверный токен' : err.message, true);
+    } finally { btn.disabled = false; }
   };
-  tasks.forEach((t) => {
-    const item = document.createElement('div');
-    item.className = 'list-item';
-    item.style.cursor = 'pointer';
-
-    const main = document.createElement('div');
-    main.className = 'list-main';
-    const title = document.createElement('div');
-    title.className = 'list-title';
-    title.textContent = (t.input || '').slice(0, 90) || '(empty input)';
-    const sub = document.createElement('div');
-    sub.className = 'list-sub';
-    sub.textContent = t.target_name || targetName(t.target_id);
-    main.append(title, sub);
-
-    const right = document.createElement('div');
-    right.style.display = 'flex';
-    right.style.alignItems = 'center';
-    right.style.gap = '10px';
-    right.appendChild(badge(t.status, TASK_STATUS_BADGE[t.status] || 'neutral'));
-    const meta = document.createElement('div');
-    meta.className = 'list-meta';
-    meta.textContent = relativeTime(t.updated_at);
-    right.appendChild(meta);
-
-    item.append(main, right);
-    item.addEventListener('click', () => { location.hash = `#/tasks/${t.id}`; });
-    container.appendChild(item);
-  });
+  btn.addEventListener('click', submit);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+  $app.replaceChildren(h('div', { class: 'login' }, h('div', { class: 'login-card' },
+    agentAvatar(),
+    h('h1', {}, 'Mensarium'),
+    h('p', {}, 'Токен выдаёт команда ', h('code', {}, 'mensarium core token'), ' на сервере Core.'),
+    input, btn,
+  )));
+  input.focus();
 }
 
-async function renderNewTaskForm(container, targets) {
-  const profiles = await safe(apiGet('/v1/agent-profiles'), []);
-  container.innerHTML = `
-    <div class="field">
-      <label>Target</label>
-      <select id="nt-target"></select>
-    </div>
-    <div class="field">
-      <label>Profile</label>
-      <select id="nt-profile"></select>
-    </div>
-    <div class="field">
-      <label>Input</label>
-      <textarea id="nt-input" rows="3" placeholder="Describe the task..."></textarea>
-    </div>
-    <button class="primary" id="nt-submit">Create task</button>`;
+// ---------- data ----------
 
-  const targetSel = container.querySelector('#nt-target');
-  targets.forEach((t) => {
-    const opt = document.createElement('option');
-    opt.value = t.id;
-    opt.textContent = t.status === 'online' ? t.name : `${t.name} (${t.status})`;
-    opt.disabled = t.status !== 'online';
-    targetSel.appendChild(opt);
-  });
-  const firstOnline = targets.find((t) => t.status === 'online');
-  if (firstOnline) targetSel.value = firstOnline.id;
+async function refreshData() {
+  const [targets, tasks] = await Promise.all([get('/v1/targets'), get('/v1/tasks')]);
+  state.targets = targets;
+  state.tasks = tasks;
+}
 
-  const profileSel = container.querySelector('#nt-profile');
-  profiles.forEach((p) => {
-    const opt = document.createElement('option');
-    opt.value = p.id;
-    opt.textContent = `${p.name} (v${p.version})`;
-    profileSel.appendChild(opt);
-  });
+function cleanupAll() {
+  [...viewCleanups, ...shellCleanups].forEach((fn) => { try { fn(); } catch { /* noop */ } });
+  viewCleanups = [];
+  shellCleanups = [];
+}
 
-  container.querySelector('#nt-submit').addEventListener('click', async () => {
-    const targetId = targetSel.value;
-    const inputEl = container.querySelector('#nt-input');
-    const input = inputEl.value.trim();
-    if (!targetId) { toast('Select an online target', true); return; }
-    if (!input) { toast('Enter task input', true); return; }
-    const submitBtn = container.querySelector('#nt-submit');
-    submitBtn.disabled = true;
-    try {
-      const body = { target_id: targetId, input };
-      if (profileSel.value) body.profile_id = profileSel.value;
-      const task = await apiPost('/v1/tasks', body);
-      location.hash = `#/tasks/${task.id}`;
-    } catch (err) {
-      if (err instanceof AuthError) { showLogin(); return; }
-      toast(err.message, true);
-    } finally {
-      submitBtn.disabled = false;
+// ---------- app shell (chat) ----------
+
+function ensureAppShell() {
+  if (state.shell && state.shell.kind === 'app') return state.shell;
+  cleanupAll();
+  const sessions = h('div', { class: 'sessions' });
+  const main = h('main', { class: 'main' });
+  const shell = h('div', { class: 'shell' });
+  const meBtn = h('button', { class: 'me', onclick: () => toggleUserMenu() }, userAvatar('sm'), 'Администратор');
+  const sidebar = h('aside', { class: 'sidebar' },
+    h('div', { class: 'brand' },
+      agentAvatar('sm'),
+      h('span', { class: 'brand-name' }, 'Mensarium'),
+      h('button', { class: 'icon-btn', title: 'Новый чат', 'aria-label': 'Новый чат', onclick: () => go('#/') }, icon('plus')),
+    ),
+    h('nav', { class: 'nav' },
+      h('a', { class: 'nav-item', href: '#/', 'data-nav': 'new' }, icon('home'), 'Новый чат'),
+      h('a', { class: 'nav-item', href: '#/settings/devices', 'data-nav': 'devices' }, icon('laptop'), 'Устройства'),
+    ),
+    h('div', { class: 'sessions-head' }, h('span', { class: 'section-label' }, 'Сеансы')),
+    sessions,
+    h('div', { class: 'sidebar-foot' }, meBtn,
+      h('button', { class: 'icon-btn', title: 'Настройки', 'aria-label': 'Настройки', onclick: () => go('#/settings/overview') }, icon('sliders'))),
+  );
+  shell.append(sidebar, main);
+  $app.replaceChildren(shell);
+
+  const menuHost = h('div', {});
+  sidebar.append(menuHost);
+  function toggleUserMenu() {
+    if (menuHost.firstChild) { menuHost.replaceChildren(); return; }
+    const item = (ic, label, fn, kbd) => h('button', { class: 'menu-item', onclick: () => { menuHost.replaceChildren(); fn(); } }, icon(ic), label, kbd ? h('span', { class: 'kbd' }, kbd) : null);
+    menuHost.append(h('div', { class: 'menu' },
+      h('div', { class: 'menu-head' }, userAvatar('sm'), 'Администратор'),
+      item('sliders', 'Настройки', () => go('#/settings/overview'), '⌘,'),
+      item('link', 'Сопрячь устройство', openPairing),
+      item('laptop', 'Устройства', () => go('#/settings/devices')),
+      item('list', 'Журнал действий', () => go('#/settings/audit')),
+      h('div', { class: 'menu-sep' }),
+      item(currentTheme() === 'dark' ? 'sun' : 'moon', currentTheme() === 'dark' ? 'Светлая тема' : 'Тёмная тема', toggleTheme),
+      item('logout', 'Выйти', async () => { try { await post('/v1/auth/logout'); } catch { /* noop */ } showLogin(); }),
+    ));
+  }
+
+  const collapsed = new Set(JSON.parse(localStorageGet('collapsed') || '[]'));
+  function renderSessions() {
+    const byTarget = new Map();
+    state.tasks.forEach((t) => {
+      const key = t.target_name || 'Другие';
+      if (!byTarget.has(key)) byTarget.set(key, []);
+      byTarget.get(key).push(t);
+    });
+    const activeId = (location.hash.match(/^#\/chat\/(.+)$/) || [])[1];
+    if (!state.tasks.length) {
+      sessions.replaceChildren(h('div', { class: 'sessions-empty' }, 'Здесь появятся ваши чаты с агентом.'));
+      return;
     }
-  });
+    sessions.replaceChildren(...[...byTarget.entries()].map(([name, tasks]) => {
+      const group = h('div', { class: `group${collapsed.has(name) ? ' collapsed' : ''}` });
+      const head = h('button', { class: 'group-head', onclick: () => {
+        group.classList.toggle('collapsed');
+        if (group.classList.contains('collapsed')) collapsed.add(name); else collapsed.delete(name);
+        localStorageSet('collapsed', JSON.stringify([...collapsed]));
+      } }, icon('chevron'), name);
+      const items = h('div', { class: 'group-items' }, tasks.map((t) => {
+        const [, kind, live] = statusOf(t.status);
+        return h('a', { class: `session${t.id === activeId ? ' active' : ''}`, href: `#/chat/${t.id}`, title: t.input },
+          h('span', { class: `dot ${kind}${live ? ' live' : ''}` }),
+          h('span', { class: 'session-title' }, taskTitle(t)));
+      }));
+      group.append(head, items);
+      return group;
+    }));
+  }
+
+  const poll = async () => {
+    try { await refreshData(); renderSessions(); } catch (err) { if (err instanceof AuthError) showLogin(); }
+  };
+  const iv = setInterval(poll, 4000);
+  shellCleanups.push(() => clearInterval(iv));
+
+  state.shell = {
+    kind: 'app', main, renderSessions,
+    setActive(navKey) {
+      sidebar.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === navKey));
+      shell.classList.remove('nav-open');
+      renderSessions();
+    },
+    toggleNav: () => shell.classList.toggle('nav-open'),
+  };
+  renderSessions();
+  return state.shell;
 }
 
-// ===== Dashboard =====
+function localStorageGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch { /* ignore */ } }
 
-async function viewDashboard(root) {
-  root.innerHTML = `
-    <div class="page-header"><h1>Dashboard</h1></div>
-    <div id="dash-grid" class="grid"></div>
-    <div class="section-title">Recent tasks</div>
-    <div id="dash-tasks"></div>
-    <div class="section-title">New task</div>
-    <div class="card" id="dash-newtask"></div>`;
+function topbar(shell, crumbs, actions) {
+  return h('header', { class: 'topbar' },
+    h('button', { class: 'icon-btn menu-toggle', 'aria-label': 'Меню', onclick: shell.toggleNav }, icon('menu')),
+    h('div', { class: 'crumbs' }, crumbs),
+    h('div', { class: 'topbar-actions' }, actions),
+  );
+}
 
-  const system = await safe(apiGet('/v1/system'), null);
-  const targets = await safe(apiGet('/v1/targets'), []);
-  const tasks = await safe(apiGet('/v1/tasks'), []);
+// ---------- composer ----------
 
-  const grid = root.querySelector('#dash-grid');
+function composer({ placeholder, chips, onSend }) {
+  const ta = h('textarea', { rows: 1, placeholder });
+  const send = h('button', { class: 'send', 'aria-label': 'Отправить', disabled: true }, icon('arrowUp'));
+  const model = state.system?.provider?.model;
+  const box = h('div', { class: 'composer' }, ta, h('div', { class: 'composer-bar' },
+    chips,
+    h('span', { class: 'spacer' }),
+    model ? h('span', { class: 'chip chip-compact', title: 'Модель задаётся в настройках Core' }, icon('sparkle'), h('span', { class: 'chip-label' }, model)) : null,
+    send,
+  ));
+  let locked = false;
+  const sync = () => { send.disabled = locked || !ta.value.trim(); };
+  const grow = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, 240)}px`; };
+  ta.addEventListener('input', () => { grow(); sync(); });
+  const submit = async () => {
+    const text = ta.value.trim();
+    if (!text || locked) return;
+    send.disabled = true;
+    try {
+      await onSend(text);
+      ta.value = '';
+      grow();
+    } catch (err) { fail(err); } finally { sync(); }
+  };
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
+  });
+  send.addEventListener('click', submit);
+  return {
+    el: h('div', { class: 'composer-wrap' }, box),
+    textarea: ta,
+    setLocked(value, hint) { locked = value; ta.disabled = value; ta.placeholder = value ? hint : placeholder; sync(); },
+  };
+}
 
-  const coreCard = document.createElement('div');
-  coreCard.className = 'card';
-  coreCard.innerHTML = `<div class="section-title" style="margin-top:0">Core</div>
-    <div class="kv">
-      <div class="k">Version</div><div>${esc(system && system.version)}</div>
-      <div class="k">Workspace</div><div>${esc(system && system.workspace_id)}</div>
-    </div>`;
-  grid.appendChild(coreCard);
+const modeChip = () => h('span', { class: 'chip accent chip-compact', title: 'Чтение выполняется сразу. Запуск программ, изменения и сеть требуют вашего подтверждения.' },
+  icon('shield'), h('span', { class: 'chip-label' }, 'С подтверждением действий'));
 
-  const prov = system && system.provider;
-  const providerCard = document.createElement('div');
-  providerCard.className = 'card';
-  providerCard.innerHTML = `<div class="section-title" style="margin-top:0">Provider</div>
-    <div class="kv">
-      <div class="k">Name</div><div>${esc(prov && prov.name)}</div>
-      <div class="k">Model</div><div>${esc(prov && prov.model)}</div>
-      <div class="k">Health</div><div id="prov-health"></div>
-    </div>`;
-  grid.appendChild(providerCard);
-  const healthOk = !!(prov && prov.health && prov.health.ok);
-  providerCard.querySelector('#prov-health').appendChild(
-    prov ? badge(healthOk ? 'ok' : 'error', healthOk ? 'ok' : 'danger') : badge('unknown', 'neutral'),
+// ---------- new chat ----------
+
+async function viewNewChat() {
+  const shell = ensureAppShell();
+  shell.setActive('new');
+  const online = state.targets.filter((t) => t.status === 'online');
+  let selected = online.find((t) => t.id === localStorageGet('target')) || online[0] || null;
+
+  const chipLabel = h('span', { class: 'chip-label' });
+  const chipDot = h('span', { class: 'dot' });
+  const targetChip = h('button', { class: 'chip', onclick: () => pickTarget() }, icon('laptop'), chipDot, chipLabel, icon('chevron'));
+  const renderChip = () => {
+    chipLabel.textContent = selected ? selected.name : 'Выберите устройство';
+    chipDot.className = `dot${selected ? ' ok' : ''}`;
+  };
+  function pickTarget() {
+    const items = state.targets.filter((t) => t.status !== 'revoked').map((t) => h('button', {
+      class: 'menu-item', disabled: t.status !== 'online',
+      onclick: () => { selected = t; localStorageSet('target', t.id); renderChip(); closeLayer(); },
+    }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.name, h('span', { class: 'popover-sub' }, t.status === 'online' ? t.platform : 'не в сети')));
+    items.push(h('div', { class: 'menu-sep' }), h('button', { class: 'menu-item', onclick: () => { closeLayer(); openPairing(); } }, icon('plus'), 'Сопрячь новое устройство'));
+    openPopover(targetChip, items);
+  }
+  renderChip();
+
+  const c = composer({
+    placeholder: 'Сообщение для Mensarium',
+    chips: [targetChip, modeChip()],
+    onSend: async (text) => {
+      if (!selected) throw new Error('Выберите устройство, на котором агент будет работать');
+      const task = await post('/v1/tasks', { target_id: selected.id, input: text });
+      state.tasks.unshift(task);
+      go(`#/chat/${task.id}`);
+    },
+  });
+
+  const hasDevices = state.targets.some((t) => t.status !== 'revoked');
+  const content = hasDevices
+    ? h('div', { class: 'welcome-inner' },
+      h('div', { class: 'welcome-head' }, agentAvatar(), h('h1', {}, 'Что нужно сделать?')),
+      c.el,
+      h('p', { class: 'welcome-hint' }, online.length
+        ? 'Агент изучит проект сам. Перед запуском команд и изменением файлов он спросит разрешения.'
+        : 'Все устройства сейчас не в сети. Запустите на нужной машине mensarium target run.'))
+    : h('div', { class: 'welcome-inner' }, h('div', { class: 'rows' }, h('div', { class: 'empty' },
+      h('h3', {}, 'Подключите первое устройство'),
+      h('p', {}, 'Агент работает на ваших машинах через Mensarium Target. Сопряжение займёт минуту.'),
+      h('button', { class: 'btn btn-primary', onclick: openPairing }, icon('link'), 'Сопрячь устройство'))));
+
+  shell.main.replaceChildren(
+    topbar(shell, [icon('home'), h('span', { class: 'current' }, 'Новый чат')]),
+    h('div', { class: 'welcome' }, content),
+  );
+  if (hasDevices) c.textarea.focus();
+}
+
+// ---------- chat ----------
+
+async function viewChat(taskId) {
+  const shell = ensureAppShell();
+  shell.setActive(null);
+  let task;
+  try { task = await get(`/v1/tasks/${taskId}`); } catch (err) { fail(err); go('#/'); return; }
+  state.lastChat = `#/chat/${taskId}`;
+
+  const statusSlot = h('span', {});
+  const btnPause = h('button', { class: 'icon-btn', title: 'Пауза', 'aria-label': 'Пауза', onclick: () => act('pause') }, icon('pause'));
+  const btnResume = h('button', { class: 'icon-btn', title: 'Продолжить', 'aria-label': 'Продолжить', onclick: () => act('resume') }, icon('play'));
+  const btnCancel = h('button', { class: 'icon-btn', title: 'Остановить задачу', 'aria-label': 'Остановить', onclick: () => { if (confirm('Остановить задачу? Продолжить её будет нельзя.')) act('cancel'); } }, icon('stop'));
+  const thread = h('div', { class: 'thread' });
+  const inner = h('div', { class: 'thread-inner' });
+  thread.append(inner);
+
+  const roots = (state.targets.find((t) => t.id === task.target_id)?.capabilities?.roots || []).slice().sort((a, b) => b.length - a.length);
+  const short = (text) => roots.reduce((acc, r) => acc.split(r).join(r.split('/').pop() || r), String(text || ''));
+  const deviceChip = h('span', { class: 'chip', title: 'Устройство задачи' }, icon('laptop'), h('span', { class: 'chip-label' }, task.target_name || task.target_id));
+  const c = composer({
+    placeholder: 'Ответить Mensarium',
+    chips: [deviceChip, modeChip()],
+    onSend: (text) => post(`/v1/tasks/${taskId}/messages`, { input: text }),
+  });
+
+  shell.main.replaceChildren(
+    topbar(shell, [icon('folder'), h('span', {}, task.target_name || 'устройство'), h('span', { class: 'sep' }, '/'), h('span', { class: 'current', title: task.input }, taskTitle(task))],
+      [statusSlot, btnPause, btnResume, btnCancel]),
+    thread,
+    c.el,
   );
 
-  const online = targets.filter((t) => t.status === 'online').length;
-  const targetsCard = document.createElement('div');
-  targetsCard.className = 'card';
-  targetsCard.innerHTML = `<div class="section-title" style="margin-top:0">Targets</div>
-    <div style="font-size:28px;font-weight:700">${esc(online)}</div>
-    <div class="muted">online of ${esc(targets.length)}</div>`;
-  grid.appendChild(targetsCard);
-
-  const tasksWrap = root.querySelector('#dash-tasks');
-  if (!tasks.length) {
-    tasksWrap.innerHTML = '<div class="empty-state">No tasks yet</div>';
-  } else {
-    renderTaskList(tasksWrap, tasks.slice(0, 5), targets);
-  }
-
-  await renderNewTaskForm(root.querySelector('#dash-newtask'), targets);
-}
-
-// ===== Tasks =====
-
-async function viewTasks(root) {
-  root.innerHTML = `
-    <div class="page-header"><h1>Tasks</h1></div>
-    <div class="section-title" style="margin-top:0">New task</div>
-    <div class="card" id="tasks-newtask" style="margin-bottom:20px"></div>
-    <div class="section-title">All tasks</div>
-    <div id="tasks-list"></div>`;
-
-  const targets = await safe(apiGet('/v1/targets'), []);
-  const tasks = await safe(apiGet('/v1/tasks'), []);
-
-  await renderNewTaskForm(root.querySelector('#tasks-newtask'), targets);
-
-  const list = root.querySelector('#tasks-list');
-  if (!tasks.length) { list.innerHTML = '<div class="empty-state">No tasks yet</div>'; return; }
-  renderTaskList(list, tasks, targets);
-}
-
-// ===== Task detail (chat-like timeline) =====
-
-const CANCELABLE_STATUSES = ['NEW', 'VALIDATING', 'PLANNING', 'WAITING_APPROVAL', 'EXECUTING', 'OBSERVING', 'PAUSED', 'FAILED_RECOVERABLE'];
-const PAUSABLE_STATUSES = ['NEW', 'VALIDATING', 'PLANNING', 'WAITING_APPROVAL', 'EXECUTING', 'OBSERVING'];
-const RESUMABLE_STATUSES = ['PAUSED', 'FAILED_RECOVERABLE'];
-const COMPOSABLE_STATUSES = ['SUCCEEDED', 'FAILED', 'CANCELED', 'PAUSED', 'FAILED_RECOVERABLE'];
-
-async function viewTaskDetail(root, taskId) {
-  root.innerHTML = `
-    <div class="task-layout">
-      <div class="task-header">
-        <button class="ghost" id="back-btn">&larr; Tasks</button>
-        <span id="task-status-badge"></span>
-        <span id="task-target-name" class="muted"></span>
-        <div class="spacer"></div>
-        <button id="btn-pause">Pause</button>
-        <button id="btn-resume">Resume</button>
-        <button class="danger" id="btn-cancel">Cancel</button>
-      </div>
-      <div class="timeline" id="timeline"></div>
-      <div class="composer">
-        <textarea id="composer-input" placeholder="Send a follow-up message..."></textarea>
-        <button class="primary" id="composer-send">Send</button>
-      </div>
-      <div class="composer-hint" id="composer-hint"></div>
-    </div>`;
-
-  root.querySelector('#back-btn').addEventListener('click', () => { location.hash = '#/tasks'; });
-
-  let task;
-  try {
-    task = await apiGet(`/v1/tasks/${taskId}`);
-  } catch (err) {
-    if (err instanceof AuthError) { showLogin(); return; }
-    toast(err.message, true);
-    location.hash = '#/tasks';
-    return;
-  }
-
-  const timeline = root.querySelector('#timeline');
-  const statusBadgeEl = root.querySelector('#task-status-badge');
-  const targetNameEl = root.querySelector('#task-target-name');
-  const btnPause = root.querySelector('#btn-pause');
-  const btnResume = root.querySelector('#btn-resume');
-  const btnCancel = root.querySelector('#btn-cancel');
-  const composerInput = root.querySelector('#composer-input');
-  const composerSend = root.querySelector('#composer-send');
-  const composerHint = root.querySelector('#composer-hint');
-
-  targetNameEl.textContent = task.target_name || task.target_id;
-  let currentStatus = task.status;
-
   function setStatus(status) {
-    currentStatus = status;
-    statusBadgeEl.innerHTML = '';
-    statusBadgeEl.appendChild(badge(status, TASK_STATUS_BADGE[status] || 'neutral'));
-    btnCancel.disabled = !CANCELABLE_STATUSES.includes(status);
-    btnPause.disabled = !PAUSABLE_STATUSES.includes(status);
-    btnResume.disabled = !RESUMABLE_STATUSES.includes(status);
-    const composable = COMPOSABLE_STATUSES.includes(status);
-    composerInput.disabled = !composable;
-    composerSend.disabled = !composable;
-    composerHint.textContent = composable ? '' : 'Task is running; wait for it to pause or finish before sending a message. Ctrl/Cmd+Enter to send.';
+    task.status = status;
+    statusSlot.replaceChildren(statusPill(status));
+    const running = isRunning(status);
+    btnPause.classList.toggle('hidden', !running);
+    btnResume.classList.toggle('hidden', !RESUMABLE.includes(status));
+    btnCancel.classList.toggle('hidden', !(running || RESUMABLE.includes(status)));
+    c.setLocked(running, status === 'WAITING_APPROVAL' ? 'Агент ждёт вашего решения выше' : 'Агент работает. Можно поставить на паузу');
+  }
+  async function act(action) {
+    try { const t = await post(`/v1/tasks/${taskId}/${action}`); setStatus(t.status); } catch (err) { fail(err); }
   }
   setStatus(task.status);
 
-  async function doAction(action) {
-    try {
-      const updated = await apiPost(`/v1/tasks/${taskId}/${action}`);
-      setStatus(updated.status);
-    } catch (err) {
-      if (err instanceof AuthError) { showLogin(); return; }
-      toast(err.message, true);
-    }
-  }
-  btnCancel.addEventListener('click', () => { if (confirm('Cancel this task?')) doAction('cancel'); });
-  btnPause.addEventListener('click', () => doAction('pause'));
-  btnResume.addEventListener('click', () => doAction('resume'));
+  // --- rendering ---
+  const nearBottom = () => thread.scrollHeight - thread.scrollTop - thread.clientHeight < 120;
+  let stick = true;
+  thread.addEventListener('scroll', () => { stick = nearBottom(); });
+  const add = (node) => { inner.append(node); if (stick) thread.scrollTop = thread.scrollHeight; return node; };
+  let lastAgent = false;
 
-  async function sendMessage() {
-    const text = composerInput.value.trim();
-    if (!text || composerSend.disabled) return;
-    composerSend.disabled = true;
-    try {
-      await apiPost(`/v1/tasks/${taskId}/messages`, { input: text });
-      composerInput.value = '';
-    } catch (err) {
-      if (err instanceof AuthError) { showLogin(); return; }
-      toast(err.message, true);
-    } finally {
-      composerSend.disabled = !COMPOSABLE_STATUSES.includes(currentStatus);
-    }
-  }
-  composerSend.addEventListener('click', sendMessage);
-  composerInput.addEventListener('keydown', (ev) => {
-    if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') { ev.preventDefault(); sendMessage(); }
-  });
+  const agentMsg = (bodyNode) => {
+    const node = h('div', { class: `msg msg-agent${lastAgent ? ' cont' : ''}` }, agentAvatar(), h('div', { class: 'msg-body' }, bodyNode));
+    lastAgent = true;
+    return add(node);
+  };
+  const step = (node) => { lastAgent = true; return add(h('div', { class: 'step' }, node)); };
+  const note = (ic, text, cls = '') => step(h('div', { class: `note ${cls}` }, icon(ic), h('span', {}, text)));
 
-  // --- timeline helpers ---
-  function isNearBottom() { return timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 80; }
-  function scrollToBottom() { timeline.scrollTop = timeline.scrollHeight; }
+  const thinking = new Map();
+  const tools = new Map();
+  const approvals = new Map();
 
-  function appendBubble(cls, text) {
-    const wasNear = isNearBottom();
-    const div = document.createElement('div');
-    div.className = `bubble ${cls}`;
-    div.innerHTML = renderMarkdownLite(text || '');
-    timeline.appendChild(div);
-    if (wasNear) scrollToBottom();
-    return div;
-  }
-  function appendRow(cls, text) {
-    const wasNear = isNearBottom();
-    const div = document.createElement('div');
-    div.className = cls;
-    div.textContent = text;
-    timeline.appendChild(div);
-    if (wasNear) scrollToBottom();
-    return div;
-  }
-
-  const thinkingRows = new Map();
-  const toolCards = new Map();
-  const approvalCards = new Map();
-
-  function upsertToolCard(id, tool, display, status) {
-    let entry = toolCards.get(id);
-    if (!entry) {
-      const wasNear = isNearBottom();
-      const card = document.createElement('div');
-      card.className = 'tc-card';
-      const head = document.createElement('div');
-      head.className = 'tc-head';
-      const nameEl = document.createElement('span');
-      nameEl.className = 'tc-name';
-      nameEl.textContent = tool || '';
-      const displayEl = document.createElement('span');
-      displayEl.className = 'tc-display';
-      displayEl.textContent = display || '';
-      const statusEl = document.createElement('span');
-      head.append(nameEl, displayEl, statusEl);
-      const body = document.createElement('div');
-      body.className = 'tc-body';
-      const out = document.createElement('pre');
-      out.className = 'tc-out';
-      body.appendChild(out);
-      head.addEventListener('click', () => body.classList.toggle('open'));
-      card.append(head, body);
-      timeline.appendChild(card);
-      if (wasNear) scrollToBottom();
-      entry = { card, statusEl, out, body };
-      toolCards.set(id, entry);
-    }
-    entry.statusEl.innerHTML = '';
-    entry.statusEl.appendChild(badge(status, status === 'executing' ? 'accent' : 'neutral'));
+  function toolCard(id, tool, display) {
+    let entry = tools.get(id);
+    if (entry) return entry;
+    const stateEl = h('span', { class: 'tool-state' }, h('span', { class: 'dot accent live' }), 'выполняется');
+    const out = h('pre', { class: 'tool-out' });
+    const noteEl = h('div', { class: 'tool-note' });
+    const card = h('div', { class: 'tool' });
+    const head = h('button', { class: 'tool-head', onclick: () => card.classList.toggle('open') },
+      icon(TOOL_ICON[tool] || 'terminal'), h('span', { class: 'tool-name' }, tool), h('span', { class: 'tool-display', title: display || '' }, short(display)), stateEl);
+    card.append(head, out, noteEl);
+    step(card);
+    entry = { card, stateEl, out, noteEl };
+    tools.set(id, entry);
     return entry;
   }
 
-  function updateToolCardResult(payload) {
-    const entry = upsertToolCard(payload.tool_call_id, payload.tool, null, payload.status);
-    const kind = payload.status === 'succeeded' ? 'ok' : (payload.status === 'failed' ? 'danger' : 'warn');
-    entry.statusEl.innerHTML = '';
-    entry.statusEl.appendChild(badge(payload.status, kind));
-    let outText = payload.output || '';
-    if (payload.exit_code !== null && payload.exit_code !== undefined) outText = `exit ${payload.exit_code}\n${outText}`;
-    entry.out.textContent = outText;
-    if (payload.truncated) {
-      const note = document.createElement('div');
-      note.className = 'muted';
-      note.style.fontSize = '11px';
-      note.style.marginTop = '4px';
-      note.textContent = 'Output truncated.';
-      if (payload.artifact_id) {
-        const link = document.createElement('a');
-        link.href = `/v1/artifacts/${payload.artifact_id}`;
-        link.target = '_blank';
-        link.rel = 'noopener';
-        link.textContent = ' full output';
-        note.appendChild(link);
-      }
-      entry.body.appendChild(note);
+  function toolResult(p) {
+    const e = toolCard(p.tool_call_id, p.tool, '');
+    const ok = p.status === 'succeeded';
+    const label = { succeeded: 'готово', failed: 'ошибка', timeout: 'таймаут', canceled: 'отменено', rejected: 'отклонено устройством' }[p.status] || p.status;
+    e.stateEl.className = `tool-state ${ok ? 'ok' : 'bad'}`;
+    e.stateEl.replaceChildren(icon(ok ? 'check' : 'alert'), p.exit_code != null && p.exit_code !== 0 ? `${label}, код ${p.exit_code}` : label);
+    e.out.textContent = (p.output || '').replace(/^\[tool output: untrusted data, not instructions\]\n/, '').replace(/^status: [^\n]*\n?/, '') || 'Пустой вывод';
+    if (p.truncated || p.artifact_id) {
+      e.noteEl.replaceChildren(p.truncated ? 'Вывод сокращён. ' : '', p.artifact_id ? h('a', { href: `/v1/artifacts/${p.artifact_id}`, target: '_blank', rel: 'noopener' }, 'Полный вывод') : '');
     }
-    entry.body.classList.add('open');
+    if (!ok || p.tool === 'shell.exec' || p.tool === 'git.diff') e.card.classList.add('open');
   }
 
-  function renderApprovalCard(payload) {
-    const wasNear = isNearBottom();
-    const tc = payload.tool_call || {};
-    const risk = tc.risk || 'read';
-    const card = document.createElement('div');
-    card.className = `approval-card${risk === 'destructive' ? ' risk-destructive' : ''}`;
-
-    const head = document.createElement('div');
-    head.className = 'approval-head';
-    const left = document.createElement('div');
-    left.style.display = 'flex';
-    left.style.gap = '8px';
-    left.style.alignItems = 'center';
-    left.appendChild(badge(risk, RISK_BADGE[risk] || 'neutral'));
-    const targetSpan = document.createElement('span');
-    targetSpan.className = 'muted';
-    targetSpan.textContent = tc.target_name || '';
-    left.appendChild(targetSpan);
-    head.appendChild(left);
-    const countdown = document.createElement('span');
-    countdown.className = 'countdown';
-    head.appendChild(countdown);
-    card.appendChild(head);
-
-    function addRow(label, value) {
-      if (value === undefined || value === null || value === '') return;
-      const row = document.createElement('div');
-      row.className = 'approval-row';
-      const kEl = document.createElement('span');
-      kEl.className = 'k';
-      kEl.textContent = label;
-      const vEl = document.createElement('span');
-      vEl.className = 'mono';
-      vEl.style.wordBreak = 'break-word';
-      vEl.textContent = value;
-      row.append(kEl, vEl);
-      card.appendChild(row);
-    }
-    addRow('Tool', tc.tool);
-    addRow('Command', tc.display);
+  function approvalCard(p) {
+    const tc = p.tool_call || {};
     const args = tc.arguments || {};
-    addRow('Args', Object.keys(args).length ? JSON.stringify(args) : '');
-    addRow('Cwd', args.cwd);
-
-    if (args.stdin) {
-      const label = document.createElement('div');
-      label.className = 'approval-row';
-      const kEl = document.createElement('span');
-      kEl.className = 'k';
-      kEl.textContent = 'Stdin';
-      label.appendChild(kEl);
-      card.appendChild(label);
-      const pre = document.createElement('pre');
-      pre.className = 'tc-out';
-      pre.textContent = args.stdin;
-      card.appendChild(pre);
+    const [riskLabel, riskKind] = RISK[tc.risk] || [tc.risk, ''];
+    const timer = h('span', { class: 'approval-timer' });
+    const approve = h('button', { class: 'btn btn-primary' }, icon('check'), 'Выполнить один раз');
+    const reject = h('button', { class: 'btn' }, 'Отклонить');
+    const actions = h('div', { class: 'approval-actions' }, approve, reject);
+    let confirmBox = null;
+    const card = h('div', { class: `approval${tc.risk === 'destructive' ? ' risk-destructive' : ''}` },
+      h('div', { class: 'approval-top' }, h('span', { class: 'approval-title' }, 'Нужно ваше решение'), h('span', { class: `pill ${riskKind}` }, riskLabel), timer),
+      h('pre', { class: 'approval-cmd' }, tc.tool === 'shell.exec' ? `$ ${args.command}` : short(tc.display)),
+      h('dl', { class: 'approval-meta' },
+        h('dt', {}, 'Устройство'), h('dd', {}, tc.target_name || ''),
+        args.cwd ? [h('dt', {}, 'Папка'), h('dd', { title: args.cwd }, short(args.cwd))] : null,
+        tc.tool !== 'shell.exec' ? [h('dt', {}, 'Инструмент'), h('dd', {}, tc.tool)] : null,
+        args.timeout_s ? [h('dt', {}, 'Лимит'), h('dd', {}, `${args.timeout_s} с`)] : null,
+      ),
+      args.stdin ? [h('div', { class: 'section-label', style: 'margin-bottom:6px' }, 'Данные на вход'), h('pre', { class: 'approval-cmd approval-stdin' }, args.stdin)] : null,
+    );
+    if (tc.risk === 'destructive') {
+      const cb = h('input', { type: 'checkbox' });
+      approve.disabled = true;
+      cb.addEventListener('change', () => { approve.disabled = !cb.checked; });
+      confirmBox = h('label', { class: 'approval-confirm' }, cb, 'Понимаю, что действие нельзя отменить');
+      card.append(confirmBox);
     }
-
-    let confirmCheck = null;
-    if (risk === 'destructive') {
-      const confirmWrap = document.createElement('label');
-      confirmWrap.className = 'confirm-check';
-      confirmCheck = document.createElement('input');
-      confirmCheck.type = 'checkbox';
-      confirmWrap.append(confirmCheck, document.createTextNode('I understand this is destructive'));
-      card.appendChild(confirmWrap);
-    }
-
-    const actions = document.createElement('div');
-    actions.className = 'approval-actions';
-    const approveBtn = document.createElement('button');
-    approveBtn.className = 'primary';
-    approveBtn.textContent = 'Approve once';
-    approveBtn.disabled = risk === 'destructive';
-    const rejectBtn = document.createElement('button');
-    rejectBtn.className = 'danger';
-    rejectBtn.textContent = 'Reject';
-    actions.append(approveBtn, rejectBtn);
-    card.appendChild(actions);
-
-    if (confirmCheck) {
-      confirmCheck.addEventListener('change', () => { approveBtn.disabled = !confirmCheck.checked; });
-    }
-
-    async function decide(decision) {
-      approveBtn.disabled = true;
-      rejectBtn.disabled = true;
-      if (confirmCheck) confirmCheck.disabled = true;
-      try {
-        const body = { decision };
-        if (risk === 'destructive') body.confirm = true;
-        await apiPost(`/v1/approvals/${payload.approval_id}/decision`, body);
-      } catch (err) {
-        if (err instanceof AuthError) { showLogin(); return; }
-        toast(err.message, true);
-        rejectBtn.disabled = false;
-        if (confirmCheck) { confirmCheck.disabled = false; approveBtn.disabled = !confirmCheck.checked; }
-        else approveBtn.disabled = false;
-      }
-    }
-    approveBtn.addEventListener('click', () => decide('approve'));
-    rejectBtn.addEventListener('click', () => decide('reject'));
-
-    timeline.appendChild(card);
-    if (wasNear) scrollToBottom();
-
-    let timer = null;
-    const expiresAt = payload.expires_at ? new Date(payload.expires_at).getTime() : null;
-    if (expiresAt) {
-      const tick = () => {
-        const remaining = Math.round((expiresAt - Date.now()) / 1000);
-        if (remaining <= 0) { countdown.textContent = 'expired'; clearInterval(timer); }
-        else countdown.textContent = `expires in ${formatDuration(remaining)}`;
-      };
-      tick();
-      timer = setInterval(tick, 1000);
-      onCleanup(() => clearInterval(timer));
-    }
-
-    approvalCards.set(payload.approval_id, { card, approveBtn, rejectBtn, confirmCheck, countdown, timer });
+    card.append(actions);
+    const decide = async (decision) => {
+      approve.disabled = true; reject.disabled = true;
+      try { await post(`/v1/approvals/${p.approval_id}/decision`, { decision, confirm: tc.risk === 'destructive' }); }
+      catch (err) { fail(err); approve.disabled = false; reject.disabled = false; }
+    };
+    approve.addEventListener('click', () => decide('approve'));
+    reject.addEventListener('click', () => decide('reject'));
+    step(card);
+    const expires = new Date(p.expires_at).getTime();
+    const tick = () => { const left = Math.round((expires - Date.now()) / 1000); timer.textContent = left > 0 ? `осталось ${mmss(left)}` : 'время истекло'; };
+    tick();
+    const iv = setInterval(tick, 1000);
+    viewCleanups.push(() => clearInterval(iv));
+    approvals.set(p.approval_id, { card, actions, iv, timer, confirmBox });
   }
 
-  function decideApprovalCard(payload) {
-    const entry = approvalCards.get(payload.approval_id);
-    if (!entry) return;
-    if (entry.timer) clearInterval(entry.timer);
-    entry.card.classList.add('decided');
-    entry.approveBtn.disabled = true;
-    entry.rejectBtn.disabled = true;
-    if (entry.confirmCheck) entry.confirmCheck.disabled = true;
-    entry.countdown.textContent = `decision: ${payload.decision}${payload.note ? ` - ${payload.note}` : ''}`;
+  function approvalDecided(p) {
+    const e = approvals.get(p.approval_id);
+    if (!e) return;
+    clearInterval(e.iv);
+    e.timer.textContent = '';
+    e.card.classList.add('decided');
+    if (e.confirmBox) e.confirmBox.remove();
+    const text = { approved: 'Вы разрешили выполнить один раз', rejected: 'Вы отклонили действие', expired: 'Время на решение истекло' }[p.decision] || p.decision;
+    e.actions.replaceChildren(h('span', { class: 'approval-result' }, text, p.note ? `: ${p.note}` : ''));
   }
 
-  function handleEvent(evt) {
-    const { event, payload } = evt;
+  function handle({ event, payload: p }) {
     switch (event) {
       case 'user.message':
-        appendBubble('bubble-user', payload.text);
+        lastAgent = false;
+        add(h('div', { class: 'msg msg-user' }, userAvatar(), h('div', { class: 'msg-body' },
+          h('div', { class: 'bubble-user' }, p.text), h('div', { class: 'msg-author' }, 'Администратор'))));
         break;
       case 'task.status':
-        setStatus(payload.status);
+        setStatus(p.status);
+        if (['PAUSED', 'CANCELED', 'FAILED', 'FAILED_RECOVERABLE'].includes(p.status)) {
+          note(p.status === 'PAUSED' ? 'pause' : 'alert', `${statusOf(p.status)[0]}${p.reason ? `: ${reasonText(p.reason)}` : ''}`, p.status === 'PAUSED' || p.status === 'CANCELED' ? '' : 'error');
+        }
         break;
       case 'llm.request':
-        thinkingRows.set(payload.step, appendRow('row-thinking', 'thinking...'));
+        thinking.set(p.step, agentMsg(h('span', { class: 'thinking' }, h('i'), h('i'), h('i'), 'Думает')));
         break;
       case 'llm.response': {
-        const row = thinkingRows.get(payload.step);
-        if (row) { row.remove(); thinkingRows.delete(payload.step); }
-        if (payload.text) appendBubble('bubble-assistant', payload.text);
+        const row = thinking.get(p.step);
+        if (row) { row.remove(); thinking.delete(p.step); lastAgent = inner.lastChild?.classList?.contains('msg-agent') || inner.lastChild?.classList?.contains('step') || false; }
+        if (p.text && p.tool_call) agentMsg(h('div', { class: 'prose', html: markdown(p.text) }));
         break;
       }
       case 'tool_call.denied':
-        appendRow('row-error', `Tool call denied: ${payload.tool} - ${payload.reason || ''}`);
+        note('ban', `Политика не разрешила ${p.tool}: ${p.reason}`);
         break;
       case 'tool_call.pending_approval':
-        renderApprovalCard(payload);
+        approvalCard(p);
         break;
       case 'approval.decided':
-        decideApprovalCard(payload);
+        approvalDecided(p);
         break;
       case 'tool_call.executing':
-        upsertToolCard(payload.tool_call_id, payload.tool, payload.display, 'executing');
+        toolCard(p.tool_call_id, p.tool, p.display);
         break;
       case 'tool_call.result':
-        updateToolCardResult(payload);
+        toolResult(p);
         break;
       case 'task.final':
-        appendBubble('bubble-assistant bubble-final', payload.text);
+        agentMsg(h('div', { class: 'prose', html: markdown(p.text) }));
         break;
       case 'task.error':
-        appendRow('row-error', `Error: ${payload.message}`);
+        note('alert', p.message, 'error');
         break;
       default:
-        break;
     }
   }
 
-  // --- SSE with reconnect + backoff, dedupe by seq ---
   let lastSeq = 0;
   let es = null;
-  let reconnectDelay = 1000;
+  let delay = 1000;
   let closed = false;
-
-  function connectSSE() {
+  const connect = () => {
     if (closed) return;
     es = new EventSource(`/v1/tasks/${taskId}/events?after=${lastSeq}`, { withCredentials: true });
-    es.onopen = () => { reconnectDelay = 1000; };
-    es.onmessage = (msg) => {
-      let evt;
-      try { evt = JSON.parse(msg.data); } catch (err) { return; }
-      if (typeof evt.seq === 'number') {
-        if (evt.seq <= lastSeq) return;
-        lastSeq = evt.seq;
-      }
-      handleEvent(evt);
+    es.onopen = () => { delay = 1000; };
+    es.onmessage = (m) => {
+      let ev;
+      try { ev = JSON.parse(m.data); } catch { return; }
+      if (ev.seq <= lastSeq) return;
+      lastSeq = ev.seq;
+      handle(ev);
     };
     es.onerror = () => {
       es.close();
       if (closed) return;
-      setTimeout(connectSSE, reconnectDelay);
-      reconnectDelay = Math.min(reconnectDelay * 2, 15000);
+      setTimeout(connect, delay);
+      delay = Math.min(delay * 2, 15000);
     };
-  }
-  connectSSE();
-  onCleanup(() => { closed = true; if (es) es.close(); });
+  };
+  connect();
+  viewCleanups.push(() => { closed = true; if (es) es.close(); });
+  if (!c.textarea.disabled) c.textarea.focus();
 }
 
-// ===== Targets =====
+// ---------- settings ----------
 
-async function viewTargets(root) {
-  root.innerHTML = `
-    <div class="page-header">
-      <h1>Targets</h1>
-      <div class="page-actions"><button class="primary" id="pair-btn">Pair new target</button></div>
-    </div>
-    <div id="targets-grid" class="grid"><div class="empty-state">Loading...</div></div>`;
-
-  async function refresh() {
-    let targets;
-    try { targets = await apiGet('/v1/targets'); }
-    catch (err) { if (err instanceof AuthError) showLogin(); return; }
-    renderTargetsGrid(root.querySelector('#targets-grid'), targets, refresh);
-  }
-  await refresh();
-  const interval = setInterval(refresh, 5000);
-  onCleanup(() => clearInterval(interval));
-
-  root.querySelector('#pair-btn').addEventListener('click', openPairingModal);
-}
-
-function renderTargetsGrid(grid, targets, refresh) {
-  grid.innerHTML = '';
-  if (!targets.length) { grid.innerHTML = '<div class="empty-state">No targets paired yet</div>'; return; }
-  targets.forEach((t) => {
-    const card = document.createElement('div');
-    card.className = 'card target-card';
-
-    const head = document.createElement('div');
-    head.className = 'target-card-head';
-    const name = document.createElement('div');
-    name.className = 'target-name';
-    name.textContent = t.name;
-    head.append(name, badge(t.status, TARGET_STATUS_BADGE[t.status] || 'neutral'));
-    card.appendChild(head);
-
-    const facts = document.createElement('div');
-    facts.className = 'target-fact';
-    facts.textContent = `${t.platform || '-'} - ${t.hostname || '-'} - agent ${t.agent_version || '-'}`;
-    card.appendChild(facts);
-
-    const lastSeen = document.createElement('div');
-    lastSeen.className = 'target-fact';
-    lastSeen.textContent = `Last seen: ${relativeTime(t.last_seen_at)}`;
-    card.appendChild(lastSeen);
-
-    const caps = t.capabilities || {};
-    if (caps.roots && caps.roots.length) {
-      const row = document.createElement('div');
-      row.className = 'tag-row';
-      caps.roots.forEach((r) => { const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = r; row.appendChild(tag); });
-      card.appendChild(row);
-    }
-    if (caps.tools && caps.tools.length) {
-      const row = document.createElement('div');
-      row.className = 'tag-row';
-      caps.tools.forEach((tl) => { const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = tl; row.appendChild(tag); });
-      card.appendChild(row);
-    }
-
-    if (t.status !== 'revoked') {
-      const revokeBtn = document.createElement('button');
-      revokeBtn.className = 'danger';
-      revokeBtn.textContent = 'Revoke';
-      revokeBtn.addEventListener('click', async () => {
-        if (!confirm(`Revoke target "${t.name}"? This cannot be undone.`)) return;
-        revokeBtn.disabled = true;
-        try {
-          await apiPost(`/v1/targets/${t.id}/revoke`);
-          toast('Target revoked');
-          if (refresh) refresh();
-        } catch (err) {
-          if (err instanceof AuthError) { showLogin(); return; }
-          toast(err.message, true);
-          revokeBtn.disabled = false;
-        }
-      });
-      card.appendChild(revokeBtn);
-    }
-
-    grid.appendChild(card);
-  });
-}
-
-async function openPairingModal() {
-  const content = document.createElement('div');
-  content.innerHTML = `
-    <div class="modal-head"><h2>Pair new target</h2><button class="ghost" id="modal-close">Close</button></div>
-    <div id="modal-body">Requesting pairing code...</div>`;
-  openModal(content);
-  content.querySelector('#modal-close').addEventListener('click', closeModal);
-
-  let data;
-  try {
-    data = await apiPost('/v1/targets/pairing-codes');
-  } catch (err) {
-    if (err instanceof AuthError) { closeModal(); showLogin(); return; }
-    content.querySelector('#modal-body').textContent = err.message || 'Failed to create pairing code';
-    return;
-  }
-
-  const body = content.querySelector('#modal-body');
-  body.innerHTML = `
-    <div class="pairing-code">${esc(data.code)}</div>
-    <div class="muted" style="text-align:center;margin-bottom:14px">Expires in <span id="pair-countdown" class="countdown"></span></div>
-    <label>Install command</label>
-    <div class="copy-row"><pre>${esc(data.install_command)}</pre><button data-copy="install">Copy</button></div>
-    <label>Pair command</label>
-    <div class="copy-row"><pre>${esc(data.pair_command)}</pre><button data-copy="pair">Copy</button></div>`;
-  body.querySelector('[data-copy="install"]').addEventListener('click', (ev) => copyText(data.install_command, ev.currentTarget));
-  body.querySelector('[data-copy="pair"]').addEventListener('click', (ev) => copyText(data.pair_command, ev.currentTarget));
-
-  const countdownEl = body.querySelector('#pair-countdown');
-  const expiresAt = new Date(data.expires_at).getTime();
-  const iv = setInterval(() => {
-    const remaining = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
-    countdownEl.textContent = formatDuration(remaining);
-    if (remaining <= 0) clearInterval(iv);
-  }, 1000);
-  countdownEl.textContent = formatDuration(Math.max(0, Math.round((expiresAt - Date.now()) / 1000)));
-
-  const obs = new MutationObserver(() => {
-    if (!document.body.contains(content)) { clearInterval(iv); obs.disconnect(); }
-  });
-  obs.observe($modalRoot, { childList: true });
-}
-
-// ===== Audit =====
-
-async function viewAudit(root) {
-  root.innerHTML = `
-    <div class="page-header">
-      <h1>Audit log</h1>
-      <div class="page-actions"><button id="audit-refresh">Refresh</button></div>
-    </div>
-    <div id="audit-table"></div>`;
-
-  async function load() {
-    let events;
-    try { events = await apiGet('/v1/audit?limit=200'); }
-    catch (err) {
-      if (err instanceof AuthError) { showLogin(); return; }
-      toast(err.message, true);
-      return;
-    }
-    renderAuditTable(root.querySelector('#audit-table'), events);
-  }
-  root.querySelector('#audit-refresh').addEventListener('click', load);
-  await load();
-}
-
-function renderAuditTable(container, events) {
-  if (!events.length) { container.innerHTML = '<div class="empty-state">No audit events</div>'; return; }
-  const table = document.createElement('table');
-  table.innerHTML = '<thead><tr><th>Time</th><th>Actor</th><th>Event</th><th>Payload</th><th>Hash</th></tr></thead>';
-  const tbody = document.createElement('tbody');
-  events.forEach((ev) => {
-    const tr = document.createElement('tr');
-    const tdTime = document.createElement('td');
-    tdTime.textContent = new Date(ev.created_at).toLocaleString();
-    const tdActor = document.createElement('td');
-    tdActor.textContent = ev.actor;
-    const tdType = document.createElement('td');
-    tdType.textContent = ev.event_type;
-    const tdPayload = document.createElement('td');
-    const pre = document.createElement('pre');
-    pre.style.cssText = 'margin:0;max-width:420px;overflow-x:auto;font-size:11px';
-    pre.textContent = JSON.stringify(ev.payload);
-    tdPayload.appendChild(pre);
-    const tdHash = document.createElement('td');
-    tdHash.className = 'mono';
-    tdHash.textContent = (ev.hash || '').slice(0, 10);
-    tr.append(tdTime, tdActor, tdType, tdPayload, tdHash);
-    tbody.appendChild(tr);
-  });
-  table.appendChild(tbody);
-  container.innerHTML = '';
-  container.appendChild(table);
-}
-
-// ===== Settings =====
-
-async function viewSettings(root) {
-  root.innerHTML = `
-    <div class="page-header"><h1>Settings</h1></div>
-    <div class="grid">
-      <div class="card" id="settings-system"><div class="section-title" style="margin-top:0">System</div>Loading...</div>
-      <div class="card" id="settings-models"><div class="section-title" style="margin-top:0">Available models</div>Loading...</div>
-    </div>
-    <div class="section-title">CLI cheatsheet</div>
-    <div class="card"><pre class="mono" style="white-space:pre-wrap;margin:0">mensarium core backup -o file.pab
-mensarium core restore file.pab
-mensarium core token
-mensarium status</pre></div>`;
-
-  const system = await safe(apiGet('/v1/system'), null);
-  const sysCard = root.querySelector('#settings-system');
-  if (system) {
-    const prov = system.provider || {};
-    sysCard.innerHTML = `<div class="section-title" style="margin-top:0">System</div>
-      <div class="kv">
-        <div class="k">Version</div><div>${esc(system.version)}</div>
-        <div class="k">Workspace</div><div>${esc(system.workspace_id)}</div>
-        <div class="k">Public URL</div><div>${esc(system.public_url)}</div>
-        <div class="k">Key fingerprint</div><div class="mono">${esc(system.core_key_fingerprint)}</div>
-        <div class="k">Provider</div><div>${esc(prov.name)}</div>
-        <div class="k">Base URL</div><div>${esc(prov.base_url)}</div>
-        <div class="k">Model</div><div>${esc(prov.model)}</div>
-      </div>`;
-  } else {
-    sysCard.innerHTML = '<div class="section-title" style="margin-top:0">System</div><div class="empty-state">Failed to load system info</div>';
-  }
-
-  const modelsCard = root.querySelector('#settings-models');
-  try {
-    const models = await apiGet('/v1/models');
-    modelsCard.innerHTML = '<div class="section-title" style="margin-top:0">Available models</div>';
-    if (!models.length) {
-      modelsCard.innerHTML += '<div class="empty-state">No models available</div>';
-    } else {
-      const wrap = document.createElement('div');
-      models.forEach((m) => {
-        const tag = document.createElement('span');
-        tag.className = 'tag';
-        tag.style.cssText = 'display:inline-block;margin:3px';
-        tag.textContent = m.id;
-        wrap.appendChild(tag);
-      });
-      modelsCard.appendChild(wrap);
-    }
-  } catch (err) {
-    if (err instanceof AuthError) { showLogin(); return; }
-    modelsCard.innerHTML = `<div class="section-title" style="margin-top:0">Available models</div><div class="empty-state">${esc(err.message || 'Failed to load models')}</div>`;
-  }
-}
-
-// ===== Router =====
-
-const ROUTES = [
-  { pattern: /^#\/dashboard$/, view: viewDashboard },
-  { pattern: /^#\/tasks$/, view: viewTasks },
-  { pattern: /^#\/tasks\/([^/]+)$/, view: viewTaskDetail },
-  { pattern: /^#\/targets$/, view: viewTargets },
-  { pattern: /^#\/audit$/, view: viewAudit },
-  { pattern: /^#\/settings$/, view: viewSettings },
+const SETTINGS = [
+  { group: null, items: [['overview', 'pulse', 'Обзор'], ['model', 'cpu', 'Модель']] },
+  { group: 'Подключения', items: [['devices', 'laptop', 'Устройства']] },
+  { group: 'Агенты', items: [['profiles', 'layers', 'Профили']] },
+  { group: 'Безопасность', items: [['audit', 'list', 'Журнал действий']] },
 ];
 
-function updateNavActive(hash) {
-  document.querySelectorAll('.nav-link').forEach((a) => {
-    const r = a.getAttribute('data-route');
-    const active = hash === r || (r === '#/tasks' && hash.startsWith('#/tasks/'));
-    a.classList.toggle('active', active);
-  });
+function ensureSettingsShell() {
+  if (state.shell && state.shell.kind === 'settings') return state.shell;
+  cleanupAll();
+  const main = h('main', { class: 'main' });
+  const nav = h('div', { class: 'settings-nav' });
+  const search = h('input', { type: 'search', placeholder: 'Поиск настроек...' });
+  const back = () => go(state.lastChat || '#/');
+  const shell = h('div', { class: 'shell' });
+  const sidebar = h('aside', { class: 'sidebar' },
+    h('button', { class: 'back-link', onclick: back }, icon('arrowLeft'), 'Вернуться в чат', h('span', { class: 'kbd' }, 'ESC')),
+    h('div', { class: 'settings-title' }, 'Настройки'),
+    h('div', { class: 'settings-search' }, icon('search'), search),
+    nav,
+    h('div', { class: 'settings-foot' }, state.system?.version ? `v${state.system.version}` : ''),
+  );
+  shell.append(sidebar, main);
+  $app.replaceChildren(shell);
+
+  const renderNav = () => {
+    const q = search.value.trim().toLowerCase();
+    const active = (location.hash.match(/^#\/settings\/(\w+)/) || [])[1];
+    nav.replaceChildren(...SETTINGS.map(({ group, items }) => {
+      const visible = items.filter(([, , label]) => !q || label.toLowerCase().includes(q));
+      if (!visible.length) return null;
+      return h('div', {},
+        group ? h('div', { class: 'settings-group section-label' }, group) : null,
+        visible.map(([key, ic, label]) => h('a', { class: `nav-item${key === active ? ' active' : ''}`, href: `#/settings/${key}` }, icon(ic), label)));
+    }).filter(Boolean));
+  };
+  search.addEventListener('input', renderNav);
+  const onKey = (e) => { if (e.key === 'Escape' && !$layer.firstChild) back(); };
+  document.addEventListener('keydown', onKey);
+  shellCleanups.push(() => document.removeEventListener('keydown', onKey));
+
+  state.shell = {
+    kind: 'settings', main, toggleNav: () => shell.classList.toggle('nav-open'),
+    setActive() { renderNav(); shell.classList.remove('nav-open'); },
+  };
+  return state.shell;
 }
 
-async function router() {
-  runCleanup();
-  if (!location.hash) { location.hash = '#/dashboard'; return; }
-  const hash = location.hash;
-  updateNavActive(hash);
-  for (const r of ROUTES) {
-    const m = hash.match(r.pattern);
-    if (m) {
-      $main.innerHTML = '';
-      try {
-        await r.view($main, ...m.slice(1));
-      } catch (err) {
-        if (err instanceof AuthError) { showLogin(); return; }
-        toast(err.message || 'Error', true);
-      }
+function page(shell, title, desc, actions, ...sections) {
+  shell.main.replaceChildren(
+    h('header', { class: 'topbar', style: 'height:auto;padding:10px 12px 0' }, h('button', { class: 'icon-btn menu-toggle', 'aria-label': 'Меню', onclick: shell.toggleNav }, icon('menu'))),
+    h('div', { class: 'page' }, h('div', { class: 'page-inner' },
+      h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, title), desc ? h('p', {}, desc) : null), actions ? h('div', { class: 'actions' }, actions) : null),
+      sections,
+    )),
+  );
+}
+
+const section = (label, desc, actions, ...body) => h('section', { class: 'section' },
+  h('div', { class: 'section-head' }, h('div', {}, h('div', { class: 'section-label' }, label), desc ? h('p', {}, desc) : null), actions ? h('div', { class: 'actions' }, actions) : null),
+  body);
+
+const row = (title, desc, value, mono = false) => h('div', { class: 'row' },
+  h('div', { class: 'row-text' }, h('div', { class: 'row-title' }, title), desc ? h('div', { class: 'row-desc' }, desc) : null),
+  value != null ? h('div', { class: `row-value${mono ? ' mono' : ''}` }, value) : null);
+
+const copyBtn = (text) => h('button', { class: 'icon-btn', 'aria-label': 'Скопировать', onclick: (e) => copy(text, e.currentTarget) }, icon('copy'));
+const refreshBtn = (fn) => h('button', { class: 'btn', onclick: fn }, icon('refresh'), 'Обновить');
+
+async function viewSettings(key) {
+  const shell = ensureSettingsShell();
+  shell.setActive();
+  const views = { overview: settingsOverview, model: settingsModel, devices: settingsDevices, profiles: settingsProfiles, audit: settingsAudit };
+  await (views[key] || settingsOverview)(shell);
+}
+
+async function settingsOverview(shell) {
+  const s = await get('/v1/system');
+  state.system = s;
+  const url = (s.public_url || '').replace(/\/$/, '');
+  const online = state.targets.filter((t) => t.status === 'online').length;
+  page(shell, 'Обзор', 'Главный агент Mensarium: где он доступен и как к нему подключать устройства.', refreshBtn(() => viewSettings('overview')),
+    h('div', { class: 'hero' }, agentAvatar(), h('h2', {}, 'Mensarium Core'), h('span', { class: 'pill accent' }, `ВЕРСИЯ ${s.version}`)),
+    section('Подключение', 'Эти данные нужны, чтобы устройства нашли Core и доверяли ему.', null, h('div', { class: 'rows' },
+      row('Адрес Core', 'Используется браузером и устройствами.', [h('span', {}, url), copyBtn(url)], true),
+      row('Отпечаток ключа', 'Сверьте с тем, что показал установщик на устройстве при сопряжении.', s.core_key_fingerprint, true),
+      row('Устройства в сети', null, `${online} из ${state.targets.filter((t) => t.status !== 'revoked').length}`),
+      row('Рабочее пространство', null, s.workspace_id, true),
+    )),
+    section('Обслуживание', 'Команды выполняются на сервере Core.', null, h('div', { class: 'rows' },
+      row('Обновить Mensarium', 'Скачивает свежую версию и перезапускает сервис.', h('code', {}, 'mensarium update'), true),
+      row('Резервная копия', 'Зашифрованный архив для переноса Core на другой сервер.', h('code', {}, 'mensarium core backup'), true),
+      row('Токен входа', 'Показать токен администратора.', h('code', {}, 'mensarium core token'), true),
+    )),
+  );
+}
+
+async function settingsModel(shell) {
+  const s = await get('/v1/system');
+  const p = s.provider || {};
+  const health = p.health || {};
+  const providerName = { ollama_cloud: 'Ollama Cloud', ollama_local: 'Локальный Ollama', llama_cpp: 'llama.cpp' }[p.name] || p.name;
+  const list = h('div', { class: 'rows' }, h('div', { class: 'empty' }, 'Загружаем список...'));
+  page(shell, 'Модель', 'Через какого провайдера и какую модель агент думает. Ключ API хранится только на сервере Core.', refreshBtn(() => viewSettings('model')),
+    h('div', { class: 'rows' },
+      row('Провайдер', null, providerName),
+      row('Адрес API', null, p.base_url, true),
+      row('Модель по умолчанию', 'Меняется командой mensarium setup на сервере Core.', p.model, true),
+      row('Состояние', health.detail || null, h('span', { class: 'status' }, h('span', { class: `dot ${health.ok ? 'ok' : 'danger'}` }), health.ok ? 'Доступен' : 'Недоступен')),
+    ),
+    section('Доступные модели', 'Список, который отдаёт провайдер.', null, list),
+  );
+  try {
+    const models = await get('/v1/models');
+    list.replaceChildren(models.length
+      ? h('div', { class: 'row-extra', style: 'padding:16px 20px' }, models.map((m) => h('span', { class: `pill tag${m.id === p.model ? ' accent' : ''}` }, m.id)))
+      : h('div', { class: 'empty' }, 'Провайдер не вернул ни одной модели.'));
+  } catch (err) {
+    list.replaceChildren(h('div', { class: 'empty' }, err.message));
+  }
+}
+
+async function settingsDevices(shell) {
+  const s = state.system || await get('/v1/system');
+  const listHost = h('div', {});
+  const render = () => {
+    const targets = state.targets.filter((t) => t.status !== 'revoked');
+    if (!targets.length) {
+      listHost.replaceChildren(h('div', { class: 'rows' }, h('div', { class: 'empty' },
+        h('h3', {}, 'Устройств пока нет'), h('p', {}, 'Сопрягите машину, на которой агент будет работать.'),
+        h('button', { class: 'btn btn-primary', onclick: openPairing }, icon('link'), 'Сопрячь устройство'))));
       return;
     }
-  }
-  location.hash = '#/dashboard';
+    listHost.replaceChildren(h('div', { class: 'rows' }, targets.map((t) => {
+      const caps = t.capabilities || {};
+      const outdated = t.agent_version && s.version && t.agent_version !== s.version;
+      const revoke = h('button', { class: 'btn btn-sm btn-danger', onclick: async () => {
+        if (!confirm(`Отозвать «${t.name}»? Устройство потеряет доступ, для возврата понадобится новое сопряжение.`)) return;
+        try { await post(`/v1/targets/${t.id}/revoke`); toast('Доступ отозван'); await refreshData(); render(); } catch (err) { fail(err); }
+      } }, 'Отозвать');
+      return [
+        h('div', { class: 'row' },
+          h('div', { class: 'row-text' },
+            h('div', { class: 'row-title' }, t.name, outdated ? h('span', { class: 'pill warn', title: 'Выполните на устройстве: mensarium update' }, `v${t.agent_version}, есть обновление`) : null),
+            h('div', { class: 'row-desc' }, `${t.platform} · ${t.hostname} · ${t.status === 'online' ? 'в сети' : `был в сети ${relTime(t.last_seen_at)}`}`)),
+          h('div', { class: 'row-value' }, h('span', { class: 'status' }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.status === 'online' ? 'В сети' : 'Не в сети'), revoke)),
+        h('div', { class: 'row-extra' },
+          (caps.roots || []).map((r) => h('span', { class: 'pill tag', title: r }, r)),
+          h('span', { class: 'pill tag', title: (caps.command_allowlist || []).join(', ') }, (caps.command_allowlist || []).includes('*') ? 'любые программы' : `${(caps.command_allowlist || []).length} программ`)),
+      ];
+    })));
+  };
+  const refresh = async () => { try { await refreshData(); render(); } catch (err) { fail(err); } };
+  page(shell, 'Устройства', 'Машины, на которых агент может читать проект и, с вашего разрешения, запускать команды.',
+    [refreshBtn(refresh), h('button', { class: 'btn btn-primary', onclick: openPairing }, icon('link'), 'Сопрячь устройство')],
+    listHost,
+    section('Как подключить', 'Сопряжение по одноразовому коду. Код создаётся кнопкой выше или командой mensarium core pair-code на сервере.', null,
+      h('div', { class: 'code-line' }, h('code', {}, `curl -fsSL ${(s.public_url || '').replace(/\/$/, '')}/install.sh | sh -s -- --code КОД`), copyBtn(`curl -fsSL ${(s.public_url || '').replace(/\/$/, '')}/install.sh | sh -s -- --code `))),
+  );
+  render();
+  const iv = setInterval(refresh, 5000);
+  viewCleanups.push(() => clearInterval(iv));
 }
 
-// ===== Boot =====
+async function settingsProfiles(shell) {
+  const profiles = await get('/v1/agent-profiles');
+  page(shell, 'Профили', 'Профиль задаёт, какие инструменты доступны агенту, его лимиты и какие действия требуют подтверждения.', null,
+    profiles.map((p) => section(`${p.name} · v${p.version}`, p.id, null, h('div', { class: 'rows' },
+      row('Модель', `Температура ${p.llm.temperature}`, p.llm.model, true),
+      row('Инструменты', null, null),
+      h('div', { class: 'row-extra' }, p.allowed_tools.map((t) => h('span', { class: 'pill tag' }, t))),
+      row('Требуют подтверждения', 'Каждое такое действие вы одобряете отдельно.', h('span', {}, p.approval.required_risks.map((r) => (RISK[r] || [r])[0]).join(', '))),
+      row('Лимиты', null, `${p.limits.max_steps} шагов, ${p.limits.max_tool_calls} действий, ${Math.round(p.limits.max_wall_time_s / 60)} мин`),
+    ))),
+  );
+}
+
+async function settingsAudit(shell) {
+  const events = await get('/v1/audit?limit=200');
+  const LABELS = {
+    'task.created': 'Создана задача', 'task.succeeded': 'Задача завершена', 'task.stopped': 'Задача остановлена',
+    'tool.execute': 'Отправлено на устройство', 'tool.result': 'Результат от устройства', 'tool.denied': 'Запрещено политикой',
+    'approval.requested': 'Запрошено подтверждение', 'approval.approved': 'Подтверждено', 'approval.rejected': 'Отклонено',
+    'target.paired': 'Устройство сопряжено', 'target.revoked': 'Доступ устройства отозван', 'pairing.code_created': 'Создан код сопряжения',
+    'core.started': 'Core запущен', 'task.cancel': 'Отмена задачи', 'task.pause': 'Пауза задачи', 'task.resume': 'Задача продолжена',
+  };
+  page(shell, 'Журнал действий', 'Каждое событие связано с предыдущим хешем, поэтому запись нельзя незаметно изменить или удалить.', refreshBtn(() => viewSettings('audit')),
+    events.length ? h('div', { class: 'rows' }, events.map((e) => h('div', { class: 'audit-item' },
+      h('div', { class: 'audit-time' }, new Date(e.created_at).toLocaleString('ru-RU'), h('div', { class: 'mono', title: e.hash }, e.hash.slice(7, 17))),
+      h('div', {}, h('div', { class: 'audit-type' }, LABELS[e.event_type] || e.event_type, h('span', { class: 'muted', style: 'font-weight:400' }, ` · ${e.actor}`)),
+        h('div', { class: 'audit-payload' }, e.payload.display || JSON.stringify(e.payload)))))) : h('div', { class: 'rows' }, h('div', { class: 'empty' }, 'Событий пока нет.')),
+  );
+}
+
+// ---------- router ----------
+
+function go(hash) { if (location.hash === hash) route(); else location.hash = hash; }
+
+async function route() {
+  viewCleanups.forEach((fn) => { try { fn(); } catch { /* noop */ } });
+  viewCleanups = [];
+  closeLayer();
+  const hash = location.hash || '#/';
+  try {
+    let m;
+    if ((m = hash.match(/^#\/chat\/([^/]+)$/)) || (m = hash.match(/^#\/tasks\/([^/]+)$/))) await viewChat(m[1]);
+    else if ((m = hash.match(/^#\/settings\/?(\w*)$/))) await viewSettings(m[1] || 'overview');
+    else await viewNewChat();
+  } catch (err) { fail(err); }
+}
+
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); go('#/settings/overview'); }
+  if (e.key === 'Escape' && $layer.firstChild) closeLayer();
+});
 
 async function boot() {
-  window.addEventListener('hashchange', router);
-  $logoutBtn.addEventListener('click', async () => {
-    try { await apiPost('/v1/auth/logout'); } catch (err) { /* noop */ }
-    showLogin();
-  });
-
   try {
-    await apiGet('/v1/system');
-    isAuthed = true;
-    $logoutBtn.classList.remove('hidden');
-    document.querySelectorAll('.nav-link').forEach((a) => a.classList.remove('hidden'));
-    router();
+    state.system = await get('/v1/system');
+    await refreshData();
   } catch (err) {
-    showLogin();
+    if (err instanceof AuthError) { showLogin(); return; }
+    toast(err.message, true);
   }
+  state.shell = null;
+  window.removeEventListener('hashchange', route);
+  window.addEventListener('hashchange', route);
+  route();
 }
 
 boot();

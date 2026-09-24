@@ -29,9 +29,57 @@ Role = Literal["core", "target"]
 
 
 @app.command()
-def version() -> None:
-    """Print the version."""
-    console.print(__version__)
+def version(
+    check: Annotated[bool, typer.Option("--check/--no-check", help="Check for a newer release")] = True,
+) -> None:
+    """Show the installed version and whether an update is available."""
+    from mensarium.cli.update import UpdateError, fetch_latest, is_newer, update_source
+
+    roles = [r for r, paths in (("core", CorePaths()), ("target", TargetPaths())) if paths.config.exists()]
+    console.print(f"mensarium {__version__}" + (f"  ({', '.join(roles)})" if roles else ""))
+    if not check:
+        return
+    source = update_source()
+    try:
+        latest = fetch_latest(source, timeout=3)
+    except UpdateError:
+        return
+    if is_newer(latest["version"]):
+        console.print(f"Доступна версия {latest['version']} на {source}. Обновить: mensarium update")
+
+
+@app.command()
+def update(
+    check: Annotated[bool, typer.Option("--check", help="Only check, do not install")] = False,
+    force: Annotated[bool, typer.Option("--force", help="Reinstall even if the version is the same")] = False,
+    source: Annotated[str | None, typer.Option(help="Update server, e.g. https://mensarium.com")] = None,
+) -> None:
+    """Update Mensarium: Core from mensarium.com, a target from its Core. Restarts installed services."""
+    from mensarium.cli.update import UpdateError, fetch_latest, install, is_newer, update_source
+
+    base = (source or update_source()).rstrip("/")
+    try:
+        with console.status(f"Проверяю {base}..."):
+            latest = fetch_latest(base)
+    except UpdateError as e:
+        fail(str(e))
+        raise typer.Exit(1) from e
+    new = latest["version"]
+    if not is_newer(new) and not force:
+        ok(f"Установлена последняя версия {__version__} ({base})")
+        return
+    if check:
+        console.print(f"Доступна версия {new} (установлена {__version__}). Обновить: mensarium update")
+        return
+    try:
+        with console.status(f"Устанавливаю {new}..."):
+            restarted = install(base, latest)
+    except UpdateError as e:
+        fail(str(e))
+        raise typer.Exit(1) from e
+    ok(f"Mensarium обновлён: {__version__} -> {new}")
+    for role in restarted:
+        ok(f"Сервис {role} перезапущен")
 
 
 @app.command()

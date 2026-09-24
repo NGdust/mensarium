@@ -28,6 +28,8 @@ UI Core показывает готовую команду для target — о�
 |---|---|
 | `mensarium setup` | Интерактивная настройка Core или Target |
 | `mensarium status` | Что установлено и запущено |
+| `mensarium version` | Версия, роли на этой машине и доступное обновление |
+| `mensarium update` | Обновиться: Core с mensarium.com, устройство со своего Core (`--check` только проверить) |
 | `mensarium core serve` | Запуск Core в foreground |
 | `mensarium core token` | Токен для входа в web UI |
 | `mensarium core pair-code` | Одноразовый код пары (10 минут) |
@@ -56,5 +58,7 @@ LLM proposal → schema validation → target capability check → policy evalua
 ```sh
 make dev     # .venv с пакетом в editable-режиме
 make lint    # ruff + mypy
+make dist    # dist/: install.sh, архив и latest.json для раздачи (нужен чистый git)
+make release # dist + тег vX.Y.Z
 make core    # Core в foreground (нужен ~/.mensarium/core/config.yaml, см. mensarium setup)
 ```

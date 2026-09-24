@@ -1,3 +1,4 @@
+import hashlib
 import io
 import os
 import re
@@ -48,3 +49,7 @@ def source_tarball() -> bytes:
             if (src / item).exists():
                 tar.add(src / item, arcname=f"mensarium/{item}", filter=_skip)
     return buf.getvalue()
+
+
+def latest_manifest(version: str) -> dict[str, str]:
+    return {"version": version, "file": "mensarium.tar.gz", "sha256": hashlib.sha256(source_tarball()).hexdigest()}

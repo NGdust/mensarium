@@ -175,6 +175,13 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             raise HTTPException(404, str(e)) from e
         return Response(data, media_type="application/gzip")
 
+    @app.get("/dist/latest.json", include_in_schema=False)
+    async def dist_latest() -> dict[str, str]:
+        try:
+            return await asyncio.to_thread(distribution.latest_manifest, __version__)
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e)) from e
+
     @app.post("/v1/auth/login")
     async def login(body: LoginBody, response: Response, c: Core = Depends(core)) -> dict[str, bool]:
         if not hmac.compare_digest(body.token.strip(), c.admin_token):
