@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mensarium</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div id="shell">
+  <aside id="sidebar">
+    <div class="brand">Mensarium</div>
+    <nav id="nav">
+      <a class="nav-link" data-route="#/dashboard" href="#/dashboard">Dashboard</a>
+      <a class="nav-link" data-route="#/tasks" href="#/tasks">Tasks</a>
+      <a class="nav-link" data-route="#/targets" href="#/targets">Targets</a>
+      <a class="nav-link" data-route="#/audit" href="#/audit">Audit</a>
+      <a class="nav-link" data-route="#/settings" href="#/settings">Settings</a>
+    </nav>
+    <div class="sidebar-spacer"></div>
+    <button id="logout-btn" class="ghost hidden">Log out</button>
+  </aside>
+  <main id="main"></main>
+</div>
+<div id="modal-root"></div>
+<div id="toasts"></div>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

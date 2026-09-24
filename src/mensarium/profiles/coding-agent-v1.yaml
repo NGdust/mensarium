@@ -1,0 +1,37 @@
+id: coding-agent-v1
+name: Coding Agent
+version: 1.0.0
+instructions_ref: coding.md
+
+llm:
+  model: null
+  temperature: 0.1
+  max_output_tokens: 2000
+  max_context_tokens: 12000
+
+allowed_targets:
+  - darwin
+  - linux
+
+allowed_tools:
+  - files.list
+  - files.read
+  - files.search
+  - git.status
+  - git.diff
+  - shell.exec
+
+default_mode: propose_then_execute
+
+limits:
+  max_steps: 30
+  max_tool_calls: 30
+  max_output_chars: 24000
+  max_wall_time_s: 1800
+
+approval:
+  required_risks:
+    - write
+    - execute
+    - network
+    - destructive
