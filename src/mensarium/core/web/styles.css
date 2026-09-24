@@ -275,6 +275,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .crumbs .current { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 4px; }
 .menu-toggle { display: none; }
+.nav-backdrop { display: none; }
 
 .thread { flex: 1; min-height: 0; overflow-y: auto; }
 .thread-inner { max-width: var(--chat-w); margin: 0 auto; padding: 18px 24px 40px; }
@@ -512,6 +513,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
     transform: translateX(-100%); transition: transform 0.2s ease;
   }
   .shell.nav-open .sidebar { transform: none; box-shadow: var(--shadow-pop); }
+  .shell.nav-open .nav-backdrop { display: block; position: fixed; inset: 0; z-index: 35; background: rgba(8, 7, 14, 0.55); }
   .menu-toggle { display: inline-grid; }
   .thread-inner { padding: 12px 16px 32px; }
   .composer-wrap { padding: 0 12px 12px; }

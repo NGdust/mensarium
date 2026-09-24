@@ -396,7 +396,7 @@ function ensureAppShell() {
     h('div', { class: 'sidebar-foot' }, meBtn,
       h('button', { class: 'icon-btn', title: 'Настройки', 'aria-label': 'Настройки', onclick: () => go('#/settings/overview') }, icon('sliders'))),
   );
-  shell.append(sidebar, main);
+  shell.append(sidebar, main, h('div', { class: 'nav-backdrop', onclick: () => shell.classList.remove('nav-open') }));
   $app.replaceChildren(shell);
 
   const menuHost = h('div', {});
@@ -824,7 +824,7 @@ function ensureSettingsShell() {
     nav,
     h('div', { class: 'settings-foot' }, state.system?.version ? `v${state.system.version}` : ''),
   );
-  shell.append(sidebar, main);
+  shell.append(sidebar, main, h('div', { class: 'nav-backdrop', onclick: () => shell.classList.remove('nav-open') }));
   $app.replaceChildren(shell);
 
   const renderNav = () => {
@@ -1016,6 +1016,7 @@ async function route() {
 document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); go('#/settings/overview'); }
   if (e.key === 'Escape' && $layer.firstChild) closeLayer();
+  if (e.key === 'Escape') document.querySelector('.shell.nav-open')?.classList.remove('nav-open');
 });
 
 async function boot() {
