@@ -11,7 +11,7 @@ import typer
 
 from mensarium import __version__
 from mensarium.cli import service
-from mensarium.cli.ui import console, fail, ok, summary, warn
+from mensarium.cli.ui import console, fail, ok, summary, use_select_event_loop, warn
 from mensarium.core.config import CorePaths, load_config, read_secret
 from mensarium.shared.logging import setup_logging
 from mensarium.shared.paths import mensarium_home
@@ -43,6 +43,7 @@ def setup(
     service_: Annotated[bool | None, typer.Option("--service/--no-service", help="Install background service")] = None,
 ) -> None:
     """Interactive installer for the Core or a Target Agent."""
+    use_select_event_loop()
     from mensarium.cli import wizard
 
     if role is None:
@@ -101,6 +102,7 @@ def uninstall(
     purge: Annotated[bool, typer.Option(help="Also delete all data, keys and the virtualenv")] = False,
 ) -> None:
     """Stop services and remove them (optionally purge all data)."""
+    use_select_event_loop()
     for role in ("core", "target"):
         if service.is_installed(role):  # type: ignore[arg-type]
             service.uninstall(role)  # type: ignore[arg-type]
@@ -190,6 +192,7 @@ def core_backup(
     output: Annotated[Path | None, typer.Option("-o", "--output", help="Output .pab file")] = None,
 ) -> None:
     """Export an encrypted portable bundle (.pab) of the Core."""
+    use_select_event_loop()
     from mensarium.cli.backup import BackupError, export_bundle
     from mensarium.shared.timeutil import utcnow
 
@@ -209,6 +212,7 @@ def core_backup(
 @core_app.command("restore")
 def core_restore(bundle: Path) -> None:
     """Restore the Core from a .pab bundle (stops the service while restoring)."""
+    use_select_event_loop()
     from mensarium.cli.backup import BackupError, import_bundle
 
     passphrase = questionary.password("Bundle passphrase:").ask() or ""

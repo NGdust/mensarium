@@ -1,3 +1,7 @@
+import asyncio
+import selectors
+import sys
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
@@ -45,3 +49,15 @@ def summary(title: str, rows: list[tuple[str, str]], footer: str = "") -> None:
     if footer:
         body.append(f"\n{footer}", style="")
     console.print(Panel(body, title=title, border_style="green", padding=(1, 2)))
+
+
+def use_select_event_loop() -> None:
+    """macOS kqueue cannot poll /dev/tty, which is stdin under `curl | sh`; prompt_toolkit then sees EOF."""
+    if sys.platform != "darwin":
+        return
+
+    class _Policy(asyncio.DefaultEventLoopPolicy):
+        def new_event_loop(self) -> asyncio.AbstractEventLoop:
+            return asyncio.SelectorEventLoop(selectors.SelectSelector())
+
+    asyncio.set_event_loop_policy(_Policy())
