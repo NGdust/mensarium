@@ -345,6 +345,14 @@ def setup_target(server: str | None, code: str | None, name: str | None, start_s
         )
     )
 
+    remote_update = ask(
+        questionary.confirm(
+            "Allow the Core to update this agent from its web UI (downloads the release from the Core and restarts the agent)?",
+            default=True,
+            style=STYLE,
+        )
+    )
+
     step(3, total, "Pairing")
     name = name or ask(questionary.text("Name for this machine:", default=socket.gethostname().split(".")[0], style=STYLE))
     while True:
@@ -365,6 +373,7 @@ def setup_target(server: str | None, code: str | None, name: str | None, start_s
                     roots=roots,
                     command_allowlist=allowlist,
                     allow_full_access=full_access,
+                    allow_remote_update=remote_update,
                 )
             break
         except PairingError as e:
@@ -400,6 +409,7 @@ def _finish_target(paths: TargetPaths, start_service: bool | None) -> None:
             ("Roots", ", ".join(cfg.roots)),
             ("Programs", ", ".join(cfg.command_allowlist)),
             ("Full access", "allowed" if cfg.allow_full_access else "disabled"),
+            ("Remote update", "allowed" if cfg.allow_remote_update else "disabled"),
             ("Logs", str(service.log_file("target"))),
         ],
         footer="The target appears as online in the Core web UI within a few seconds."

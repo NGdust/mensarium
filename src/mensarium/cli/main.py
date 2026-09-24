@@ -294,6 +294,9 @@ def target_pair(
     root: Annotated[list[str], typer.Option(help="Allowed workspace root (repeatable)")],
     name: Annotated[str | None, typer.Option(help="Target name")] = None,
     full_access: Annotated[bool, typer.Option("--full-access/--no-full-access", help="Allow full-access chats")] = True,
+    remote_update: Annotated[
+        bool, typer.Option("--remote-update/--no-remote-update", help="Allow updating this agent from the Core web UI")
+    ] = True,
 ) -> None:
     """Pair this machine with a Core non-interactively."""
     from mensarium.target.pairing import PairingError, pair
@@ -306,6 +309,7 @@ def target_pair(
             name=name or socket.gethostname().split(".")[0],
             roots=root,
             allow_full_access=full_access,
+            allow_remote_update=remote_update,
         )
     except PairingError as e:
         fail(str(e))

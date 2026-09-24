@@ -16,10 +16,13 @@ from mensarium.contracts.protocol import (
     ExecutionRequest,
     ExecutionResult,
     TargetHello,
+    TargetUpdate,
+    TargetUpdateStatus,
 )
 from mensarium.core.repo import Repo
 from mensarium.shared.crypto import sign, verify
-from mensarium.shared.timeutil import now_iso
+from mensarium.shared.ids import new_id
+from mensarium.shared.timeutil import iso_in, now_iso
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +38,7 @@ class TargetConnection:
     public_key: str
     hello: TargetHello
     pending: dict[str, asyncio.Future[ExecutionResult]] = field(default_factory=dict)
+    updates: dict[str, asyncio.Future[TargetUpdateStatus]] = field(default_factory=dict)
 
 
 class TargetHub:
@@ -71,7 +75,8 @@ class TargetHub:
             if self.connections.get(conn.target_id) is conn:
                 del self.connections[conn.target_id]
                 await self.repo.update_target(conn.target_id, {"status": "offline", "last_seen_at": now_iso()})
-            for fut in conn.pending.values():
+            waiters: list[asyncio.Future[Any]] = [*conn.pending.values(), *conn.updates.values()]
+            for fut in waiters:
                 if not fut.done():
                     fut.set_exception(TargetUnavailable("target disconnected"))
             log.info("target disconnected", extra={"target_id": conn.target_id})
@@ -126,6 +131,38 @@ class TargetHub:
                 fut.set_exception(TargetUnavailable("execution.result has an invalid signature"))
                 return
             fut.set_result(result)
+        elif kind == "target.update.status":
+            try:
+                status = TargetUpdateStatus.model_validate(msg)
+            except ValidationError:
+                return
+            waiter = conn.updates.pop(status.request_id, None)
+            if waiter and not waiter.done() and verify(conn.public_key, msg):
+                waiter.set_result(status)
+
+    async def request_update(self, target_id: str, version: str, ttl_s: int) -> TargetUpdateStatus:
+        """Ask a device to update its agent from this Core; returns the device's signed answer."""
+        conn = self.connections.get(target_id)
+        if conn is None:
+            raise TargetUnavailable("target is offline")
+        msg = TargetUpdate(
+            request_id=new_id("upd"),
+            target_id=target_id,
+            version=version,
+            issued_at=now_iso(),
+            expires_at=iso_in(ttl_s),
+            nonce=secrets.token_hex(32),
+        )
+        msg.signature = sign(self.key, msg.model_dump())
+        fut: asyncio.Future[TargetUpdateStatus] = asyncio.get_running_loop().create_future()
+        conn.updates[msg.request_id] = fut
+        try:
+            await conn.ws.send_json(msg.model_dump())
+            return await asyncio.wait_for(fut, 20)
+        except TimeoutError as e:
+            raise TargetUnavailable("the device did not answer the update request") from e
+        finally:
+            conn.updates.pop(msg.request_id, None)
 
     async def execute(self, request: ExecutionRequest, timeout_s: float) -> ExecutionResult:
         conn = self.connections.get(request.target_id)

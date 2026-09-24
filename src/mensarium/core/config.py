@@ -41,6 +41,7 @@ class MarketplaceConfig(BaseModel):
 
 
 class CoreConfig(BaseModel):
+    update_url: str = "https://mensarium.com"
     server: ServerConfig = Field(default_factory=ServerConfig)
     marketplace: MarketplaceConfig = Field(default_factory=MarketplaceConfig)
     local_target: LocalTargetConfig = Field(default_factory=LocalTargetConfig)

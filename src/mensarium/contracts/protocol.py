@@ -36,6 +36,7 @@ class Capabilities(BaseModel):
     sandbox_modes: list[str] = ["workspace-only"]
     browser: dict[str, bool] = {"playwright": False}
     limits: TargetLimits = TargetLimits()
+    remote_update: bool = False
 
 
 class TargetHello(BaseModel):
@@ -87,6 +88,27 @@ class ExecutionCancel(BaseModel):
     request_id: str
     target_id: str
     issued_at: str
+    signature: str = ""
+
+
+class TargetUpdate(BaseModel):
+    """Core asks a device to update its agent from the Core it is paired with."""
+
+    type: Literal["target.update"] = "target.update"
+    request_id: str
+    target_id: str
+    version: str
+    issued_at: str
+    expires_at: str
+    nonce: str
+    signature: str = ""
+
+
+class TargetUpdateStatus(BaseModel):
+    type: Literal["target.update.status"] = "target.update.status"
+    request_id: str
+    status: Literal["started", "rejected", "failed"]
+    detail: str = ""
     signature: str = ""
 
 

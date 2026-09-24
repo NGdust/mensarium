@@ -7,7 +7,7 @@ const $app = document.getElementById('app');
 const $toasts = document.getElementById('toasts');
 const $layer = document.getElementById('layer');
 
-const state = { system: null, targets: [], tasks: [], shell: null, lastChat: '#/' };
+const state = { system: null, targets: [], tasks: [], shell: null, lastChat: '#/', updates: new Map() };
 let viewCleanups = [];
 let shellCleanups = [];
 
@@ -279,7 +279,7 @@ const isRunning = (s) => statusOf(s)[2];
 const isLocal = (t) => t && t.id === state.system?.local_target_id;
 const fullAccessOf = (t) => t?.capabilities?.full_access || 'disabled';
 const fullAccessBlock = (t) => (fullAccessOf(t) === 'outdated'
-  ? `Агент на устройстве устарел (v${t.agent_version}). Обновите его командой mensarium update на устройстве.`
+  ? `Агент на устройстве устарел (v${t.agent_version}). Обновите его в Настройках → Устройства.`
   : 'Выключен на устройстве: allow_full_access в его конфиге.');
 const devices = () => state.targets.filter((t) => t.status !== 'revoked').sort((a, b) => isLocal(b) - isLocal(a));
 const taskTitle = (t) => ((t.input || '').split('\n')[0] || 'Без названия').slice(0, 80);
@@ -410,6 +410,16 @@ async function refreshData() {
   const [targets, tasks] = await Promise.all([get('/v1/targets'), get('/v1/tasks')]);
   state.targets = targets;
   state.tasks = tasks;
+  for (const [id, pending] of state.updates) {
+    const t = targets.find((x) => x.id === id);
+    if (t && t.status === 'online' && t.agent_version === pending.version) {
+      state.updates.delete(id);
+      toast(`«${t.name}» обновлён до ${pending.version}`);
+    } else if (Date.now() - pending.at > 180000) {
+      state.updates.delete(id);
+      toast(`Не дождались обновления «${t?.name || id}». Проверьте журнал агента на устройстве.`, true);
+    }
+  }
 }
 
 function cleanupAll() {
@@ -1037,8 +1047,29 @@ async function settingsOverview(shell) {
   state.system = s;
   const url = (s.public_url || '').replace(/\/$/, '');
   const logout = h('button', { class: 'btn', onclick: async () => { try { await post('/v1/auth/logout'); } catch { /* noop */ } showLogin(); } }, icon('logout'), 'Выйти');
+  const coreUpdate = h('div', { class: 'hero-update' });
+  get('/v1/system/update').then((info) => {
+    if (!info.available) { if (info.latest) coreUpdate.replaceChildren(h('span', { class: 'market-meta' }, 'Последняя версия')); return; }
+    if (!info.self_update) { coreUpdate.replaceChildren(h('span', { class: 'pill accent' }, `Доступна ${info.latest}`), h('code', {}, 'mensarium update')); return; }
+    coreUpdate.replaceChildren(h('span', { class: 'pill accent' }, `Доступна ${info.latest}`), h('button', { class: 'btn btn-primary btn-sm', onclick: async (e) => {
+      if (!await confirmDialog({ title: `Обновить Core до ${info.latest}?`, text: 'Core скачает версию с mensarium.com и перезапустится. Идущие задачи встанут на паузу, интерфейс переподключится сам.', action: 'Обновить' })) return;
+      e.target.disabled = true;
+      try {
+        await post('/v1/system/update');
+        toast('Core обновляется, страница перезагрузится сама');
+        const started = Date.now();
+        const poll = setInterval(async () => {
+          try {
+            const r = await fetch('/healthz').then((x) => x.json());
+            if (r.version !== s.version) { clearInterval(poll); location.reload(); }
+          } catch { /* restarting */ }
+          if (Date.now() - started > 180000) { clearInterval(poll); toast('Core не ответил новой версией за 3 минуты. Проверьте mensarium service logs core.', true); }
+        }, 2000);
+      } catch (err) { fail(err); e.target.disabled = false; }
+    } }, icon('refresh'), 'Обновить'));
+  }).catch(() => {});
   page(shell, 'Обзор', 'Где доступен главный агент и как проверить, что устройства говорят именно с ним.', logout,
-    h('div', { class: 'hero' }, orb('md'), h('div', {}, h('h2', {}, 'Mensarium Core'), h('p', {}, `Версия ${s.version}`))),
+    h('div', { class: 'hero' }, orb('md'), h('div', { class: 'hero-text' }, h('h2', {}, 'Mensarium Core'), h('p', {}, `Версия ${s.version}`)), coreUpdate),
     section('Подключение', null, h('div', { class: 'rows' },
       row('Адрес Core', 'Им пользуются браузер и устройства.', cmdValue(url), true),
       row('Отпечаток ключа', 'Сверьте с тем, что показал установщик на устройстве при сопряжении.', s.core_key_fingerprint, true),
@@ -1134,6 +1165,8 @@ async function settingsDevices(shell) {
       try { await post(`/v1/targets/${t.id}/revoke`); toast('Доступ отозван'); await refresh(true); } catch (err) { fail(err); }
     } }, 'Отозвать доступ');
     return h('div', { class: 'device-body' },
+      h('div', { class: 'device-sub' }, 'Агент устройства'),
+      agentControl(t),
       h('div', { class: 'device-sub' }, 'Инструменты агента', h('span', {}, 'Выключенный инструмент агент на этом устройстве не видит и вызвать не может.')),
       h('div', { class: 'tool-rows' }, (caps.tools || []).map((tool) => {
         const [name, desc] = TOOL_INFO[tool] || [tool, ''];
@@ -1175,9 +1208,33 @@ async function settingsDevices(shell) {
     );
   }
 
+  function agentControl(t) {
+    const caps = t.capabilities || {};
+    const outdated = t.agent_version && s.version && t.agent_version !== s.version;
+    const pending = state.updates.get(t.id);
+    if (isLocal(t)) return h('p', { class: 'device-text' }, `Версия ${t.agent_version}. Встроенное устройство обновляется вместе с Core.`);
+    if (pending) return h('div', { class: 'status' }, h('span', { class: 'dot accent live' }), `Обновляется до ${pending.version}: агент скачивает версию с Core и перезапускается`);
+    if (!outdated) return h('p', { class: 'device-text' }, `Версия ${t.agent_version}, как у Core.`);
+    if (!caps.remote_update) {
+      return h('p', { class: 'device-text' }, `Версия ${t.agent_version}, у Core ${s.version}. Этот агент не умеет обновляться удалённо: один раз выполните на устройстве `, h('code', {}, 'mensarium update'), ', дальше обновление будет доступно здесь.');
+    }
+    if (t.status !== 'online') return h('p', { class: 'device-text' }, `Версия ${t.agent_version}, у Core ${s.version}. Обновить можно, когда устройство будет в сети.`);
+    const btn = h('button', { class: 'btn btn-primary btn-sm', onclick: async () => {
+      btn.disabled = true;
+      try {
+        const r = await post(`/v1/targets/${t.id}/update`);
+        state.updates.set(t.id, { version: r.version, at: Date.now() });
+        toast(`«${t.name}» обновляется`);
+        signature = '';
+        render();
+      } catch (err) { fail(err); btn.disabled = false; }
+    } }, icon('refresh'), `Обновить до ${s.version}`);
+    return h('div', { class: 'device-update' }, btn, h('span', { class: 'device-text' }, `сейчас ${t.agent_version}`));
+  }
+
   function render() {
     const targets = devices();
-    const sig = JSON.stringify([targets, [...expanded]]);
+    const sig = JSON.stringify([targets, [...expanded], [...state.updates.keys()]]);
     if (sig === signature) return;
     signature = sig;
     if (!targets.length) {
@@ -1201,7 +1258,8 @@ async function settingsDevices(shell) {
         h('div', { class: 'row-text' },
           h('div', { class: 'row-title' }, t.name,
             isLocal(t) ? h('span', { class: 'pill accent', title: 'Машина, на которой установлен Core. Подключена всегда.' }, 'Core') : null,
-            outdated ? h('span', { class: 'pill warn', title: 'Выполните на устройстве: mensarium update' }, `v${t.agent_version}, есть обновление`) : null),
+            state.updates.has(t.id) ? h('span', { class: 'pill accent' }, 'обновляется')
+              : outdated ? h('span', { class: 'pill warn', title: 'Откройте устройство, чтобы обновить агент' }, `v${t.agent_version}, есть обновление`) : null),
           h('div', { class: 'row-desc' }, [
             t.status === 'online' ? t.platform : `${t.platform} · был в сети ${relTime(t.last_seen_at)}`,
             `инструменты: ${enabled} из ${tools.length}`,
@@ -1605,6 +1663,7 @@ async function settingsAudit(shell) {
     'extension.installed': 'Установлен пакет', 'extension.toggled': 'Пакет включён или выключен', 'extension.removed': 'Удалён пакет',
     'tool.core': 'Инструмент Core',
     'memory.note_created': 'Создана заметка', 'memory.note_updated': 'Изменена заметка', 'memory.note_deleted': 'Удалена заметка',
+    'target.update': 'Обновление агента устройства', 'core.update': 'Обновление Core',
     'memory.dreamed': 'Сновидение', 'memory.dream_started': 'Запущено сновидение', 'memory.dream_settings': 'Настройки сновидений',
   };
   const ACTORS = { core: 'Core', target: 'устройство', user: 'вы' };
@@ -1624,6 +1683,7 @@ async function settingsAudit(shell) {
       p.enabled != null && `${p.tool}: ${p.enabled ? 'включён' : 'выключен'}`,
       p.reason && policyText(reasonText(p.reason)),
       p.version && `версия ${p.version}`,
+      p.to && `${p.from || '?'} → ${p.to}`,
       p.task_id && (title ? `«${taskTitle(title)}»` : 'удалённый чат'),
     ].filter(Boolean).join(' · ');
   };

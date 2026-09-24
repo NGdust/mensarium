@@ -7,6 +7,7 @@ import socket
 import sys
 import time
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import websockets
@@ -25,6 +26,8 @@ from mensarium.contracts.protocol import (
     TargetHello,
     TargetInfo,
     TargetPolicy,
+    TargetUpdate,
+    TargetUpdateStatus,
     ToolOutput,
     policy_snapshot_hash,
 )
@@ -39,6 +42,11 @@ TOOLS = ["files.list", "files.read", "files.search", "git.status", "git.diff", "
 APPROVAL_REQUIRED = {"shell.exec"}
 CLOCK_SKEW = timedelta(seconds=30)
 FATAL_CLOSE_CODES = {4401, 4403}
+
+
+def updater() -> Path:
+    """The `mensarium` command of this installation; remote updates need an install.sh setup."""
+    return Path(sys.executable).parent / "mensarium"
 
 
 def platform_id() -> str:
@@ -82,6 +90,7 @@ class TargetAgent:
         self.running: dict[str, asyncio.Task[None]] = {}
         self.send_lock = asyncio.Lock()
         self.ws: Any = None
+        self.updating: asyncio.Task[None] | None = None
 
     def hello(self) -> TargetHello:
         return TargetHello(
@@ -96,6 +105,7 @@ class TargetAgent:
                 tools=TOOLS,
                 shells=[os.path.basename(os.environ.get("SHELL", "sh"))],
                 limits=self.cfg.limits,
+                remote_update=self.cfg.allow_remote_update and updater().exists(),
             ),
             policy=self.policy,
         )
@@ -159,6 +169,11 @@ class TargetAgent:
             task = asyncio.create_task(self._execute(req, msg))
             self.running[req.request_id] = task
             task.add_done_callback(lambda _: self.running.pop(req.request_id, None))
+        elif kind == "target.update":
+            if self.updating and not self.updating.done():
+                await self._send_status(str(msg.get("request_id")), "rejected", "an update is already running")
+                return
+            self.updating = asyncio.create_task(self._update(msg))
         elif kind == "execution.cancel":
             if not verify(self.cfg.core_public_key, msg):
                 log.warning("unsigned execution.cancel ignored")
@@ -168,7 +183,8 @@ class TargetAgent:
             if running:
                 running.cancel()
 
-    def _check_request(self, req: ExecutionRequest, raw: dict[str, Any]) -> str | None:
+    def _check_signed(self, req: ExecutionRequest | TargetUpdate, raw: dict[str, Any]) -> str | None:
+        """Signature, addressee, freshness and replay checks shared by every command from the Core."""
         if not verify(self.cfg.core_public_key, raw):
             return "invalid signature"
         if req.target_id != self.cfg.target_id:
@@ -184,6 +200,11 @@ class TargetAgent:
         if req.nonce in self.seen_nonces:
             return "replayed nonce"
         self.seen_nonces[req.nonce] = mono + (expires - now).total_seconds() + CLOCK_SKEW.total_seconds()
+        return None
+
+    def _check_request(self, req: ExecutionRequest, raw: dict[str, Any]) -> str | None:
+        if reason := self._check_signed(req, raw):
+            return reason
         if req.policy_snapshot_hash != self.policy_hash:
             return "policy snapshot mismatch; core must refresh target policy"
         if req.tool not in TOOLS:
@@ -192,6 +213,44 @@ class TargetAgent:
         if req.tool in APPROVAL_REQUIRED and not req.approval_ref and not full_access:
             return f"tool {req.tool} requires an approval reference (full access is disabled on this device)"
         return None
+
+    async def _update(self, raw: dict[str, Any]) -> None:
+        """Run `mensarium update` in its own session; a service restart replaces this process, otherwise re-exec."""
+        try:
+            req = TargetUpdate.model_validate(raw)
+        except ValidationError as e:
+            log.warning("invalid target.update", extra={"error": str(e)})
+            return
+        reason = self._check_signed(req, raw)
+        if not reason and not self.cfg.allow_remote_update:
+            reason = "remote updates are disabled on this device (allow_remote_update)"
+        if not reason and not updater().exists():
+            reason = "this agent was not installed with install.sh; update it manually"
+        self.audit.append({"request_id": req.request_id, "action": "update", "version": req.version, "status": "rejected" if reason else "started", "error": reason})
+        await self._send_status(req.request_id, "rejected" if reason else "started", reason or "")
+        if reason:
+            log.warning("update request rejected", extra={"reason": reason})
+            return
+        log.info("updating agent", extra={"version": req.version, "server": self.cfg.server})
+        proc = await asyncio.create_subprocess_exec(
+            str(updater()), "update", "--source", self.cfg.server, start_new_session=True, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+        )
+        out, _ = await proc.communicate()
+        if proc.returncode != 0:
+            detail = out.decode(errors="replace").strip()[-400:]
+            log.error("update failed", extra={"output": detail})
+            await self._send_status(req.request_id, "failed", detail)
+            return
+        log.info("update installed; restarting the agent")
+        os.execv(sys.executable, [sys.executable, *sys.argv])
+
+    async def _send_status(self, request_id: str, status: str, detail: str) -> None:
+        msg = TargetUpdateStatus(request_id=request_id, status=status, detail=detail)  # type: ignore[arg-type]
+        msg.signature = sign(self.key, msg.model_dump())
+        try:
+            await self._send(msg.model_dump())
+        except websockets.ConnectionClosed:
+            pass
 
     async def _execute(self, req: ExecutionRequest, raw: dict[str, Any]) -> None:
         started = now_iso()

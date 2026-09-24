@@ -30,13 +30,15 @@ from mensarium.core.extensions import ExtensionError, check_conflicts, listing, 
 from mensarium.core.local_target import ensure_local_target, local_target_paths
 from mensarium.core.memory import KINDS, Memory, NoteError
 from mensarium.core.orchestrator import Orchestrator, TaskError, full_access
+from mensarium.core.releases import ReleaseError, fetch_latest, spawn_update, updater
 from mensarium.core.repo import Repo
-from mensarium.core.target_hub import TargetHub
+from mensarium.core.target_hub import TargetHub, TargetUnavailable
 from mensarium.llm_providers.factory import build_provider
 from mensarium.llm_providers.openai_compat import OpenAICompatibleProvider
 from mensarium.shared.crypto import fingerprint, load_or_create_private_key, public_key_b64
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import iso_in, now_iso, parse_iso, utcnow
+from mensarium.shared.versions import parse_version
 from mensarium.target.agent import TargetAgent
 from mensarium.tool_runtime.registry import REGISTRY
 
@@ -367,6 +369,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
                 "allow_full_access": policy.get("allow_full_access", False),
                 "full_access": full_access(t),
                 "disabled_tools": t.get("disabled_tools") or [],
+                "remote_update": bool(caps.get("remote_update")) and t["id"] != c.local_target_id,
             },
         }
 
@@ -406,6 +409,53 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             c.workspace_id, "user", "target.tool", {"target_id": target_id, "tool": body.tool, "enabled": body.enabled}
         )
         return target_view(c, {**t, "disabled_tools": sorted(disabled)})
+
+    @app.post("/v1/targets/{target_id}/update")
+    async def update_target(target_id: str, c: Core = Depends(auth)) -> dict[str, str]:
+        t = await c.repo.get_target(target_id)
+        if not t or t["status"] == "revoked":
+            raise HTTPException(404, "target not found")
+        if target_id == c.local_target_id:
+            raise HTTPException(409, "the Core device is updated together with the Core")
+        if not (t.get("capabilities") or {}).get("remote_update"):
+            raise HTTPException(409, "this agent cannot be updated remotely; run `mensarium update` on the device")
+        try:
+            status = await c.hub.request_update(target_id, __version__, c.cfg.execution.request_ttl_s)
+        except TargetUnavailable as e:
+            raise HTTPException(409, str(e)) from e
+        await c.repo.audit(
+            c.workspace_id,
+            "user",
+            "target.update",
+            {"target_id": target_id, "from": t["agent_version"], "to": __version__, "status": status.status, "reason": status.detail or None},
+        )
+        if status.status != "started":
+            raise HTTPException(409, status.detail or f"update {status.status}")
+        return {"status": status.status, "version": __version__}
+
+    @app.get("/v1/system/update")
+    async def core_update_info(c: Core = Depends(auth)) -> dict[str, Any]:
+        info: dict[str, Any] = {"current": __version__, "latest": None, "available": False, "self_update": updater() is not None}
+        try:
+            latest = (await fetch_latest(c.cfg.update_url))["version"]
+        except ReleaseError as e:
+            return info | {"error": str(e)}
+        return info | {"latest": latest, "available": parse_version(latest) > parse_version(__version__)}
+
+    @app.post("/v1/system/update")
+    async def core_update(c: Core = Depends(auth)) -> dict[str, str]:
+        script = updater()
+        if script is None:
+            raise HTTPException(409, "this Core runs from a source checkout; update it with git")
+        try:
+            latest = (await fetch_latest(c.cfg.update_url))["version"]
+        except ReleaseError as e:
+            raise HTTPException(502, str(e)) from e
+        if parse_version(latest) <= parse_version(__version__):
+            raise HTTPException(409, f"version {__version__} is already the latest")
+        await c.repo.audit(c.workspace_id, "user", "core.update", {"from": __version__, "to": latest})
+        spawn_update(script, c.cfg.update_url)
+        return {"status": "started", "version": latest}
 
     @app.post("/v1/targets/{target_id}/revoke")
     async def revoke_target(target_id: str, c: Core = Depends(auth)) -> dict[str, bool]:

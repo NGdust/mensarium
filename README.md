@@ -29,12 +29,12 @@ UI Core показывает готовую команду для target — о�
 | `mensarium setup` | Интерактивная настройка Core или Target |
 | `mensarium status` | Что установлено и запущено |
 | `mensarium version` | Версия, роли на этой машине и доступное обновление |
-| `mensarium update` | Обновиться: Core с mensarium.com, устройство со своего Core (`--check` только проверить) |
+| `mensarium update` | Обновиться: Core с mensarium.com, устройство со своего Core (`--check` только проверить). Из web UI: Обзор → «Обновить» для Core, Устройства → «Обновить до …» для агентов |
 | `mensarium core serve` | Запуск Core в foreground |
 | `mensarium core token` | Токен для входа в web UI |
 | `mensarium core pair-code` | Одноразовый код пары (10 минут) |
 | `mensarium core backup -o file.pab` / `restore file.pab` | Зашифрованный перенос Core на другой хост |
-| `mensarium target pair --server URL --code CODE --root DIR` | Пара без мастера |
+| `mensarium target pair --server URL --code CODE --root DIR` | Пара без мастера (`--no-full-access`, `--no-remote-update` — запреты на устройстве) |
 | `mensarium target run` | Запуск Target Agent в foreground |
 | `mensarium service install\|restart\|logs core\|target` | Управление сервисом |
 | `mensarium uninstall --purge` | Удалить сервисы и данные |

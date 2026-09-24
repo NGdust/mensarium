@@ -24,6 +24,7 @@ class TargetConfig(BaseModel):
     roots: list[str]
     command_allowlist: list[str] = Field(default_factory=lambda: list(DEFAULT_COMMAND_ALLOWLIST))
     allow_full_access: bool = True
+    allow_remote_update: bool = True
     limits: TargetLimits = Field(default_factory=TargetLimits)
 
     @property

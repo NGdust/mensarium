@@ -14,6 +14,8 @@ MODELS: dict[str, type[BaseModel]] = {
     "execution.request": protocol.ExecutionRequest,
     "execution.cancel": protocol.ExecutionCancel,
     "execution.result": protocol.ExecutionResult,
+    "target.update": protocol.TargetUpdate,
+    "target.update.status": protocol.TargetUpdateStatus,
     "pair.request": protocol.PairRequest,
     "pair.response": protocol.PairResponse,
     "llm.chat_request": llm.ChatRequest,

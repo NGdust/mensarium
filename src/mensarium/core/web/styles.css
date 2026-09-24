@@ -413,6 +413,10 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .hero { display: flex; align-items: center; gap: 20px; padding: 22px 24px; border-radius: var(--r-lg); border: 1px solid var(--line); background: rgba(22, 20, 28, 0.7); }
 .hero h2 { margin: 0 0 4px; font-size: 20px; font-weight: 500; letter-spacing: -0.015em; }
 .hero p { margin: 0; color: var(--muted); font-size: 14px; }
+.hero-text { flex: 1; }
+.hero-update { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.hero-update code { font-size: 13px; color: var(--text-2); }
+.device-update { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
 .rows { border: 1px solid var(--line); border-radius: var(--r-lg); background: rgba(22, 20, 28, 0.7); overflow: hidden; }
 .row { display: flex; align-items: center; gap: 18px; padding: 15px 20px; border-top: 1px solid var(--line); }
