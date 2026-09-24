@@ -357,6 +357,17 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .mode-item > .icon:first-child { margin-top: 2px; }
 .mi-text { display: flex; flex-direction: column; gap: 2px; flex: 1; }
 .mi-desc { font-size: 12.5px; line-height: 1.4; color: var(--muted); white-space: normal; }
+.chip-model .chip-label { max-width: 190px; }
+.model-pop { width: 320px; }
+.popover-search { position: relative; margin-bottom: 4px; }
+.popover-search .icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); width: 15px; height: 15px; color: var(--muted); }
+.popover-search input { padding: 8px 12px 8px 33px; font-size: 14px; background: var(--frame); }
+.model-list { max-height: min(320px, 50vh); overflow-y: auto; }
+.mi-model { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 13px var(--mono); }
+.popover-empty { padding: 10px; color: var(--muted); font-size: 13.5px; }
+.row-extra.model-grid { padding: 16px 20px; margin: 0; }
+.model-pill { cursor: pointer; }
+.model-pill:hover:not(.accent) { border-color: rgba(255, 255, 255, 0.24); color: var(--text); }
 
 /* new chat */
 .welcome { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 0 28px 7vh; overflow-y: auto; }

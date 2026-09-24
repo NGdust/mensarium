@@ -88,7 +88,9 @@ class Orchestrator:
             await self.bus.emit(task["id"], "task.status", {"status": "PAUSED", "reason": "core restarted"})
         await self.repo.expire_open_approvals()
 
-    async def create_task(self, profile_id: str, target_id: str, text: str, mode: AccessMode = "ask") -> dict[str, Any]:
+    async def create_task(
+        self, profile_id: str, target_id: str, text: str, mode: AccessMode = "ask", model: str | None = None
+    ) -> dict[str, Any]:
         profile = await self.load_profile(profile_id)
         target = await self.repo.get_target(target_id)
         if not target or target["status"] == "revoked":
@@ -109,6 +111,7 @@ class Orchestrator:
                 "input": text,
                 "status": "NEW",
                 "mode": mode,
+                "model": model,
                 "budget": profile.limits.model_dump(),
                 "trace_id": new_id("tr"),
                 "created_at": now,
@@ -152,6 +155,14 @@ class Orchestrator:
                 approval = await self.repo.get_approval(approval_id)
                 if approval and approval["task_id"] == task_id and not waiter.done():
                     await self.decide(approval_id, "approve", "full access enabled", confirm=True)
+        return await self._task(task_id)
+
+    async def set_model(self, task_id: str, model: str) -> dict[str, Any]:
+        task = await self._task(task_id)
+        if task.get("model") != model:
+            await self.repo.update_task(task_id, {"model": model})
+            await self.repo.audit(self.workspace_id, "user", "task.model", {"task_id": task_id, "model": model})
+            await self.bus.emit(task_id, "task.model", {"model": model})
         return await self._task(task_id)
 
     async def resume(self, task_id: str) -> dict[str, Any]:
@@ -281,10 +292,10 @@ class Orchestrator:
         started = time.monotonic()
         llm_steps = tool_calls = 0
         tools = [REGISTRY[t].definition() for t in profile.allowed_tools if t in REGISTRY]
-        model = profile.llm.model or self.provider.default_model
 
         while True:
             self._check_control(task_id)
+            model = (await self._task(task_id)).get("model") or profile.llm.model or self.provider.default_model
             if time.monotonic() - started > profile.limits.max_wall_time_s:
                 raise Stop("FAILED", "wall time budget exhausted")
             if llm_steps >= profile.limits.max_steps:

@@ -14,13 +14,13 @@ import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from mensarium import __version__
 from mensarium.agent_core.profile import AgentProfile, builtin_profiles
 from mensarium.contracts.protocol import AccessMode, PairRequest, PairResponse
 from mensarium.core import distribution, pairing
-from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secret
+from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secret, save_config
 from mensarium.core.db import Database
 from mensarium.core.events import EventBus
 from mensarium.core.local_target import ensure_local_target, local_target_paths
@@ -64,10 +64,15 @@ class TaskCreate(BaseModel):
     input: str
     profile_id: str = "coding-agent-v1"
     mode: AccessMode = "ask"
+    model: str | None = Field(None, min_length=1, max_length=200)
 
 
 class ModeBody(BaseModel):
     mode: AccessMode
+
+
+class ModelBody(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
 
 
 class MessageBody(BaseModel):
@@ -270,6 +275,14 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             },
         }
 
+    @app.put("/v1/system/model")
+    async def set_default_model(body: ModelBody, c: Core = Depends(auth)) -> dict[str, str]:
+        c.cfg.llm.providers[c.cfg.llm.active_provider].default_model = body.model
+        await asyncio.to_thread(save_config, c.paths, c.cfg)
+        c.provider.default_model = body.model
+        await c.repo.audit(c.workspace_id, "user", "llm.default_model", {"model": body.model})
+        return {"model": body.model}
+
     @app.get("/v1/models")
     async def models(c: Core = Depends(auth)) -> list[dict[str, str]]:
         try:
@@ -356,7 +369,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         return {"id": profile.id}
 
     def task_view(t: dict[str, Any]) -> dict[str, Any]:
-        keys = ("id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result", "mode")
+        keys = ("id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result", "mode", "model")
         return {k: t.get(k) for k in keys} | {"created_at": t["created_at"], "updated_at": t["updated_at"]}
 
     @app.get("/v1/tasks")
@@ -368,7 +381,9 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         if not body.input.strip():
             raise HTTPException(422, "input is empty")
         try:
-            return task_view(await c.orchestrator.create_task(body.profile_id, body.target_id, body.input, body.mode))
+            return task_view(
+                await c.orchestrator.create_task(body.profile_id, body.target_id, body.input, body.mode, body.model)
+            )
         except TaskError as e:
             raise task_error(e) from e
 
@@ -383,6 +398,13 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     async def set_mode(task_id: str, body: ModeBody, c: Core = Depends(auth)) -> dict[str, Any]:
         try:
             return task_view(await c.orchestrator.set_mode(task_id, body.mode))
+        except TaskError as e:
+            raise task_error(e) from e
+
+    @app.post("/v1/tasks/{task_id}/model")
+    async def set_task_model(task_id: str, body: ModelBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return task_view(await c.orchestrator.set_model(task_id, body.model))
         except TaskError as e:
             raise task_error(e) from e
 

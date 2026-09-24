@@ -86,6 +86,7 @@ const ICONS = {
   ban: '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
   check: '<path d="m5 12 5 5 9-10"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+  robot: '<rect x="4.5" y="8" width="15" height="11" rx="3"/><path d="M12 8V5.2M2.5 12.5v3M21.5 12.5v3M9.5 16h5"/><circle cx="12" cy="4.2" r="1"/><circle cx="9.3" cy="12.4" r=".9"/><circle cx="14.7" cy="12.4" r=".9"/>',
 };
 
 function icon(name) {
@@ -273,14 +274,18 @@ function statusPill(status) {
 
 function closeLayer() { $layer.replaceChildren(); }
 
-function openPopover(anchor, items) {
+function openPopover(anchor, items, cls = '') {
   closeLayer();
-  const pop = h('div', { class: 'popover', role: 'menu' }, items);
+  const pop = h('div', { class: `popover ${cls}`, role: 'menu' }, items);
   $layer.append(h('div', { style: 'position:fixed;inset:0;z-index:49', onclick: closeLayer }), pop);
-  const r = anchor.getBoundingClientRect();
-  const top = r.top - pop.offsetHeight - 8 > 8 ? r.top - pop.offsetHeight - 8 : r.bottom + 8;
-  pop.style.top = `${top}px`;
-  pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8))}px`;
+  const place = () => {
+    const r = anchor.getBoundingClientRect();
+    const top = r.top - pop.offsetHeight - 8 > 8 ? r.top - pop.offsetHeight - 8 : r.bottom + 8;
+    pop.style.top = `${top}px`;
+    pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8))}px`;
+  };
+  place();
+  return place;
 }
 
 function openModal(...content) {
@@ -570,6 +575,55 @@ function modeSwitch(initial, { target, onPick }) {
   return { el: chip, effective, refresh: render, set(value) { mode = value; render(); } };
 }
 
+// Chip + searchable popover to pick the LLM model; an empty value means the Core default.
+const defaultModel = () => state.system?.provider?.model || '';
+function loadModels() {
+  if (!state.models) state.models = get('/v1/models').catch((err) => { state.models = null; throw err; });
+  return state.models;
+}
+
+function modelSwitch(initial, { onPick }) {
+  let model = initial || '';
+  const label = h('span', { class: 'chip-label' });
+  const chip = h('button', { class: 'chip chip-compact chip-model', title: 'Модель', 'aria-haspopup': 'menu' });
+  const render = () => {
+    label.textContent = model || defaultModel() || 'Модель';
+    chip.title = `Модель: ${label.textContent}`;
+    chip.replaceChildren(icon('robot'), label, icon('chevron'));
+  };
+  chip.addEventListener('click', async () => {
+    const search = h('input', { type: 'search', placeholder: 'Найти модель', 'aria-label': 'Найти модель' });
+    const list = h('div', { class: 'model-list' }, h('div', { class: 'popover-empty' }, 'Загружаем список...'));
+    const place = openPopover(chip, [h('div', { class: 'popover-search' }, icon('search'), search), list], 'model-pop');
+    search.focus();
+    let ids;
+    try { ids = (await loadModels()).map((m) => m.id); } catch (err) { list.replaceChildren(h('div', { class: 'popover-empty' }, err.message)); return; }
+    const current = model || defaultModel();
+    const renderList = () => {
+      const q = search.value.trim().toLowerCase();
+      const shown = ids.filter((id) => !q || id.toLowerCase().includes(q));
+      list.replaceChildren(...(shown.length ? shown.map((id) => h('button', {
+        class: `menu-item${id === current ? ' selected' : ''}`,
+        role: 'menuitemradio',
+        'aria-checked': String(id === current),
+        onclick: async () => {
+          closeLayer();
+          if (id === current) return;
+          try { await onPick(id); model = id; render(); } catch (err) { fail(err); }
+        },
+      }, h('span', { class: 'mi-model' }, id), id === defaultModel() ? h('span', { class: 'popover-sub' }, 'по умолчанию') : null, id === current ? icon('check') : null))
+        : [h('div', { class: 'popover-empty' }, 'Ничего не нашлось')]));
+      place();
+    };
+    search.addEventListener('input', renderList);
+    search.addEventListener('keydown', (e) => { if (e.key === 'Enter') list.querySelector('.menu-item')?.click(); });
+    renderList();
+    list.querySelector('.selected')?.scrollIntoView({ block: 'nearest' });
+  });
+  render();
+  return { el: chip, value: () => model, set(value) { model = value || ''; render(); } };
+}
+
 // ---------- new chat ----------
 
 async function viewNewChat() {
@@ -608,12 +662,14 @@ async function viewNewChat() {
   });
   hint.textContent = hintText();
 
+  const modelCtl = modelSwitch('', { onPick: async () => {} });
+
   const c = composer({
     placeholder: 'Опишите задачу для агента',
-    chips: [targetChip, h('span', { class: 'divider' }), modeCtl.el],
+    chips: [targetChip, h('span', { class: 'divider' }), modeCtl.el, modelCtl.el],
     onSend: async (text) => {
       if (!selected) throw new Error('Выберите устройство, на котором агент будет работать');
-      const task = await post('/v1/tasks', { target_id: selected.id, input: text, mode: modeCtl.effective() });
+      const task = await post('/v1/tasks', { target_id: selected.id, input: text, mode: modeCtl.effective(), model: modelCtl.value() || undefined });
       state.tasks.unshift(task);
       go(`#/chat/${task.id}`);
     },
@@ -667,9 +723,12 @@ async function viewChat(taskId) {
     target,
     onPick: async (value) => { await post(`/v1/tasks/${taskId}/mode`, { mode: value }); localStorageSet('mode', value); },
   });
+  const modelCtl = modelSwitch(task.model, {
+    onPick: (value) => post(`/v1/tasks/${taskId}/model`, { model: value }),
+  });
   const c = composer({
     placeholder: 'Ответить агенту',
-    chips: [modeCtl.el],
+    chips: [modeCtl.el, modelCtl.el],
     onSend: (text) => post(`/v1/tasks/${taskId}/messages`, { input: text }),
   });
 
@@ -815,6 +874,10 @@ async function viewChat(taskId) {
         modeCtl.set(p.mode);
         note(MODES[p.mode]?.icon || 'shield', `Режим: ${(MODES[p.mode]?.label || p.mode).toLowerCase()}`);
         break;
+      case 'task.model':
+        modelCtl.set(p.model);
+        note('robot', `Модель: ${p.model}`);
+        break;
       case 'llm.request':
         thinking.set(p.step, agentMsg(h('span', { class: 'thinking' }, 'Думает'), true));
         break;
@@ -885,7 +948,7 @@ async function viewChat(taskId) {
 
 const SETTINGS = [
   ['overview', 'pulse', 'Обзор'],
-  ['model', 'cpu', 'Модель'],
+  ['model', 'robot', 'Модель'],
   ['devices', 'laptop', 'Устройства'],
   ['profiles', 'layers', 'Профили'],
   ['audit', 'list', 'Журнал действий'],
@@ -971,24 +1034,42 @@ async function settingsOverview(shell) {
 
 async function settingsModel(shell) {
   const s = await get('/v1/system');
+  state.system = s;
   const p = s.provider || {};
   const health = p.health || {};
   const providerName = { ollama_cloud: 'Ollama Cloud', ollama_local: 'Локальный Ollama', llama_cpp: 'llama.cpp' }[p.name] || p.name;
+  const current = h('span', {}, p.model);
   const list = h('div', { class: 'rows' }, h('div', { class: 'empty' }, 'Загружаем список...'));
   page(shell, 'Модель', 'Через какого провайдера и какую модель агент думает. Ключ API хранится только на сервере Core.', null,
     h('div', { class: 'rows' },
       row('Провайдер', null, providerName),
       row('Адрес API', null, p.base_url, true),
-      row('Модель по умолчанию', h('span', {}, 'Меняется командой ', h('code', {}, 'mensarium setup'), ' на сервере Core.'), p.model, true),
+      row('Модель по умолчанию', 'Для новых чатов. В самом чате модель меняется кнопкой с роботом в поле ввода.', h('span', { class: 'status' }, icon('robot'), current), true),
       row('Состояние', health.ok ? null : health.detail, h('span', { class: 'status' }, h('span', { class: `dot ${health.ok ? 'ok' : 'danger'}` }), health.ok ? 'Доступен' : 'Недоступен')),
     ),
-    section('Доступные модели', 'Список, который отдаёт провайдер.', list),
+    section('Доступные модели', 'Нажмите на модель, чтобы сделать её моделью по умолчанию.', list),
   );
-  try {
-    const models = await get('/v1/models');
-    list.replaceChildren(models.length
-      ? h('div', { class: 'row-extra', style: 'padding:16px 20px;margin:0' }, models.map((m) => h('span', { class: `pill tag${m.id === p.model ? ' accent' : ''}` }, m.id)))
+  const render = (ids) => {
+    list.replaceChildren(ids.length
+      ? h('div', { class: 'row-extra model-grid' }, ids.map((id) => h('button', {
+        class: `pill tag model-pill${id === state.system.provider.model ? ' accent' : ''}`,
+        'aria-pressed': String(id === state.system.provider.model),
+        onclick: async () => {
+          if (id === state.system.provider.model) return;
+          try {
+            await api('/v1/system/model', { method: 'PUT', body: JSON.stringify({ model: id }) });
+            state.system.provider.model = id;
+            current.textContent = id;
+            toast(`Модель по умолчанию: ${id}`);
+            render(ids);
+          } catch (err) { fail(err); }
+        },
+      }, id)))
       : h('div', { class: 'empty' }, 'Провайдер не вернул ни одной модели.'));
+  };
+  try {
+    state.models = null;
+    render((await loadModels()).map((m) => m.id));
   } catch (err) {
     list.replaceChildren(h('div', { class: 'empty' }, err.message));
   }
@@ -1060,6 +1141,7 @@ async function settingsAudit(shell) {
     'target.paired': 'Устройство сопряжено', 'target.revoked': 'Доступ устройства отозван', 'pairing.code_created': 'Создан код сопряжения',
     'core.started': 'Core запущен', 'task.cancel': 'Отмена задачи', 'task.pause': 'Пауза задачи', 'task.resume': 'Задача продолжена',
     'task.deleted': 'Чат удалён', 'task.mode': 'Смена режима доступа', 'profile.imported': 'Импортирован профиль',
+    'task.model': 'Смена модели в чате', 'llm.default_model': 'Смена модели по умолчанию',
   };
   const ACTORS = { core: 'Core', target: 'устройство', user: 'вы' };
   const describe = (p) => {
@@ -1070,6 +1152,7 @@ async function settingsAudit(shell) {
       p.status && (EXEC_STATUS[p.status] || statusOf(p.status)[0]),
       p.exit_code != null && `код ${p.exit_code}`,
       p.mode && (MODES[p.mode]?.label || p.mode),
+      p.model,
       p.reason && policyText(reasonText(p.reason)),
       p.version && `версия ${p.version}`,
       p.task_id && (title ? `«${taskTitle(title)}»` : 'удалённый чат'),

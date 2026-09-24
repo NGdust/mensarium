@@ -4,9 +4,9 @@ from typing import Any
 
 import aiosqlite
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
-COLUMN_MIGRATIONS = [("tasks", "mode", "TEXT NOT NULL DEFAULT 'ask'")]
+COLUMN_MIGRATIONS = [("tasks", "mode", "TEXT NOT NULL DEFAULT 'ask'"), ("tasks", "model", "TEXT")]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS agent_profiles (
 );
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, profile_id TEXT NOT NULL, target_id TEXT NOT NULL,
-    input TEXT NOT NULL, status TEXT NOT NULL, status_reason TEXT, result TEXT, mode TEXT NOT NULL DEFAULT 'ask',
+    input TEXT NOT NULL, status TEXT NOT NULL, status_reason TEXT, result TEXT, mode TEXT NOT NULL DEFAULT 'ask', model TEXT,
     budget TEXT NOT NULL DEFAULT '{}', policy_snapshot_hash TEXT, trace_id TEXT NOT NULL,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
