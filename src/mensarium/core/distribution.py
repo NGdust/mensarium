@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import tarfile
 from functools import lru_cache
 from pathlib import Path
@@ -25,7 +26,7 @@ def install_script(server_url: str) -> str:
     src = source_dir()
     if src is None:
         raise FileNotFoundError("install.sh not found")
-    text = (src / "install.sh").read_text()
+    text = re.sub(r'(?m)^MENSARIUM_SOURCE_DEFAULT=".*"$', 'MENSARIUM_SOURCE_DEFAULT=""', (src / "install.sh").read_text())
     return text.replace('MENSARIUM_SERVER_DEFAULT=""', f'MENSARIUM_SERVER_DEFAULT="{server_url}"', 1)
 
 

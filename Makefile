@@ -1,4 +1,6 @@
-.PHONY: dev lint test schemas core target
+.PHONY: dev lint test schemas core target dist
+
+DIST_URL ?= https://mensarium.com
 
 dev:
 	uv venv --python 3.12 .venv
@@ -18,3 +20,8 @@ core:
 
 target:
 	.venv/bin/mensarium target run
+
+dist:
+	mkdir -p dist
+	git archive --format=tar.gz --prefix=mensarium/ -o dist/mensarium.tar.gz HEAD
+	sed 's|^MENSARIUM_SOURCE_DEFAULT=""|MENSARIUM_SOURCE_DEFAULT="$(DIST_URL)/dist/mensarium.tar.gz"|' install.sh > dist/install.sh

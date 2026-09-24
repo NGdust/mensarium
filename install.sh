@@ -7,7 +7,8 @@ set -eu
 
 MENSARIUM_SERVER_DEFAULT=""
 MENSARIUM_HOME="${MENSARIUM_HOME:-$HOME/.mensarium}"
-MENSARIUM_SOURCE="${MENSARIUM_SOURCE:-}"
+MENSARIUM_SOURCE_DEFAULT=""
+MENSARIUM_SOURCE="${MENSARIUM_SOURCE:-$MENSARIUM_SOURCE_DEFAULT}"
 BIN_DIR="${MENSARIUM_BIN_DIR:-$HOME/.local/bin}"
 PYTHON_VERSION="3.12"
 
@@ -140,21 +141,26 @@ esac
 
 stage_source() {
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/mensarium-src.XXXXXX")"
+  mkdir -p "$tmp/x"
   if [ -n "$MENSARIUM_SOURCE" ] && [ -d "$MENSARIUM_SOURCE" ]; then
-    (cd "$MENSARIUM_SOURCE" && tar -cf - pyproject.toml install.sh src $( [ -f README.md ] && echo README.md )) | (mkdir -p "$tmp/mensarium" && cd "$tmp/mensarium" && tar -xf -)
+    (cd "$MENSARIUM_SOURCE" && tar -cf - pyproject.toml install.sh src $( [ -f README.md ] && echo README.md )) | (cd "$tmp/x" && tar -xf -)
+  elif [ -n "$MENSARIUM_SOURCE" ] && [ -f "$MENSARIUM_SOURCE" ]; then
+    tar -xzf "$MENSARIUM_SOURCE" -C "$tmp/x"
   elif [ -n "$MENSARIUM_SOURCE" ]; then
     case "$MENSARIUM_SOURCE" in
-      *.git|git@*|*github.com*) git clone --depth 1 "$MENSARIUM_SOURCE" "$tmp/mensarium" ;;
-      *) fetch "$MENSARIUM_SOURCE" "$tmp/src.tar.gz" && tar -xzf "$tmp/src.tar.gz" -C "$tmp" ;;
+      *.git|git@*) git clone --depth 1 "$MENSARIUM_SOURCE" "$tmp/x/repo" ;;
+      *) fetch "$MENSARIUM_SOURCE" "$tmp/src.tar.gz" && tar -xzf "$tmp/src.tar.gz" -C "$tmp/x" ;;
     esac
   else
-    fetch "${SERVER%/}/dist/mensarium.tar.gz" "$tmp/src.tar.gz" && tar -xzf "$tmp/src.tar.gz" -C "$tmp"
+    fetch "${SERVER%/}/dist/mensarium.tar.gz" "$tmp/src.tar.gz" && tar -xzf "$tmp/src.tar.gz" -C "$tmp/x"
   fi
-  [ -f "$tmp/mensarium/pyproject.toml" ] || { echo "source archive has no mensarium/pyproject.toml"; exit 1; }
-  if [ "$(cd "$tmp/mensarium" && pwd -P)" != "$(mkdir -p "$SRC_DIR" && cd "$SRC_DIR" && pwd -P)" ]; then
+  pkg="$(find "$tmp/x" -maxdepth 2 -name pyproject.toml | head -n 1)"
+  [ -n "$pkg" ] || { echo "source has no pyproject.toml"; exit 1; }
+  pkg="$(dirname "$pkg")"
+  if [ "$(cd "$pkg" && pwd -P)" != "$(mkdir -p "$SRC_DIR" && cd "$SRC_DIR" && pwd -P)" ]; then
     rm -rf "$SRC_DIR"
     mkdir -p "$MENSARIUM_HOME"
-    mv "$tmp/mensarium" "$SRC_DIR"
+    mv "$pkg" "$SRC_DIR"
   fi
   rm -rf "$tmp"
 }
@@ -215,8 +221,8 @@ set -- setup
 [ -n "$SERVICE_FLAG" ] && set -- "$@" "$SERVICE_FLAG"
 
 say ""
-if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+if ( : </dev/tty ) 2>/dev/null; then
   MENSARIUM_HOME="$MENSARIUM_HOME" exec "$VENV/bin/mensarium" "$@" </dev/tty
-else
-  MENSARIUM_HOME="$MENSARIUM_HOME" exec "$VENV/bin/mensarium" "$@"
 fi
+say "  No terminal for the interactive setup. Configure later with: ${B}mensarium setup${R}"
+say "  Non-interactive Core setup: ${B}mensarium core configure --help${R}"
