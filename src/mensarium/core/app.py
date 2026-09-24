@@ -361,6 +361,14 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             raise HTTPException(404, "task not found")
         return task_view(t)
 
+    @app.delete("/v1/tasks/{task_id}")
+    async def delete_task(task_id: str, c: Core = Depends(auth)) -> dict[str, bool]:
+        try:
+            await c.orchestrator.delete(task_id)
+        except TaskError as e:
+            raise task_error(e) from e
+        return {"ok": True}
+
     @app.post("/v1/tasks/{task_id}/messages")
     async def post_message(task_id: str, body: MessageBody, c: Core = Depends(auth)) -> dict[str, Any]:
         if not body.input.strip():

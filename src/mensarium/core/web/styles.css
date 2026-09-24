@@ -21,7 +21,6 @@
 
   --user-bubble: #1c2a24;
   --user-bubble-line: #26382f;
-  --user-name: #6ad39a;
   --avatar-user: #2a9d8f;
   --avatar-agent: #e8c35a;
   --avatar-agent-ink: #17161f;
@@ -65,7 +64,6 @@
   --accent-line: rgba(124, 92, 224, 0.5);
   --user-bubble: #e4f4ea;
   --user-bubble-line: #cbe8d6;
-  --user-name: #218a52;
   --ok: #1f9d5c;
   --warn: #b7791f;
   --orange: #c9621d;
@@ -96,7 +94,6 @@
     --accent-line: rgba(124, 92, 224, 0.5);
     --user-bubble: #e4f4ea;
     --user-bubble-line: #cbe8d6;
-    --user-name: #218a52;
     --ok: #1f9d5c;
     --warn: #b7791f;
     --orange: #c9621d;
@@ -141,6 +138,8 @@ code, pre, .mono { font-family: var(--mono); }
 .btn-primary:hover:not(:disabled) { background: var(--accent-strong); }
 .btn-danger { color: var(--danger); }
 .btn-danger:hover:not(:disabled) { background: var(--danger-soft); }
+.btn-danger-solid { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn-danger-solid:hover:not(:disabled) { filter: brightness(1.08); }
 .btn-sm { height: 30px; padding: 0 11px; font-size: 13px; border-radius: 8px; }
 
 .icon-btn {
@@ -237,6 +236,11 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .session:hover { background: var(--surface-hover); text-decoration: none; color: var(--text); }
 .session.active { background: var(--accent-soft); border-color: var(--accent-line); color: var(--text); }
 .session-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-del { width: 24px; height: 24px; margin: -4px -4px -4px 0; opacity: 0; }
+.session-del .icon { width: 15px; height: 15px; }
+.session-del:hover:not(:disabled) { color: var(--danger); background: var(--danger-soft); }
+.session:hover .session-del, .session:focus-within .session-del { opacity: 1; }
+@media (hover: none) { .session-del { opacity: 1; } }
 .sessions-empty { padding: 10px 18px; color: var(--faint); font-size: 13.5px; }
 
 .sidebar-foot { padding: 10px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 6px; }
@@ -279,13 +283,12 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .msg-body { min-width: 0; padding-top: 6px; color: var(--text); }
 .msg.cont { margin-top: 10px; }
 .msg.cont .avatar { visibility: hidden; height: 0; }
-.msg-user .msg-body { padding-top: 0; }
+.msg-user { display: flex; justify-content: flex-end; margin: 22px 0; }
 .bubble-user {
-  display: inline-block; max-width: 100%;
+  max-width: min(78%, 640px);
   background: var(--user-bubble); border: 1px solid var(--user-bubble-line);
   border-radius: var(--r-lg); padding: 13px 20px; white-space: pre-wrap; word-wrap: break-word;
 }
-.msg-author { margin-top: 8px; font-size: 13.5px; font-weight: 500; color: var(--user-name); }
 
 .prose { word-wrap: break-word; }
 .prose p { margin: 0 0 12px; }
@@ -484,6 +487,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
   background: var(--accent-soft); border-radius: var(--r-lg); padding: 18px 10px; margin-bottom: 8px;
 }
 .pair-timer { text-align: center; color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .modal .field-label { font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
 
 /* login */

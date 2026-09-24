@@ -27,6 +27,7 @@ async function api(path, opts = {}) {
 }
 const get = (path) => api(path);
 const post = (path, body) => api(path, { method: 'POST', body: JSON.stringify(body || {}) });
+const del = (path) => api(path, { method: 'DELETE' });
 
 function fail(err) {
   if (err instanceof AuthError) { showLogin(); return; }
@@ -85,6 +86,7 @@ const ICONS = {
   alert: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
   ban: '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
   check: '<path d="m5 12 5 5 9-10"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
 };
 
 function icon(name) {
@@ -267,6 +269,37 @@ function openModal(...content) {
   return modal;
 }
 
+function confirmDialog({ title, text, action, danger = false }) {
+  return new Promise((resolve) => {
+    const done = (value) => { closeLayer(); resolve(value); };
+    const ok = h('button', { class: `btn ${danger ? 'btn-danger-solid' : 'btn-primary'}`, onclick: () => done(true) }, action);
+    openModal(
+      h('div', { class: 'modal-head' }, h('h2', {}, title)),
+      h('p', {}, text),
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: () => done(false) }, 'Отмена'), ok),
+    );
+    $layer.querySelector('.backdrop').addEventListener('click', (e) => { if (e.target === e.currentTarget) resolve(false); });
+    ok.focus();
+  });
+}
+
+async function deleteChat(task) {
+  const yes = await confirmDialog({
+    title: 'Удалить чат?',
+    text: `«${taskTitle(task)}» исчезнет вместе с сообщениями и выводом команд. Если агент ещё работает, задача будет остановлена. Записи в журнале действий сохранятся.`,
+    action: 'Удалить',
+    danger: true,
+  });
+  if (!yes) return;
+  try {
+    await del(`/v1/tasks/${task.id}`);
+    state.tasks = state.tasks.filter((t) => t.id !== task.id);
+    toast('Чат удалён');
+    if (location.hash === `#/chat/${task.id}`) go('#/');
+    else if (state.shell?.renderSessions) state.shell.renderSessions();
+  } catch (err) { fail(err); }
+}
+
 async function openPairing() {
   const body = h('div', {}, h('p', {}, 'Создаём код...'));
   openModal(
@@ -407,7 +440,8 @@ function ensureAppShell() {
         const [, kind, live] = statusOf(t.status);
         return h('a', { class: `session${t.id === activeId ? ' active' : ''}`, href: `#/chat/${t.id}`, title: t.input },
           h('span', { class: `dot ${kind}${live ? ' live' : ''}` }),
-          h('span', { class: 'session-title' }, taskTitle(t)));
+          h('span', { class: 'session-title' }, taskTitle(t)),
+          h('button', { class: 'icon-btn session-del', title: 'Удалить чат', 'aria-label': 'Удалить чат', onclick: (e) => { e.preventDefault(); e.stopPropagation(); deleteChat(t); } }, icon('trash')));
       }));
       group.append(head, items);
       return group;
@@ -552,7 +586,10 @@ async function viewChat(taskId) {
   const statusSlot = h('span', {});
   const btnPause = h('button', { class: 'icon-btn', title: 'Пауза', 'aria-label': 'Пауза', onclick: () => act('pause') }, icon('pause'));
   const btnResume = h('button', { class: 'icon-btn', title: 'Продолжить', 'aria-label': 'Продолжить', onclick: () => act('resume') }, icon('play'));
-  const btnCancel = h('button', { class: 'icon-btn', title: 'Остановить задачу', 'aria-label': 'Остановить', onclick: () => { if (confirm('Остановить задачу? Продолжить её будет нельзя.')) act('cancel'); } }, icon('stop'));
+  const btnCancel = h('button', { class: 'icon-btn', title: 'Остановить задачу', 'aria-label': 'Остановить', onclick: async () => {
+    if (await confirmDialog({ title: 'Остановить задачу?', text: 'Агент прервёт текущий шаг, команда на устройстве будет отменена. Продолжить задачу будет нельзя, но можно написать в этот чат снова.', action: 'Остановить', danger: true })) act('cancel');
+  } }, icon('stop'));
+  const btnDelete = h('button', { class: 'icon-btn', title: 'Удалить чат', 'aria-label': 'Удалить чат', onclick: () => deleteChat(task) }, icon('trash'));
   const thread = h('div', { class: 'thread' });
   const inner = h('div', { class: 'thread-inner' });
   thread.append(inner);
@@ -568,7 +605,7 @@ async function viewChat(taskId) {
 
   shell.main.replaceChildren(
     topbar(shell, [icon('folder'), h('span', {}, task.target_name || 'устройство'), h('span', { class: 'sep' }, '/'), h('span', { class: 'current', title: task.input }, taskTitle(task))],
-      [statusSlot, btnPause, btnResume, btnCancel]),
+      [statusSlot, btnPause, btnResume, btnCancel, btnDelete]),
     thread,
     c.el,
   );
@@ -694,8 +731,7 @@ async function viewChat(taskId) {
     switch (event) {
       case 'user.message':
         lastAgent = false;
-        add(h('div', { class: 'msg msg-user' }, userAvatar(), h('div', { class: 'msg-body' },
-          h('div', { class: 'bubble-user' }, p.text), h('div', { class: 'msg-author' }, 'Администратор'))));
+        add(h('div', { class: 'msg-user' }, h('div', { class: 'bubble-user' }, p.text)));
         break;
       case 'task.status':
         setStatus(p.status);
@@ -903,7 +939,7 @@ async function settingsDevices(shell) {
       const caps = t.capabilities || {};
       const outdated = t.agent_version && s.version && t.agent_version !== s.version;
       const revoke = h('button', { class: 'btn btn-sm btn-danger', onclick: async () => {
-        if (!confirm(`Отозвать «${t.name}»? Устройство потеряет доступ, для возврата понадобится новое сопряжение.`)) return;
+        if (!await confirmDialog({ title: `Отозвать «${t.name}»?`, text: 'Устройство сразу потеряет доступ. Чтобы вернуть его, понадобится новое сопряжение по коду.', action: 'Отозвать', danger: true })) return;
         try { await post(`/v1/targets/${t.id}/revoke`); toast('Доступ отозван'); await refreshData(); render(); } catch (err) { fail(err); }
       } }, 'Отозвать');
       return [
@@ -950,7 +986,7 @@ async function settingsAudit(shell) {
     'tool.execute': 'Отправлено на устройство', 'tool.result': 'Результат от устройства', 'tool.denied': 'Запрещено политикой',
     'approval.requested': 'Запрошено подтверждение', 'approval.approved': 'Подтверждено', 'approval.rejected': 'Отклонено',
     'target.paired': 'Устройство сопряжено', 'target.revoked': 'Доступ устройства отозван', 'pairing.code_created': 'Создан код сопряжения',
-    'core.started': 'Core запущен', 'task.cancel': 'Отмена задачи', 'task.pause': 'Пауза задачи', 'task.resume': 'Задача продолжена',
+    'core.started': 'Core запущен', 'task.deleted': 'Чат удалён', 'task.cancel': 'Отмена задачи', 'task.pause': 'Пауза задачи', 'task.resume': 'Задача продолжена',
   };
   page(shell, 'Журнал действий', 'Каждое событие связано с предыдущим хешем, поэтому запись нельзя незаметно изменить или удалить.', refreshBtn(() => viewSettings('audit')),
     events.length ? h('div', { class: 'rows' }, events.map((e) => h('div', { class: 'audit-item' },

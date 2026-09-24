@@ -110,6 +110,14 @@ class Repo:
             f"SELECT * FROM tasks WHERE status NOT IN ({marks})", tuple(TERMINAL_STATUSES)
         )
 
+    async def delete_task(self, task_id: str) -> list[str]:
+        artifacts = await self.db.fetchall("SELECT id FROM artifacts WHERE task_id = ?", (task_id,))
+        for table in ("task_events", "task_steps", "tool_calls", "approvals", "artifacts"):
+            await self.db.conn.execute(f"DELETE FROM {table} WHERE task_id = ?", (task_id,))
+        await self.db.conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        await self.db.conn.commit()
+        return [str(a["id"]) for a in artifacts]
+
     # steps
     async def add_step(self, task_id: str, kind: str, values: dict[str, Any]) -> str:
         row = await self.db.fetchone(

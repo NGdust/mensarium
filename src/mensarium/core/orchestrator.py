@@ -125,6 +125,19 @@ class Orchestrator:
         self._start(task_id)
         return await self._task(task_id)
 
+    async def delete(self, task_id: str) -> None:
+        await self._task(task_id)
+        runner = self.runners.get(task_id)
+        if runner:
+            await self._control(task_id, "cancel")
+            try:
+                await asyncio.wait_for(asyncio.shield(runner), 15)
+            except TimeoutError:
+                runner.cancel()
+        for artifact_id in await self.repo.delete_task(task_id):
+            (self.artifacts_dir / f"{artifact_id}.txt").unlink(missing_ok=True)
+        await self.repo.audit(self.workspace_id, "user", "task.deleted", {"task_id": task_id})
+
     async def decide(self, approval_id: str, decision: str, note: str | None, confirm: bool) -> None:
         approval = await self.repo.get_approval(approval_id)
         if not approval:
