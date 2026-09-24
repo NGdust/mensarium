@@ -1,5 +1,7 @@
 // Mensarium web UI. Vanilla ES module, no build step, no dependencies.
 
+import { createOrb } from './orb.js';
+
 const $app = document.getElementById('app');
 const $toasts = document.getElementById('toasts');
 const $layer = document.getElementById('layer');
@@ -53,24 +55,22 @@ function h(tag, attrs, ...children) {
 }
 
 const ICONS = {
-  home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   laptop: '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>',
   sliders: '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
+  sidebar: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/>',
   chevron: '<path d="m6 9 6 6 6-6"/>',
-  chevronRight: '<path d="m9 6 6 6-6 6"/>',
   arrowLeft: '<path d="M19 12H5M11 18l-6-6 6-6"/>',
   arrowUp: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   shield: '<path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"/><path d="m9 12 2 2 4-4"/>',
-  sparkle: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
+  bolt: '<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>',
+  sparkle: '<path d="M12 3c.6 4.2 2.8 6.4 7 7-4.2.6-6.4 2.8-7 7-.6-4.2-2.8-6.4-7-7 4.2-.6 6.4-2.8 7-7z"/>',
   pause: '<path d="M9 5v14M15 5v14"/>',
   play: '<path d="M7 5v14l12-7z"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
   logout: '<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5M5 12h11"/>',
-  moon: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
-  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   terminal: '<path d="m5 8 4 4-4 4M12 17h7"/>',
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
@@ -82,11 +82,9 @@ const ICONS = {
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
-  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   alert: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
   ban: '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
   check: '<path d="m5 12 5 5 9-10"/>',
-  bolt: '<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
 };
 
@@ -95,13 +93,15 @@ function icon(name) {
   span.innerHTML = `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg>`;
   return span.firstChild;
 }
-
-const AGENT_FACE = '<svg viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="10" width="24" height="12" rx="6" fill="#17161f"/><circle cx="11.5" cy="16" r="2.6" fill="#e8c35a"/><circle cx="20.5" cy="16" r="2.6" fill="#e8c35a"/></svg>';
-const agentAvatar = (cls = '') => h('div', { class: `avatar agent ${cls}`, html: AGENT_FACE });
-const userAvatar = (cls = '') => h('div', { class: `avatar ${cls}` }, 'А');
+// kind -> [css size, animated]; message orbs stay still so a long thread costs nothing.
+const ORB_KINDS = { sm: [22, true], md: [72, true], lg: [184, true], '': [28, false], live: [28, true] };
+const orb = (kind = '') => {
+  const [size, animate] = ORB_KINDS[kind];
+  return createOrb(size, { animate, live: kind === 'live', className: kind });
+};
 
 function toast(message, isError = false) {
-  const t = h('div', { class: `toast${isError ? ' error' : ''}` }, message);
+  const t = h('div', { class: `toast${isError ? ' error' : ''}`, role: isError ? 'alert' : 'status' }, message);
   $toasts.append(t);
   setTimeout(() => t.remove(), 5000);
 }
@@ -187,30 +187,24 @@ async function copy(text, btn) {
   }
 }
 
+function localStorageGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } }
+
 // ---------- domain vocab ----------
 
 const STATUS = {
   NEW: ['Запуск', 'accent', true],
   VALIDATING: ['Запуск', 'accent', true],
   PLANNING: ['Думает', 'accent', true],
-  WAITING_APPROVAL: ['Ждёт подтверждения', 'warn', true],
+  WAITING_APPROVAL: ['Ждёт решения', 'warn', true],
   EXECUTING: ['Выполняет', 'accent', true],
   OBSERVING: ['Разбирает результат', 'accent', true],
   SUCCEEDED: ['Готово', 'ok', false],
   FAILED: ['Ошибка', 'danger', false],
   FAILED_RECOVERABLE: ['Прервано, можно продолжить', 'danger', false],
-  CANCELED: ['Отменено', '', false],
+  CANCELED: ['Остановлено', '', false],
   PAUSED: ['Пауза', 'warn', false],
 };
-const RISK = {
-  read: ['чтение', ''],
-  write: ['изменение файлов', 'warn'],
-  execute: ['запуск программы', 'orange'],
-  network: ['доступ в сеть', 'accent'],
-  destructive: ['необратимое действие', 'danger'],
-};
-const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'git.status': 'git', 'git.diff': 'git', 'shell.exec': 'terminal' };
-
 const REASONS = {
   'paused by user': 'поставлено на паузу',
   'canceled by user': 'остановлено вами',
@@ -221,32 +215,55 @@ const REASONS = {
   'tool call budget exhausted': 'закончился лимит действий',
   'wall time budget exhausted': 'закончилось время на задачу',
 };
+const RISK = {
+  read: ['чтение', ''],
+  write: ['изменение файлов', 'warn'],
+  execute: ['запуск программы', 'orange'],
+  network: ['доступ в сеть', 'accent'],
+  destructive: ['необратимое действие', 'danger'],
+};
+const MODES = {
+  ask: { label: 'С запросом действий', icon: 'shield', cls: 'accent', desc: 'Чтение сразу. Запуск программ, изменения файлов и сеть ждут вашего подтверждения.' },
+  full: { label: 'Полный доступ', icon: 'bolt', cls: 'full', desc: 'Агент выполняет всё без вопросов. Запрещены только sudo и системные настройки.' },
+};
+const TEMPLATES = [
+  ['terminal', 'Почему падают тесты', 'Запусти тесты проекта, найди причину падения и объясни её. Файлы пока не меняй.'],
+  ['git', 'Что изменилось', 'Покажи, что изменилось в репозитории с последнего коммита, и кратко опиши изменения.'],
+  ['folder', 'Как устроен проект', 'Изучи структуру проекта и расскажи, как он устроен: точки входа, основные модули, как запускать.'],
+  ['search', 'Исправить ошибку', 'Найди причину ошибки и предложи минимальное исправление: '],
+];
+const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'git.status': 'git', 'git.diff': 'git', 'shell.exec': 'terminal' };
+const RESUMABLE = ['PAUSED', 'FAILED_RECOVERABLE'];
+
+const POLICY_REASONS = [
+  [/^access to secret files is not allowed$/, () => 'чтение секретных файлов запрещено'],
+  [/^unknown tool '(.+)'$/, (m) => `неизвестный инструмент ${m[1]}`],
+  [/^tool '(.+)' is not allowed by the active profile$/, (m) => `инструмент ${m[1]} не разрешён профилем`],
+  [/^target does not support tool '(.+)'$/, (m) => `устройство не поддерживает ${m[1]}`],
+  [/^path '(.+)' is outside allowed roots/, (m) => `путь ${m[1]} вне разрешённых папок`],
+  [/^program '(.+)' is not in the target command allowlist$/, (m) => `программа ${m[1]} не разрешена на устройстве`],
+  [/^shell operators .* are not supported/, () => 'операторы оболочки (|, &&, >) не поддерживаются, команда запускается без shell'],
+  [/^`cd` is not supported/, () => 'cd не поддерживается, папка задаётся отдельно'],
+  [/^run programs by name, not by path$/, () => 'программу нужно указывать по имени, а не по пути'],
+  [/^privileged actions are denied$/, () => 'привилегированные действия запрещены'],
+  [/^invalid arguments/, () => 'неверные аргументы'],
+];
+const EXEC_STATUS = { succeeded: 'успешно', failed: 'ошибка', timeout: 'таймаут', canceled: 'отменено', rejected: 'отклонено устройством' };
+const policyText = (r) => {
+  for (const [re, fn] of POLICY_REASONS) { const m = String(r).match(re); if (m) return fn(m); }
+  return r;
+};
 const reasonText = (r) => REASONS[r] || r;
 const statusOf = (s) => STATUS[s] || [s, '', false];
 const isRunning = (s) => statusOf(s)[2];
-const RESUMABLE = ['PAUSED', 'FAILED_RECOVERABLE'];
+const isLocal = (t) => t && t.id === state.system?.local_target_id;
+const devices = () => state.targets.filter((t) => t.status !== 'revoked').sort((a, b) => isLocal(b) - isLocal(a));
+const taskTitle = (t) => ((t.input || '').split('\n')[0] || 'Без названия').slice(0, 80);
 
 function statusPill(status) {
   const [label, kind, live] = statusOf(status);
   return h('span', { class: `pill ${kind}` }, h('span', { class: `dot ${kind}${live ? ' live' : ''}` }), label);
 }
-const isLocal = (t) => t && t.id === state.system?.local_target_id;
-const devices = () => state.targets.filter((t) => t.status !== 'revoked').sort((a, b) => isLocal(b) - isLocal(a));
-const taskTitle = (t) => ((t.input || '').split('\n')[0] || 'Без названия').slice(0, 80);
-
-// ---------- theme ----------
-
-function currentTheme() {
-  const saved = document.documentElement.dataset.theme;
-  if (saved) return saved;
-  return matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-}
-function toggleTheme() {
-  const next = currentTheme() === 'dark' ? 'light' : 'dark';
-  document.documentElement.dataset.theme = next;
-  try { localStorage.setItem('theme', next); } catch { /* storage unavailable */ }
-}
-try { const t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch { /* ignore */ }
 
 // ---------- overlays ----------
 
@@ -255,18 +272,16 @@ function closeLayer() { $layer.replaceChildren(); }
 function openPopover(anchor, items) {
   closeLayer();
   const pop = h('div', { class: 'popover', role: 'menu' }, items);
-  const catcher = h('div', { style: 'position:fixed;inset:0;z-index:49', onclick: closeLayer });
-  $layer.append(catcher, pop);
+  $layer.append(h('div', { style: 'position:fixed;inset:0;z-index:49', onclick: closeLayer }), pop);
   const r = anchor.getBoundingClientRect();
-  const ph = pop.offsetHeight;
-  const top = r.top - ph - 8 > 8 ? r.top - ph - 8 : r.bottom + 8;
+  const top = r.top - pop.offsetHeight - 8 > 8 ? r.top - pop.offsetHeight - 8 : r.bottom + 8;
   pop.style.top = `${top}px`;
-  pop.style.left = `${Math.min(r.left, innerWidth - pop.offsetWidth - 8)}px`;
+  pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8))}px`;
 }
 
 function openModal(...content) {
   closeLayer();
-  const modal = h('div', { class: 'modal', role: 'dialog' }, content);
+  const modal = h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true' }, content);
   const backdrop = h('div', { class: 'backdrop', onclick: (e) => { if (e.target === backdrop) closeLayer(); } }, modal);
   $layer.append(backdrop);
   return modal;
@@ -289,7 +304,7 @@ function confirmDialog({ title, text, action, danger = false }) {
 async function deleteChat(task) {
   const yes = await confirmDialog({
     title: 'Удалить чат?',
-    text: `«${taskTitle(task)}» исчезнет вместе с сообщениями и выводом команд. Если агент ещё работает, задача будет остановлена. Записи в журнале действий сохранятся.`,
+    text: `«${taskTitle(task)}» исчезнет вместе с сообщениями и выводом команд. Если агент ещё работает, задача остановится. Записи в журнале действий сохранятся.`,
     action: 'Удалить',
     danger: true,
   });
@@ -299,7 +314,7 @@ async function deleteChat(task) {
     state.tasks = state.tasks.filter((t) => t.id !== task.id);
     toast('Чат удалён');
     if (location.hash === `#/chat/${task.id}`) go('#/');
-    else if (state.shell?.renderSessions) state.shell.renderSessions();
+    else state.shell?.renderSessions?.();
   } catch (err) { fail(err); }
 }
 
@@ -337,7 +352,7 @@ async function openPairing() {
 function showLogin() {
   cleanupAll();
   state.shell = null;
-  const input = h('input', { type: 'password', placeholder: 'Токен администратора', autocomplete: 'off' });
+  const input = h('input', { type: 'password', placeholder: 'Токен администратора', autocomplete: 'current-password', 'aria-label': 'Токен администратора' });
   const btn = h('button', { class: 'btn btn-primary' }, 'Войти');
   const submit = async () => {
     const token = input.value.trim();
@@ -353,7 +368,7 @@ function showLogin() {
   btn.addEventListener('click', submit);
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
   $app.replaceChildren(h('div', { class: 'login' }, h('div', { class: 'login-card' },
-    agentAvatar(),
+    orb('md'),
     h('h1', {}, 'Mensarium'),
     h('p', {}, 'Токен выдаёт команда ', h('code', {}, 'mensarium core token'), ' на сервере Core.'),
     input, btn,
@@ -375,70 +390,70 @@ function cleanupAll() {
   shellCleanups = [];
 }
 
-// ---------- app shell (chat) ----------
+// ---------- frame ----------
+
+// Shared frame: black sidebar on the left, inset violet-lit panel on the right.
+function frame(kind, sidebarChildren) {
+  cleanupAll();
+  const panel = h('div', { class: 'panel' });
+  const shell = h('div', { class: `shell${localStorageGet('sidebar') === 'collapsed' ? ' collapsed' : ''}` },
+    h('aside', { class: 'sidebar' }, sidebarChildren),
+    h('main', { class: 'main' }, panel),
+    h('div', { class: 'nav-backdrop', onclick: () => shell.classList.remove('nav-open') }),
+  );
+  $app.replaceChildren(shell);
+  const toggleNav = () => {
+    if (matchMedia('(max-width: 860px)').matches) { shell.classList.toggle('nav-open'); return; }
+    shell.classList.toggle('collapsed');
+    localStorageSet('sidebar', shell.classList.contains('collapsed') ? 'collapsed' : 'open');
+  };
+  return { kind, shell, panel, toggleNav };
+}
+
+function topbar(shell, crumbs, actions, { newChat = true } = {}) {
+  return h('header', { class: 'topbar' },
+    h('button', { class: 'icon-btn open-nav', 'aria-label': 'Показать боковую панель', title: 'Показать боковую панель', onclick: shell.toggleNav }, icon('sidebar')),
+    newChat ? h('a', { class: 'icon-btn open-nav', href: '#/', 'aria-label': 'Новый чат', title: 'Новый чат' }, icon('plus')) : null,
+    h('div', { class: 'crumbs' }, crumbs),
+    actions ? h('div', { class: 'topbar-actions' }, actions) : null,
+  );
+}
 
 function ensureAppShell() {
   if (state.shell && state.shell.kind === 'app') return state.shell;
-  cleanupAll();
   const sessions = h('div', { class: 'sessions' });
-  const main = h('main', { class: 'main' });
-  const shell = h('div', { class: 'shell' });
-  const meBtn = h('button', { class: 'me', onclick: () => toggleUserMenu() }, userAvatar('sm'), 'Администратор');
-  const sidebar = h('aside', { class: 'sidebar' },
-    h('div', { class: 'brand' },
-      agentAvatar('sm'),
-      h('span', { class: 'brand-name' }, 'Mensarium'),
-      h('button', { class: 'icon-btn', title: 'Новый чат', 'aria-label': 'Новый чат', onclick: () => go('#/') }, icon('plus')),
-    ),
-    h('nav', { class: 'nav' },
-      h('a', { class: 'nav-item', href: '#/', 'data-nav': 'new' }, icon('home'), 'Новый чат'),
-      h('a', { class: 'nav-item', href: '#/settings/devices', 'data-nav': 'devices' }, icon('laptop'), 'Устройства'),
-    ),
-    h('div', { class: 'sessions-head' }, h('span', { class: 'section-label' }, 'Сеансы')),
+  const devicesCount = h('span', { class: 'count' });
+  const newChat = h('a', { class: 'new-chat', href: '#/' }, icon('plus'), 'Новый чат');
+  const devicesLink = h('a', { class: 'nav-item', href: '#/settings/devices' }, icon('laptop'), 'Устройства', devicesCount);
+  let s;
+  const collapse = h('button', { class: 'icon-btn collapse-nav', 'aria-label': 'Скрыть боковую панель', title: 'Скрыть боковую панель', onclick: () => s.toggleNav() }, icon('sidebar'));
+  s = frame('app', [
+    h('div', { class: 'brand' }, orb('sm'), h('span', { class: 'brand-name' }, 'Mensarium'), collapse),
+    newChat,
+    h('div', { class: 'nav-label' }, 'Чаты'),
     sessions,
-    h('div', { class: 'sidebar-foot' }, meBtn,
-      h('button', { class: 'icon-btn', title: 'Настройки', 'aria-label': 'Настройки', onclick: () => go('#/settings/overview') }, icon('sliders'))),
-  );
-  shell.append(sidebar, main, h('div', { class: 'nav-backdrop', onclick: () => shell.classList.remove('nav-open') }));
-  $app.replaceChildren(shell);
-
-  const menuHost = h('div', {});
-  sidebar.append(menuHost);
-  function toggleUserMenu() {
-    if (menuHost.firstChild) { menuHost.replaceChildren(); return; }
-    const item = (ic, label, fn, kbd) => h('button', { class: 'menu-item', onclick: () => { menuHost.replaceChildren(); fn(); } }, icon(ic), label, kbd ? h('span', { class: 'kbd' }, kbd) : null);
-    menuHost.append(h('div', { class: 'menu' },
-      h('div', { class: 'menu-head' }, userAvatar('sm'), 'Администратор'),
-      item('sliders', 'Настройки', () => go('#/settings/overview'), '⌘,'),
-      item('link', 'Сопрячь устройство', openPairing),
-      item('laptop', 'Устройства', () => go('#/settings/devices')),
-      item('list', 'Журнал действий', () => go('#/settings/audit')),
-      h('div', { class: 'menu-sep' }),
-      item(currentTheme() === 'dark' ? 'sun' : 'moon', currentTheme() === 'dark' ? 'Светлая тема' : 'Тёмная тема', toggleTheme),
-      item('logout', 'Выйти', async () => { try { await post('/v1/auth/logout'); } catch { /* noop */ } showLogin(); }),
-    ));
-  }
+    h('div', { class: 'sidebar-foot' }, devicesLink, h('a', { class: 'nav-item', href: '#/settings/overview' }, icon('sliders'), 'Настройки')),
+  ]);
 
   const collapsed = new Set(JSON.parse(localStorageGet('collapsed') || '[]'));
   function renderSessions() {
+    const online = devices().filter((t) => t.status === 'online').length;
+    devicesCount.replaceChildren(h('span', { class: `dot${online ? ' ok' : ''}` }), `${online} в сети`);
+    const activeId = (location.hash.match(/^#\/chat\/(.+)$/) || [])[1];
+    newChat.classList.toggle('active', !activeId && !location.hash.startsWith('#/settings'));
+    if (!state.tasks.length) {
+      sessions.replaceChildren(h('div', { class: 'sessions-empty' }, 'Здесь появятся чаты с агентом.'));
+      return;
+    }
     const byTarget = new Map();
     state.tasks.forEach((t) => {
       const key = t.target_name || 'Другие';
       if (!byTarget.has(key)) byTarget.set(key, []);
       byTarget.get(key).push(t);
     });
-    const activeId = (location.hash.match(/^#\/chat\/(.+)$/) || [])[1];
-    if (!state.tasks.length) {
-      sessions.replaceChildren(h('div', { class: 'sessions-empty' }, 'Здесь появятся ваши чаты с агентом.'));
-      return;
-    }
+    const single = byTarget.size === 1;
     sessions.replaceChildren(...[...byTarget.entries()].map(([name, tasks]) => {
-      const group = h('div', { class: `group${collapsed.has(name) ? ' collapsed' : ''}` });
-      const head = h('button', { class: 'group-head', onclick: () => {
-        group.classList.toggle('collapsed');
-        if (group.classList.contains('collapsed')) collapsed.add(name); else collapsed.delete(name);
-        localStorageSet('collapsed', JSON.stringify([...collapsed]));
-      } }, icon('chevron'), name);
+      const group = h('div', { class: `group${!single && collapsed.has(name) ? ' collapsed' : ''}` });
       const items = h('div', { class: 'group-items' }, tasks.map((t) => {
         const [, kind, live] = statusOf(t.status);
         return h('a', { class: `session${t.id === activeId ? ' active' : ''}`, href: `#/chat/${t.id}`, title: t.input },
@@ -446,7 +461,16 @@ function ensureAppShell() {
           h('span', { class: 'session-title' }, taskTitle(t)),
           h('button', { class: 'icon-btn session-del', title: 'Удалить чат', 'aria-label': 'Удалить чат', onclick: (e) => { e.preventDefault(); e.stopPropagation(); deleteChat(t); } }, icon('trash')));
       }));
-      group.append(head, items);
+      if (!single) {
+        group.append(h('button', { class: 'group-head', 'aria-expanded': String(!collapsed.has(name)), onclick: (e) => {
+          group.classList.toggle('collapsed');
+          const isCollapsed = group.classList.contains('collapsed');
+          e.currentTarget.setAttribute('aria-expanded', String(!isCollapsed));
+          if (isCollapsed) collapsed.add(name); else collapsed.delete(name);
+          localStorageSet('collapsed', JSON.stringify([...collapsed]));
+        } }, icon('chevron'), name));
+      }
+      group.append(items);
       return group;
     }));
   }
@@ -457,42 +481,26 @@ function ensureAppShell() {
   const iv = setInterval(poll, 4000);
   shellCleanups.push(() => clearInterval(iv));
 
-  state.shell = {
-    kind: 'app', main, renderSessions,
-    setActive(navKey) {
-      sidebar.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === navKey));
-      shell.classList.remove('nav-open');
-      renderSessions();
-    },
-    toggleNav: () => shell.classList.toggle('nav-open'),
+  s.renderSessions = renderSessions;
+  s.setActive = (key) => {
+    devicesLink.classList.toggle('active', key === 'devices');
+    s.shell.classList.remove('nav-open');
+    renderSessions();
   };
+  state.shell = s;
   renderSessions();
-  return state.shell;
-}
-
-function localStorageGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
-function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch { /* ignore */ } }
-
-function topbar(shell, crumbs, actions) {
-  return h('header', { class: 'topbar' },
-    h('button', { class: 'icon-btn menu-toggle', 'aria-label': 'Меню', onclick: shell.toggleNav }, icon('menu')),
-    h('div', { class: 'crumbs' }, crumbs),
-    h('div', { class: 'topbar-actions' }, actions),
-  );
+  return s;
 }
 
 // ---------- composer ----------
 
 function composer({ placeholder, chips, onSend }) {
-  const ta = h('textarea', { rows: 1, placeholder });
-  const send = h('button', { class: 'send', 'aria-label': 'Отправить', disabled: true }, icon('arrowUp'));
-  const model = state.system?.provider?.model;
-  const box = h('div', { class: 'composer' }, ta, h('div', { class: 'composer-bar' },
-    chips,
-    h('span', { class: 'spacer' }),
-    model ? h('span', { class: 'chip chip-compact', title: 'Модель задаётся в настройках Core' }, icon('sparkle'), h('span', { class: 'chip-label' }, model)) : null,
-    send,
-  ));
+  const ta = h('textarea', { rows: 1, placeholder, 'aria-label': placeholder });
+  const send = h('button', { class: 'send', 'aria-label': 'Отправить', title: 'Отправить (Enter)', disabled: true }, icon('arrowUp'));
+  const box = h('div', { class: 'composer' },
+    h('div', { class: 'composer-input' }, icon('sparkle'), ta),
+    h('div', { class: 'composer-bar' }, chips, h('span', { class: 'spacer' }), send),
+  );
   let locked = false;
   const sync = () => { send.disabled = locked || !ta.value.trim(); };
   const grow = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, 240)}px`; };
@@ -514,37 +522,35 @@ function composer({ placeholder, chips, onSend }) {
   return {
     el: h('div', { class: 'composer-wrap' }, box),
     textarea: ta,
+    setText(text) { ta.value = text; grow(); sync(); ta.focus(); ta.setSelectionRange(text.length, text.length); },
     setLocked(value, hint) { locked = value; ta.disabled = value; ta.placeholder = value ? hint : placeholder; sync(); },
   };
 }
-
-const MODES = {
-  ask: { label: 'С запросом действий', icon: 'shield', cls: 'accent', desc: 'Чтение сразу. Запуск программ, изменения файлов и сеть ждут вашего подтверждения.' },
-  full: { label: 'Полный доступ', icon: 'bolt', cls: 'full', desc: 'Агент выполняет всё без вопросов. Запрещены только sudo и системные настройки.' },
-};
 
 // Chip + popover to switch between access modes; onPick resolves after the change is applied.
 function modeSwitch(initial, { target, onPick }) {
   let mode = initial;
   const label = h('span', { class: 'chip-label' });
-  const chip = h('button', { class: 'chip chip-compact', title: 'Режим доступа' });
+  const chip = h('button', { class: 'chip chip-compact', title: 'Режим доступа', 'aria-haspopup': 'menu' });
   const render = () => {
     const m = MODES[mode];
     chip.className = `chip chip-compact ${m.cls}`;
-    chip.replaceChildren(icon(m.icon), label, icon('chevron'));
     label.textContent = m.label;
+    chip.replaceChildren(icon(m.icon), label, icon('chevron'));
   };
   chip.addEventListener('click', () => {
     const allowFull = target()?.capabilities?.allow_full_access !== false;
     openPopover(chip, Object.entries(MODES).map(([key, m]) => h('button', {
       class: `menu-item mode-item${key === mode ? ' selected' : ''}`,
+      role: 'menuitemradio',
+      'aria-checked': String(key === mode),
       disabled: key === 'full' && !allowFull,
       onclick: async () => {
         closeLayer();
         if (key === mode) return;
         if (key === 'full' && !await confirmDialog({
           title: 'Включить полный доступ?',
-          text: `Агент будет запускать команды, менять файлы и ходить в сеть на «${target()?.name || 'устройстве'}» без вопросов. Переключиться обратно можно в любой момент.`,
+          text: `Агент будет запускать команды, менять файлы и ходить в сеть на «${target()?.name || 'устройстве'}» без вопросов. Вернуть режим с подтверждением можно в любой момент.`,
           action: 'Включить',
         })) return;
         try { await onPick(key); mode = key; render(); } catch (err) { fail(err); }
@@ -561,43 +567,44 @@ function modeSwitch(initial, { target, onPick }) {
 
 async function viewNewChat() {
   const shell = ensureAppShell();
-  shell.setActive('new');
-  const online = state.targets.filter((t) => t.status === 'online');
+  shell.setActive(null);
+  const online = devices().filter((t) => t.status === 'online');
   let selected = online.find((t) => t.id === localStorageGet('target')) || online.find(isLocal) || online[0] || null;
 
   const chipLabel = h('span', { class: 'chip-label' });
   const chipDot = h('span', { class: 'dot' });
-  const targetChip = h('button', { class: 'chip', onclick: () => pickTarget() }, icon('laptop'), chipDot, chipLabel, icon('chevron'));
+  const targetChip = h('button', { class: 'chip', title: 'Устройство', 'aria-haspopup': 'menu', onclick: () => pickTarget() }, icon('laptop'), chipDot, chipLabel, icon('chevron'));
   const renderChip = () => {
     chipLabel.textContent = selected ? selected.name : 'Выберите устройство';
     chipDot.className = `dot${selected ? ' ok' : ''}`;
   };
   function pickTarget() {
     const items = devices().map((t) => h('button', {
-      class: 'menu-item', disabled: t.status !== 'online',
+      class: `menu-item${selected && t.id === selected.id ? ' selected' : ''}`, disabled: t.status !== 'online',
       onclick: () => { selected = t; localStorageSet('target', t.id); renderChip(); closeLayer(); },
-    }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.name, h('span', { class: 'popover-sub' }, isLocal(t) ? 'сервер Core' : t.status === 'online' ? t.platform : 'не в сети')));
-    items.push(h('div', { class: 'menu-sep' }), h('button', { class: 'menu-item', onclick: () => { closeLayer(); openPairing(); } }, icon('plus'), 'Сопрячь новое устройство'));
+    }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.name, h('span', { class: 'popover-sub' }, isLocal(t) ? 'сервер Core' : t.status === 'online' ? t.platform.split('-')[0] : 'не в сети')));
+    items.push(h('div', { class: 'menu-sep' }), h('button', { class: 'menu-item', onclick: () => { closeLayer(); openPairing(); } }, icon('link'), 'Сопрячь новое устройство'));
     openPopover(targetChip, items);
   }
   renderChip();
 
   let mode = localStorageGet('mode') === 'full' ? 'full' : 'ask';
+  const hint = h('p', { class: 'welcome-hint' });
+  const hintText = () => {
+    if (!online.length) return 'Все устройства сейчас не в сети. Запустите на нужной машине mensarium target run.';
+    return mode === 'full'
+      ? 'Полный доступ: агент сам запускает команды и меняет файлы, не спрашивая.'
+      : 'Агент изучит проект сам и спросит разрешения перед запуском команд и изменением файлов.';
+  };
   const modeCtl = modeSwitch(mode, {
     target: () => selected,
     onPick: async (value) => { mode = value; localStorageSet('mode', value); hint.textContent = hintText(); },
   });
-  const hint = h('p', { class: 'welcome-hint' });
-  const hintText = () => (!online.length
-    ? 'Все устройства сейчас не в сети. Запустите на нужной машине mensarium target run.'
-    : mode === 'full'
-      ? 'Полный доступ: агент сам запускает команды и меняет файлы, не спрашивая.'
-      : 'Агент изучит проект сам. Перед запуском команд и изменением файлов он спросит разрешения.');
   hint.textContent = hintText();
 
   const c = composer({
-    placeholder: 'Сообщение для Mensarium',
-    chips: [targetChip, modeCtl.el],
+    placeholder: 'Опишите задачу для агента',
+    chips: [targetChip, h('span', { class: 'divider' }), modeCtl.el],
     onSend: async (text) => {
       if (!selected) throw new Error('Выберите устройство, на котором агент будет работать');
       const allowFull = selected.capabilities?.allow_full_access !== false;
@@ -607,22 +614,20 @@ async function viewNewChat() {
     },
   });
 
-  const hasDevices = state.targets.some((t) => t.status !== 'revoked');
-  const content = hasDevices
-    ? h('div', { class: 'welcome-inner' },
-      h('div', { class: 'welcome-head' }, agentAvatar(), h('h1', {}, 'Что нужно сделать?')),
+  const content = devices().length
+    ? [
+      h('div', { class: 'welcome-hero' }, orb('lg'), h('h1', {}, 'Что нужно сделать?')),
+      h('div', { class: 'templates' }, TEMPLATES.map(([ic, label, text]) => h('button', { class: 'template', onclick: () => c.setText(text) }, icon(ic), label))),
       c.el,
-      hint)
-    : h('div', { class: 'welcome-inner' }, h('div', { class: 'rows' }, h('div', { class: 'empty' },
-      h('h3', {}, 'Подключите первое устройство'),
+      hint,
+    ]
+    : h('div', { class: 'welcome-empty' },
+      h('div', { class: 'welcome-hero' }, orb('lg'), h('h1', {}, 'Подключите устройство')),
       h('p', {}, 'Агент работает на ваших машинах через Mensarium Target. Сопряжение займёт минуту.'),
-      h('button', { class: 'btn btn-primary', onclick: openPairing }, icon('link'), 'Сопрячь устройство'))));
+      h('button', { class: 'btn btn-primary', onclick: openPairing }, icon('link'), 'Сопрячь устройство'));
 
-  shell.main.replaceChildren(
-    topbar(shell, [icon('home'), h('span', { class: 'current' }, 'Новый чат')]),
-    h('div', { class: 'welcome' }, content),
-  );
-  if (hasDevices) c.textarea.focus();
+  shell.panel.replaceChildren(topbar(shell, [], null, { newChat: false }), h('div', { class: 'welcome' }, content));
+  if (devices().length) c.textarea.focus();
 }
 
 // ---------- chat ----------
@@ -635,31 +640,37 @@ async function viewChat(taskId) {
   state.lastChat = `#/chat/${taskId}`;
 
   const statusSlot = h('span', {});
+  const act = async (action) => {
+    try { const t = await post(`/v1/tasks/${taskId}/${action}`); setStatus(t.status); } catch (err) { fail(err); }
+  };
   const btnPause = h('button', { class: 'icon-btn', title: 'Пауза', 'aria-label': 'Пауза', onclick: () => act('pause') }, icon('pause'));
   const btnResume = h('button', { class: 'icon-btn', title: 'Продолжить', 'aria-label': 'Продолжить', onclick: () => act('resume') }, icon('play'));
-  const btnCancel = h('button', { class: 'icon-btn', title: 'Остановить задачу', 'aria-label': 'Остановить', onclick: async () => {
-    if (await confirmDialog({ title: 'Остановить задачу?', text: 'Агент прервёт текущий шаг, команда на устройстве будет отменена. Продолжить задачу будет нельзя, но можно написать в этот чат снова.', action: 'Остановить', danger: true })) act('cancel');
+  const btnCancel = h('button', { class: 'icon-btn', title: 'Остановить задачу', 'aria-label': 'Остановить задачу', onclick: async () => {
+    if (await confirmDialog({ title: 'Остановить задачу?', text: 'Агент прервёт текущий шаг, команда на устройстве будет отменена. Продолжить эту задачу будет нельзя, но в чат можно написать снова.', action: 'Остановить', danger: true })) act('cancel');
   } }, icon('stop'));
   const btnDelete = h('button', { class: 'icon-btn', title: 'Удалить чат', 'aria-label': 'Удалить чат', onclick: () => deleteChat(task) }, icon('trash'));
+
   const thread = h('div', { class: 'thread' });
-  const inner = h('div', { class: 'thread-inner' });
+  const inner = h('div', { class: 'thread-inner', role: 'log', 'aria-live': 'polite' });
   thread.append(inner);
 
-  const roots = (state.targets.find((t) => t.id === task.target_id)?.capabilities?.roots || []).slice().sort((a, b) => b.length - a.length);
+  const target = () => state.targets.find((t) => t.id === task.target_id);
+  const roots = (target()?.capabilities?.roots || []).slice().sort((a, b) => b.length - a.length);
   const short = (text) => roots.reduce((acc, r) => acc.split(r).join(r.split('/').pop() || r), String(text || ''));
-  const deviceChip = h('span', { class: 'chip', title: 'Устройство задачи' }, icon('laptop'), h('span', { class: 'chip-label' }, task.target_name || task.target_id));
+
   const modeCtl = modeSwitch(task.mode || 'ask', {
-    target: () => state.targets.find((t) => t.id === task.target_id),
+    target,
     onPick: async (value) => { await post(`/v1/tasks/${taskId}/mode`, { mode: value }); localStorageSet('mode', value); },
   });
   const c = composer({
-    placeholder: 'Ответить Mensarium',
-    chips: [deviceChip, modeCtl.el],
+    placeholder: 'Ответить агенту',
+    chips: [modeCtl.el],
     onSend: (text) => post(`/v1/tasks/${taskId}/messages`, { input: text }),
   });
 
-  shell.main.replaceChildren(
-    topbar(shell, [icon('folder'), h('span', {}, task.target_name || 'устройство'), h('span', { class: 'sep' }, '/'), h('span', { class: 'current', title: task.input }, taskTitle(task))],
+  shell.panel.replaceChildren(
+    topbar(shell,
+      [h('span', { class: 'crumb-device' }, icon('laptop'), task.target_name || 'устройство', h('span', { class: 'sep' }, '/')), h('span', { class: 'current', title: task.input }, taskTitle(task))],
       [statusSlot, btnPause, btnResume, btnCancel, btnDelete]),
     thread,
     c.el,
@@ -674,20 +685,16 @@ async function viewChat(taskId) {
     btnCancel.classList.toggle('hidden', !(running || RESUMABLE.includes(status)));
     c.setLocked(running, status === 'WAITING_APPROVAL' ? 'Агент ждёт вашего решения выше' : 'Агент работает. Можно поставить на паузу');
   }
-  async function act(action) {
-    try { const t = await post(`/v1/tasks/${taskId}/${action}`); setStatus(t.status); } catch (err) { fail(err); }
-  }
   setStatus(task.status);
 
   // --- rendering ---
-  const nearBottom = () => thread.scrollHeight - thread.scrollTop - thread.clientHeight < 120;
   let stick = true;
-  thread.addEventListener('scroll', () => { stick = nearBottom(); });
+  thread.addEventListener('scroll', () => { stick = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 120; });
   const add = (node) => { inner.append(node); if (stick) thread.scrollTop = thread.scrollHeight; return node; };
   let lastAgent = false;
 
-  const agentMsg = (bodyNode) => {
-    const node = h('div', { class: `msg msg-agent${lastAgent ? ' cont' : ''}` }, agentAvatar(), h('div', { class: 'msg-body' }, bodyNode));
+  const agentMsg = (bodyNode, live = false) => {
+    const node = h('div', { class: `msg msg-agent${lastAgent ? ' cont' : ''}` }, orb(live ? 'live' : ''), h('div', { class: 'msg-body' }, bodyNode));
     lastAgent = true;
     return add(node);
   };
@@ -705,11 +712,13 @@ async function viewChat(taskId) {
     const out = h('pre', { class: 'tool-out' });
     const noteEl = h('div', { class: 'tool-note' });
     const card = h('div', { class: 'tool' });
-    const head = h('button', { class: 'tool-head', onclick: () => card.classList.toggle('open') },
-      icon(TOOL_ICON[tool] || 'terminal'), h('span', { class: 'tool-name' }, tool), h('span', { class: 'tool-display', title: display || '' }, short(display)), stateEl);
+    const head = h('button', { class: 'tool-head', 'aria-expanded': 'false', onclick: () => {
+      card.classList.toggle('open');
+      head.setAttribute('aria-expanded', String(card.classList.contains('open')));
+    } }, icon(TOOL_ICON[tool] || 'terminal'), h('span', { class: 'tool-display', title: `${tool}: ${display || ''}` }, short(display) || tool), stateEl);
     card.append(head, out, noteEl);
     step(card);
-    entry = { card, stateEl, out, noteEl };
+    entry = { card, head, stateEl, out, noteEl };
     tools.set(id, entry);
     return entry;
   }
@@ -724,7 +733,10 @@ async function viewChat(taskId) {
     if (p.truncated || p.artifact_id) {
       e.noteEl.replaceChildren(p.truncated ? 'Вывод сокращён. ' : '', p.artifact_id ? h('a', { href: `/v1/artifacts/${p.artifact_id}`, target: '_blank', rel: 'noopener' }, 'Полный вывод') : '');
     }
-    if (!ok || p.tool === 'shell.exec' || p.tool === 'git.diff') e.card.classList.add('open');
+    if (!ok || p.tool === 'shell.exec' || p.tool === 'git.diff') {
+      e.card.classList.add('open');
+      e.head.setAttribute('aria-expanded', 'true');
+    }
   }
 
   function approvalCard(p) {
@@ -736,16 +748,15 @@ async function viewChat(taskId) {
     const reject = h('button', { class: 'btn' }, 'Отклонить');
     const actions = h('div', { class: 'approval-actions' }, approve, reject);
     let confirmBox = null;
-    const card = h('div', { class: `approval${tc.risk === 'destructive' ? ' risk-destructive' : ''}` },
+    const card = h('div', { class: `approval${tc.risk === 'destructive' ? ' risk-destructive' : ''}`, role: 'group', 'aria-label': 'Запрос подтверждения' },
       h('div', { class: 'approval-top' }, h('span', { class: 'approval-title' }, 'Нужно ваше решение'), h('span', { class: `pill ${riskKind}` }, riskLabel), timer),
       h('pre', { class: 'approval-cmd' }, tc.tool === 'shell.exec' ? `$ ${args.command}` : short(tc.display)),
       h('dl', { class: 'approval-meta' },
         h('dt', {}, 'Устройство'), h('dd', {}, tc.target_name || ''),
         args.cwd ? [h('dt', {}, 'Папка'), h('dd', { title: args.cwd }, short(args.cwd))] : null,
-        tc.tool !== 'shell.exec' ? [h('dt', {}, 'Инструмент'), h('dd', {}, tc.tool)] : null,
         args.timeout_s ? [h('dt', {}, 'Лимит'), h('dd', {}, `${args.timeout_s} с`)] : null,
       ),
-      args.stdin ? [h('div', { class: 'section-label', style: 'margin-bottom:6px' }, 'Данные на вход'), h('pre', { class: 'approval-cmd approval-stdin' }, args.stdin)] : null,
+      args.stdin ? [h('div', { class: 'approval-sub' }, 'Данные на вход'), h('pre', { class: 'approval-cmd approval-stdin' }, args.stdin)] : null,
     );
     if (tc.risk === 'destructive') {
       const cb = h('input', { type: 'checkbox' });
@@ -779,7 +790,8 @@ async function viewChat(taskId) {
     e.card.classList.add('decided');
     if (e.confirmBox) e.confirmBox.remove();
     const text = { approved: 'Вы разрешили выполнить один раз', rejected: 'Вы отклонили действие', expired: 'Время на решение истекло' }[p.decision] || p.decision;
-    e.actions.replaceChildren(h('span', { class: 'approval-result' }, text, p.note ? `: ${p.note}` : ''));
+    const note = p.note === 'full access enabled' ? 'одобрено включением полного доступа' : p.note;
+    e.actions.replaceChildren(h('span', { class: 'approval-result' }, text, note ? `: ${note}` : ''));
   }
 
   function handle({ event, payload: p }) {
@@ -794,21 +806,26 @@ async function viewChat(taskId) {
           note(p.status === 'PAUSED' ? 'pause' : 'alert', `${statusOf(p.status)[0]}${p.reason ? `: ${reasonText(p.reason)}` : ''}`, p.status === 'PAUSED' || p.status === 'CANCELED' ? '' : 'error');
         }
         break;
-      case 'llm.request':
-        thinking.set(p.step, agentMsg(h('span', { class: 'thinking' }, h('i'), h('i'), h('i'), 'Думает')));
-        break;
-      case 'llm.response': {
-        const row = thinking.get(p.step);
-        if (row) { row.remove(); thinking.delete(p.step); lastAgent = inner.lastChild?.classList?.contains('msg-agent') || inner.lastChild?.classList?.contains('step') || false; }
-        if (p.text && p.tool_call) agentMsg(h('div', { class: 'prose', html: markdown(p.text) }));
-        break;
-      }
       case 'task.mode':
         modeCtl.set(p.mode);
         note(MODES[p.mode]?.icon || 'shield', `Режим: ${(MODES[p.mode]?.label || p.mode).toLowerCase()}`);
         break;
+      case 'llm.request':
+        thinking.set(p.step, agentMsg(h('span', { class: 'thinking' }, 'Думает'), true));
+        break;
+      case 'llm.response': {
+        const row = thinking.get(p.step);
+        if (row) {
+          row.remove();
+          thinking.delete(p.step);
+          const last = inner.lastChild;
+          lastAgent = !!last && (last.classList.contains('msg-agent') || last.classList.contains('step'));
+        }
+        if (p.text && p.tool_call) agentMsg(h('div', { class: 'prose', html: markdown(p.text) }));
+        break;
+      }
       case 'tool_call.denied':
-        note('ban', `Политика не разрешила ${p.tool}: ${p.reason}`);
+        note('ban', `Политика не разрешила ${p.tool}: ${policyText(p.reason)}`);
         break;
       case 'tool_call.pending_approval':
         approvalCard(p);
@@ -862,56 +879,44 @@ async function viewChat(taskId) {
 // ---------- settings ----------
 
 const SETTINGS = [
-  { group: null, items: [['overview', 'pulse', 'Обзор'], ['model', 'cpu', 'Модель']] },
-  { group: 'Подключения', items: [['devices', 'laptop', 'Устройства']] },
-  { group: 'Агенты', items: [['profiles', 'layers', 'Профили']] },
-  { group: 'Безопасность', items: [['audit', 'list', 'Журнал действий']] },
+  ['overview', 'pulse', 'Обзор'],
+  ['model', 'cpu', 'Модель'],
+  ['devices', 'laptop', 'Устройства'],
+  ['profiles', 'layers', 'Профили'],
+  ['audit', 'list', 'Журнал действий'],
 ];
 
 function ensureSettingsShell() {
   if (state.shell && state.shell.kind === 'settings') return state.shell;
-  cleanupAll();
-  const main = h('main', { class: 'main' });
   const nav = h('div', { class: 'settings-nav' });
-  const search = h('input', { type: 'search', placeholder: 'Поиск настроек...' });
+  const search = h('input', { type: 'search', placeholder: 'Поиск настроек', 'aria-label': 'Поиск настроек' });
   const back = () => go(state.lastChat || '#/');
-  const shell = h('div', { class: 'shell' });
-  const sidebar = h('aside', { class: 'sidebar' },
-    h('button', { class: 'back-link', onclick: back }, icon('arrowLeft'), 'Вернуться в чат', h('span', { class: 'kbd' }, 'ESC')),
+  const s = frame('settings', [
+    h('button', { class: 'back-link', onclick: back }, icon('arrowLeft'), 'Вернуться в чат', h('span', { class: 'kbd' }, 'Esc')),
     h('div', { class: 'settings-title' }, 'Настройки'),
     h('div', { class: 'settings-search' }, icon('search'), search),
     nav,
-    h('div', { class: 'settings-foot' }, state.system?.version ? `v${state.system.version}` : ''),
-  );
-  shell.append(sidebar, main, h('div', { class: 'nav-backdrop', onclick: () => shell.classList.remove('nav-open') }));
-  $app.replaceChildren(shell);
-
+  ]);
   const renderNav = () => {
     const q = search.value.trim().toLowerCase();
-    const active = (location.hash.match(/^#\/settings\/(\w+)/) || [])[1];
-    nav.replaceChildren(...SETTINGS.map(({ group, items }) => {
-      const visible = items.filter(([, , label]) => !q || label.toLowerCase().includes(q));
-      if (!visible.length) return null;
-      return h('div', {},
-        group ? h('div', { class: 'settings-group section-label' }, group) : null,
-        visible.map(([key, ic, label]) => h('a', { class: `nav-item${key === active ? ' active' : ''}`, href: `#/settings/${key}` }, icon(ic), label)));
-    }).filter(Boolean));
+    const active = (location.hash.match(/^#\/settings\/(\w+)/) || [])[1] || 'overview';
+    const visible = SETTINGS.filter(([, , label]) => !q || label.toLowerCase().includes(q));
+    nav.replaceChildren(...(visible.length
+      ? visible.map(([key, ic, label]) => h('a', { class: `nav-item${key === active ? ' active' : ''}`, href: `#/settings/${key}`, 'aria-current': key === active ? 'page' : null }, icon(ic), label))
+      : [h('div', { class: 'sessions-empty' }, 'Ничего не нашлось')]));
   };
   search.addEventListener('input', renderNav);
-  const onKey = (e) => { if (e.key === 'Escape' && !$layer.firstChild) back(); };
+  const onKey = (e) => { if (e.key === 'Escape' && !['INPUT', 'TEXTAREA'].includes(e.target.tagName)) back(); };
   document.addEventListener('keydown', onKey);
   shellCleanups.push(() => document.removeEventListener('keydown', onKey));
-
-  state.shell = {
-    kind: 'settings', main, toggleNav: () => shell.classList.toggle('nav-open'),
-    setActive() { renderNav(); shell.classList.remove('nav-open'); },
-  };
-  return state.shell;
+  s.setActive = () => { renderNav(); s.shell.classList.remove('nav-open'); };
+  state.shell = s;
+  return s;
 }
 
 function page(shell, title, desc, actions, ...sections) {
-  shell.main.replaceChildren(
-    h('header', { class: 'topbar', style: 'height:auto;padding:10px 12px 0' }, h('button', { class: 'icon-btn menu-toggle', 'aria-label': 'Меню', onclick: shell.toggleNav }, icon('menu'))),
+  shell.panel.replaceChildren(
+    topbar(shell, []),
     h('div', { class: 'page' }, h('div', { class: 'page-inner' },
       h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, title), desc ? h('p', {}, desc) : null), actions ? h('div', { class: 'actions' }, actions) : null),
       sections,
@@ -919,16 +924,16 @@ function page(shell, title, desc, actions, ...sections) {
   );
 }
 
-const section = (label, desc, actions, ...body) => h('section', { class: 'section' },
-  h('div', { class: 'section-head' }, h('div', {}, h('div', { class: 'section-label' }, label), desc ? h('p', {}, desc) : null), actions ? h('div', { class: 'actions' }, actions) : null),
+const section = (title, desc, ...body) => h('section', { class: 'section' },
+  h('div', { class: 'section-head' }, h('div', {}, h('h2', {}, title), desc ? h('p', {}, desc) : null)),
   body);
 
 const row = (title, desc, value, mono = false) => h('div', { class: 'row' },
   h('div', { class: 'row-text' }, h('div', { class: 'row-title' }, title), desc ? h('div', { class: 'row-desc' }, desc) : null),
   value != null ? h('div', { class: `row-value${mono ? ' mono' : ''}` }, value) : null);
 
-const copyBtn = (text) => h('button', { class: 'icon-btn', 'aria-label': 'Скопировать', onclick: (e) => copy(text, e.currentTarget) }, icon('copy'));
-const refreshBtn = (fn) => h('button', { class: 'btn', onclick: fn }, icon('refresh'), 'Обновить');
+const copyBtn = (text) => h('button', { class: 'icon-btn', 'aria-label': 'Скопировать', title: 'Скопировать', onclick: (e) => copy(text, e.currentTarget) }, icon('copy'));
+const cmdValue = (cmd) => [h('code', {}, cmd), copyBtn(cmd)];
 
 async function viewSettings(key) {
   const shell = ensureSettingsShell();
@@ -941,19 +946,17 @@ async function settingsOverview(shell) {
   const s = await get('/v1/system');
   state.system = s;
   const url = (s.public_url || '').replace(/\/$/, '');
-  const online = state.targets.filter((t) => t.status === 'online').length;
-  page(shell, 'Обзор', 'Главный агент Mensarium: где он доступен и как к нему подключать устройства.', refreshBtn(() => viewSettings('overview')),
-    h('div', { class: 'hero' }, agentAvatar(), h('h2', {}, 'Mensarium Core'), h('span', { class: 'pill accent' }, `ВЕРСИЯ ${s.version}`)),
-    section('Подключение', 'Эти данные нужны, чтобы устройства нашли Core и доверяли ему.', null, h('div', { class: 'rows' },
-      row('Адрес Core', 'Используется браузером и устройствами.', [h('span', {}, url), copyBtn(url)], true),
+  const logout = h('button', { class: 'btn', onclick: async () => { try { await post('/v1/auth/logout'); } catch { /* noop */ } showLogin(); } }, icon('logout'), 'Выйти');
+  page(shell, 'Обзор', 'Где доступен главный агент и как проверить, что устройства говорят именно с ним.', logout,
+    h('div', { class: 'hero' }, orb('md'), h('div', {}, h('h2', {}, 'Mensarium Core'), h('p', {}, `Версия ${s.version}`))),
+    section('Подключение', null, h('div', { class: 'rows' },
+      row('Адрес Core', 'Им пользуются браузер и устройства.', cmdValue(url), true),
       row('Отпечаток ключа', 'Сверьте с тем, что показал установщик на устройстве при сопряжении.', s.core_key_fingerprint, true),
-      row('Устройства в сети', null, `${online} из ${state.targets.filter((t) => t.status !== 'revoked').length}`),
-      row('Рабочее пространство', null, s.workspace_id, true),
     )),
-    section('Обслуживание', 'Команды выполняются на сервере Core.', null, h('div', { class: 'rows' },
-      row('Обновить Mensarium', 'Скачивает свежую версию и перезапускает сервис.', h('code', {}, 'mensarium update'), true),
-      row('Резервная копия', 'Зашифрованный архив для переноса Core на другой сервер.', h('code', {}, 'mensarium core backup'), true),
-      row('Токен входа', 'Показать токен администратора.', h('code', {}, 'mensarium core token'), true),
+    section('Обслуживание', 'Команды выполняются на сервере Core.', h('div', { class: 'rows' },
+      row('Обновить Mensarium', 'Скачивает свежую версию и перезапускает сервис.', cmdValue('mensarium update'), true),
+      row('Резервная копия', 'Зашифрованный архив для переноса Core на другой сервер.', cmdValue('mensarium core backup'), true),
+      row('Токен входа', 'Показывает токен администратора.', cmdValue('mensarium core token'), true),
     )),
   );
 }
@@ -964,19 +967,19 @@ async function settingsModel(shell) {
   const health = p.health || {};
   const providerName = { ollama_cloud: 'Ollama Cloud', ollama_local: 'Локальный Ollama', llama_cpp: 'llama.cpp' }[p.name] || p.name;
   const list = h('div', { class: 'rows' }, h('div', { class: 'empty' }, 'Загружаем список...'));
-  page(shell, 'Модель', 'Через какого провайдера и какую модель агент думает. Ключ API хранится только на сервере Core.', refreshBtn(() => viewSettings('model')),
+  page(shell, 'Модель', 'Через какого провайдера и какую модель агент думает. Ключ API хранится только на сервере Core.', null,
     h('div', { class: 'rows' },
       row('Провайдер', null, providerName),
       row('Адрес API', null, p.base_url, true),
-      row('Модель по умолчанию', 'Меняется командой mensarium setup на сервере Core.', p.model, true),
-      row('Состояние', health.detail || null, h('span', { class: 'status' }, h('span', { class: `dot ${health.ok ? 'ok' : 'danger'}` }), health.ok ? 'Доступен' : 'Недоступен')),
+      row('Модель по умолчанию', h('span', {}, 'Меняется командой ', h('code', {}, 'mensarium setup'), ' на сервере Core.'), p.model, true),
+      row('Состояние', health.ok ? null : health.detail, h('span', { class: 'status' }, h('span', { class: `dot ${health.ok ? 'ok' : 'danger'}` }), health.ok ? 'Доступен' : 'Недоступен')),
     ),
-    section('Доступные модели', 'Список, который отдаёт провайдер.', null, list),
+    section('Доступные модели', 'Список, который отдаёт провайдер.', list),
   );
   try {
     const models = await get('/v1/models');
     list.replaceChildren(models.length
-      ? h('div', { class: 'row-extra', style: 'padding:16px 20px' }, models.map((m) => h('span', { class: `pill tag${m.id === p.model ? ' accent' : ''}` }, m.id)))
+      ? h('div', { class: 'row-extra', style: 'padding:16px 20px;margin:0' }, models.map((m) => h('span', { class: `pill tag${m.id === p.model ? ' accent' : ''}` }, m.id)))
       : h('div', { class: 'empty' }, 'Провайдер не вернул ни одной модели.'));
   } catch (err) {
     list.replaceChildren(h('div', { class: 'empty' }, err.message));
@@ -997,6 +1000,7 @@ async function settingsDevices(shell) {
     listHost.replaceChildren(h('div', { class: 'rows' }, targets.map((t) => {
       const caps = t.capabilities || {};
       const outdated = t.agent_version && s.version && t.agent_version !== s.version;
+      const programs = caps.command_allowlist || [];
       const revoke = h('button', { class: 'btn btn-sm btn-danger', onclick: async () => {
         if (!await confirmDialog({ title: `Отозвать «${t.name}»?`, text: 'Устройство сразу потеряет доступ. Чтобы вернуть его, понадобится новое сопряжение по коду.', action: 'Отозвать', danger: true })) return;
         try { await post(`/v1/targets/${t.id}/revoke`); toast('Доступ отозван'); await refreshData(); render(); } catch (err) { fail(err); }
@@ -1004,21 +1008,22 @@ async function settingsDevices(shell) {
       return [
         h('div', { class: 'row' },
           h('div', { class: 'row-text' },
-            h('div', { class: 'row-title' }, t.name, isLocal(t) ? h('span', { class: 'pill accent', title: 'Машина, на которой установлен Core. Подключена всегда.' }, 'Core') : null, outdated ? h('span', { class: 'pill warn', title: 'Выполните на устройстве: mensarium update' }, `v${t.agent_version}, есть обновление`) : null),
-            h('div', { class: 'row-desc' }, `${t.platform} · ${t.hostname} · ${t.status === 'online' ? 'в сети' : `был в сети ${relTime(t.last_seen_at)}`}`)),
+            h('div', { class: 'row-title' }, t.name,
+              isLocal(t) ? h('span', { class: 'pill accent', title: 'Машина, на которой установлен Core. Подключена всегда.' }, 'Core') : null,
+              outdated ? h('span', { class: 'pill warn', title: 'Выполните на устройстве: mensarium update' }, `v${t.agent_version}, есть обновление`) : null),
+            h('div', { class: 'row-desc' }, t.status === 'online' ? t.platform : `${t.platform} · был в сети ${relTime(t.last_seen_at)}`)),
           h('div', { class: 'row-value' }, h('span', { class: 'status' }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.status === 'online' ? 'В сети' : 'Не в сети'), revoke)),
         h('div', { class: 'row-extra' },
-          (caps.roots || []).map((r) => h('span', { class: 'pill tag', title: r }, r)),
-          h('span', { class: 'pill tag', title: (caps.command_allowlist || []).join(', ') }, (caps.command_allowlist || []).includes('*') ? 'любые программы' : `${(caps.command_allowlist || []).length} программ`)),
+          (caps.roots || []).map((r) => h('span', { class: 'pill tag', title: `Папка, доступная агенту: ${r}` }, r)),
+          h('span', { class: 'pill', title: programs.join(', ') }, programs.includes('*') ? 'любые программы' : `${programs.length} программ`),
+          caps.allow_full_access ? null : h('span', { class: 'pill' }, 'без полного доступа')),
       ];
     })));
   };
   const refresh = async () => { try { await refreshData(); render(); } catch (err) { fail(err); } };
-  page(shell, 'Устройства', 'Машины, на которых агент может читать проект и, с вашего разрешения, запускать команды.',
-    [refreshBtn(refresh), h('button', { class: 'btn btn-primary', onclick: openPairing }, icon('link'), 'Сопрячь устройство')],
+  page(shell, 'Устройства', 'Машины, на которых агент читает проекты и выполняет команды.',
+    h('button', { class: 'btn btn-primary', onclick: openPairing }, icon('link'), 'Сопрячь устройство'),
     listHost,
-    section('Как подключить', 'Сопряжение по одноразовому коду. Код создаётся кнопкой выше или командой mensarium core pair-code на сервере.', null,
-      h('div', { class: 'code-line' }, h('code', {}, `curl -fsSL ${(s.public_url || '').replace(/\/$/, '')}/install.sh | sh -s -- --code КОД`), copyBtn(`curl -fsSL ${(s.public_url || '').replace(/\/$/, '')}/install.sh | sh -s -- --code `))),
   );
   render();
   const iv = setInterval(refresh, 5000);
@@ -1027,32 +1032,53 @@ async function settingsDevices(shell) {
 
 async function settingsProfiles(shell) {
   const profiles = await get('/v1/agent-profiles');
-  page(shell, 'Профили', 'Профиль задаёт, какие инструменты доступны агенту, его лимиты и какие действия требуют подтверждения.', null,
-    profiles.map((p) => section(`${p.name} · v${p.version}`, p.id, null, h('div', { class: 'rows' },
+  page(shell, 'Профили', 'Профиль задаёт инструменты агента, его лимиты и действия, которые в режиме с запросом ждут подтверждения.', null,
+    profiles.map((p) => section(`${p.name}, версия ${p.version}`, p.id, h('div', { class: 'rows' },
       row('Модель', `Температура ${p.llm.temperature}`, p.llm.model, true),
       row('Инструменты', null, null),
       h('div', { class: 'row-extra' }, p.allowed_tools.map((t) => h('span', { class: 'pill tag' }, t))),
-      row('Требуют подтверждения', 'Каждое такое действие вы одобряете отдельно.', h('span', {}, p.approval.required_risks.map((r) => (RISK[r] || [r])[0]).join(', '))),
+      row('Требуют подтверждения', 'В режиме «С запросом действий» каждое такое действие вы одобряете отдельно.', h('span', {}, p.approval.required_risks.map((r) => (RISK[r] || [r])[0]).join(', '))),
       row('Лимиты', null, `${p.limits.max_steps} шагов, ${p.limits.max_tool_calls} действий, ${Math.round(p.limits.max_wall_time_s / 60)} мин`),
     ))),
   );
 }
 
 async function settingsAudit(shell) {
-  const events = await get('/v1/audit?limit=200');
   const LABELS = {
     'task.created': 'Создана задача', 'task.succeeded': 'Задача завершена', 'task.stopped': 'Задача остановлена',
     'tool.execute': 'Отправлено на устройство', 'tool.result': 'Результат от устройства', 'tool.denied': 'Запрещено политикой',
     'approval.requested': 'Запрошено подтверждение', 'approval.approved': 'Подтверждено', 'approval.rejected': 'Отклонено',
     'target.paired': 'Устройство сопряжено', 'target.revoked': 'Доступ устройства отозван', 'pairing.code_created': 'Создан код сопряжения',
-    'core.started': 'Core запущен', 'task.deleted': 'Чат удалён', 'task.mode': 'Смена режима доступа', 'task.cancel': 'Отмена задачи', 'task.pause': 'Пауза задачи', 'task.resume': 'Задача продолжена',
+    'core.started': 'Core запущен', 'task.cancel': 'Отмена задачи', 'task.pause': 'Пауза задачи', 'task.resume': 'Задача продолжена',
+    'task.deleted': 'Чат удалён', 'task.mode': 'Смена режима доступа', 'profile.imported': 'Импортирован профиль',
   };
-  page(shell, 'Журнал действий', 'Каждое событие связано с предыдущим хешем, поэтому запись нельзя незаметно изменить или удалить.', refreshBtn(() => viewSettings('audit')),
-    events.length ? h('div', { class: 'rows' }, events.map((e) => h('div', { class: 'audit-item' },
+  const ACTORS = { core: 'Core', target: 'устройство', user: 'вы' };
+  const describe = (p) => {
+    const title = p.task_id ? state.tasks.find((t) => t.id === p.task_id) : null;
+    return [
+      p.display || p.tool,
+      p.name,
+      p.status && (EXEC_STATUS[p.status] || statusOf(p.status)[0]),
+      p.exit_code != null && `код ${p.exit_code}`,
+      p.mode && (MODES[p.mode]?.label || p.mode),
+      p.reason && policyText(reasonText(p.reason)),
+      p.version && `версия ${p.version}`,
+      p.task_id && (title ? `«${taskTitle(title)}»` : 'удалённый чат'),
+    ].filter(Boolean).join(' · ');
+  };
+  const list = h('div', {});
+  const load = async () => {
+    const events = await get('/v1/audit?limit=200');
+    list.replaceChildren(events.length ? h('div', { class: 'rows' }, events.map((e) => h('div', { class: 'audit-item' },
       h('div', { class: 'audit-time' }, new Date(e.created_at).toLocaleString('ru-RU'), h('div', { class: 'mono', title: e.hash }, e.hash.slice(7, 17))),
-      h('div', {}, h('div', { class: 'audit-type' }, LABELS[e.event_type] || e.event_type, h('span', { class: 'muted', style: 'font-weight:400' }, ` · ${e.actor}`)),
-        h('div', { class: 'audit-payload' }, e.payload.display || JSON.stringify(e.payload)))))) : h('div', { class: 'rows' }, h('div', { class: 'empty' }, 'Событий пока нет.')),
+      h('div', {}, h('div', { class: 'audit-type' }, LABELS[e.event_type] || e.event_type, h('span', { class: 'audit-actor' }, ` · ${ACTORS[e.actor] || e.actor}`)),
+        h('div', { class: 'audit-payload', title: JSON.stringify(e.payload) }, describe(e.payload)))))) : h('div', { class: 'rows' }, h('div', { class: 'empty' }, 'Событий пока нет.')));
+  };
+  page(shell, 'Журнал действий', 'Каждое событие связано с предыдущим хешем, поэтому запись нельзя незаметно изменить или удалить.',
+    h('button', { class: 'btn', onclick: () => load().catch(fail) }, icon('refresh'), 'Обновить'),
+    list,
   );
+  await load();
 }
 
 // ---------- router ----------
@@ -1074,8 +1100,13 @@ async function route() {
 
 document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); go('#/settings/overview'); }
-  if (e.key === 'Escape' && $layer.firstChild) closeLayer();
-  if (e.key === 'Escape') document.querySelector('.shell.nav-open')?.classList.remove('nav-open');
+  if (e.key !== 'Escape') return;
+  const navOpen = document.querySelector('.shell.nav-open');
+  if ($layer.firstChild || navOpen) {
+    closeLayer();
+    navOpen?.classList.remove('nav-open');
+    e.stopImmediatePropagation();
+  }
 });
 
 async function boot() {

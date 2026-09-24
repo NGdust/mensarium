@@ -3,12 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark light">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#050506">
   <title>Mensarium</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23e8c35a'/%3E%3Crect x='7' y='11' width='18' height='9' rx='4.5' fill='%2317161f'/%3E%3Ccircle cx='12.5' cy='15.5' r='2' fill='%23e8c35a'/%3E%3Ccircle cx='19.5' cy='15.5' r='2' fill='%23e8c35a'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='url(%23g)'/%3E%3CradialGradient id='g' cx='.45' cy='.4' r='.6'%3E%3Cstop offset='0' stop-color='%23b38bff'/%3E%3Cstop offset='.55' stop-color='%236331e0'/%3E%3Cstop offset='1' stop-color='%23180640'/%3E%3C/radialGradient%3E%3Ccircle cx='11' cy='10' r='3' fill='%23fff' fill-opacity='.8'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+  <!--
+  THESIS: delegation is one sentence away; the chat is the product and everything else stays folded until it needs the owner. Refuses the admin-dashboard default of stat cards and tables on the landing view.
+  OWN-WORLD: black frame, one inset panel lit from above by a plum haze, pill controls with hairline borders, a living particle sphere (orb.js) as the agent's face, flat violet buttons without glow; dark only, Onest (self-hosted, Cyrillic) at light display weights, mono only for commands and paths.
+  STORY: the owner sees what the agent can act on (device, access mode), writes the task, watches steps fold by, and answers only approvals and errors.
+  FIRST VIEWPORT: new chat centers the large orb over "Что нужно сделать?", task templates above a composer card holding device and mode chips and the send orb; chat view puts the composer at the bottom and approvals inline where the agent waits.
+  FORM: pinned by the owner's style reference (owner: "Референс чисто по стилю"); the owner's pin replaces the concept roll, so there is no seed key.
+  FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+  -->
   <div id="app"></div>
   <div id="toasts" aria-live="polite"></div>
   <div id="layer"></div>
