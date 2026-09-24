@@ -97,3 +97,32 @@ CORE_TOOLS: dict[str, ToolSpec] = {
         runs_on="core",
     ),
 }
+
+MEMORY_TOOLS: dict[str, ToolSpec] = {
+    "memory.search": ToolSpec(
+        "memory.search",
+        "Search long-term memory notes about the user, projects and devices. Use it before asking the user "
+        "something they may have told you before.",
+        "read",
+        CORE_TOOL_ARGS["memory.search"],
+        lambda a: f"memory search {a['query']!r}",
+        runs_on="core",
+    ),
+    "memory.read": ToolSpec(
+        "memory.read",
+        "Read one memory note in full, with the notes that link to it.",
+        "read",
+        CORE_TOOL_ARGS["memory.read"],
+        lambda a: f"memory read {a['title']}",
+        runs_on="core",
+    ),
+    "memory.save": ToolSpec(
+        "memory.save",
+        "Remember a durable fact for future tasks: a user preference, a project fact, a decision or a fix. "
+        "Adds a note or appends to the note with the same title; never store secrets or command output.",
+        "read",
+        CORE_TOOL_ARGS["memory.save"],
+        lambda a: f"memory save {a['title']}",
+        runs_on="core",
+    ),
+}

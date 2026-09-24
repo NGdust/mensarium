@@ -4,7 +4,7 @@ from typing import Any
 
 import aiosqlite
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 COLUMN_MIGRATIONS = [
     ("tasks", "mode", "TEXT NOT NULL DEFAULT 'ask'"),
@@ -65,6 +65,17 @@ CREATE TABLE IF NOT EXISTS task_events (
     payload TEXT NOT NULL, created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS task_events_task ON task_events(task_id, seq);
+CREATE TABLE IF NOT EXISTS memory_notes (
+    id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'note',
+    tags TEXT NOT NULL DEFAULT '[]', pinned INTEGER NOT NULL DEFAULT 0, importance INTEGER NOT NULL DEFAULT 5,
+    source TEXT NOT NULL DEFAULT 'user', source_task_id TEXT, recall_count INTEGER NOT NULL DEFAULT 0,
+    last_recalled_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS dream_runs (
+    id TEXT PRIMARY KEY, trigger TEXT NOT NULL, status TEXT NOT NULL, phase TEXT, model TEXT,
+    started_at TEXT NOT NULL, finished_at TEXT, stats TEXT NOT NULL DEFAULT '{}',
+    changes TEXT NOT NULL DEFAULT '[]', diary TEXT, error TEXT
+);
 CREATE TABLE IF NOT EXISTS extensions (
     id TEXT PRIMARY KEY, version TEXT NOT NULL, source TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
     manifest TEXT NOT NULL, installed_at TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -73,7 +84,7 @@ CREATE TABLE IF NOT EXISTS extensions (
 
 JSON_COLUMNS = {
     "settings", "capabilities", "policy", "body", "budget", "input", "output", "params", "usage",
-    "arguments", "metadata", "payload", "disabled_tools", "manifest",
+    "arguments", "metadata", "payload", "disabled_tools", "manifest", "tags", "stats", "changes",
 }
 
 

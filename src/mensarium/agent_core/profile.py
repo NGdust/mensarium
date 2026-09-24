@@ -32,6 +32,7 @@ class AgentProfile(BaseModel):
     allowed_targets: list[str] = ["darwin", "linux"]
     allowed_tools: list[str]
     allow_extensions: bool = False
+    memory: bool = False
     default_mode: str = "propose_then_execute"
     limits: ProfileLimits = Field(default_factory=ProfileLimits)
     approval: ProfileApproval = Field(default_factory=ProfileApproval)

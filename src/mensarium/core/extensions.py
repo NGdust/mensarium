@@ -8,7 +8,7 @@ from mensarium.contracts.extensions import Extension, text_en
 from mensarium.core.repo import Repo
 from mensarium.shared.versions import parse_version
 from mensarium.tool_runtime.commands import command_spec
-from mensarium.tool_runtime.registry import CORE_TOOLS, REGISTRY, ToolSpec
+from mensarium.tool_runtime.registry import CORE_TOOLS, MEMORY_TOOLS, REGISTRY, ToolSpec
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +42,9 @@ class Toolbox:
         if self.skills:
             self.registry.update(CORE_TOOLS)
             extra.append("skills.read")
+        if profile.memory:
+            self.registry.update(MEMORY_TOOLS)
+            extra += list(MEMORY_TOOLS)
         self.profile_tools = [*profile.allowed_tools, *extra]
 
     @property
@@ -64,7 +67,7 @@ class Toolbox:
 
 
 async def check_conflicts(repo: Repo, ext: Extension) -> None:
-    taken = set(REGISTRY) | set(CORE_TOOLS)
+    taken = set(REGISTRY) | set(CORE_TOOLS) | set(MEMORY_TOOLS)
     for other in parse_manifests(await repo.list_extensions()):
         if other.id != ext.id:
             taken |= {t.name for t in other.tools}

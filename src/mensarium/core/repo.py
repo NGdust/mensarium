@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from mensarium.core.db import Database
@@ -218,6 +219,67 @@ class Repo:
 
     async def delete_extension(self, ext_id: str) -> None:
         await self.db.execute("DELETE FROM extensions WHERE id = ?", (ext_id,))
+
+    # settings (kv)
+    async def get_setting(self, key: str) -> Any:
+        row = await self.db.fetchone("SELECT value FROM kv WHERE key = ?", (key,))
+        return json.loads(row["value"]) if row else None
+
+    async def set_setting(self, key: str, value: Any) -> None:
+        await self.db.execute(
+            "INSERT INTO kv(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, json.dumps(value, ensure_ascii=False)),
+        )
+
+    # memory
+    async def list_notes(self) -> list[dict[str, Any]]:
+        return await self.db.fetchall("SELECT * FROM memory_notes ORDER BY updated_at DESC")
+
+    async def get_note(self, note_id: str) -> dict[str, Any] | None:
+        return await self.db.fetchone("SELECT * FROM memory_notes WHERE id = ?", (note_id,))
+
+    async def get_note_by_title(self, title: str) -> dict[str, Any] | None:
+        # SQLite NOCASE folds ASCII only, so Cyrillic titles are compared here
+        key = title.casefold()
+        return next((r for r in await self.list_notes() if r["title"].casefold() == key), None)
+
+    async def create_note(self, values: dict[str, Any]) -> None:
+        now = now_iso()
+        await self.db.insert("memory_notes", {**values, "created_at": now, "updated_at": now})
+
+    async def update_note(self, note_id: str, values: dict[str, Any]) -> None:
+        await self.db.update("memory_notes", note_id, {**values, "updated_at": now_iso()})
+
+    async def delete_note(self, note_id: str) -> None:
+        await self.db.execute("DELETE FROM memory_notes WHERE id = ?", (note_id,))
+
+    async def mark_recalled(self, note_ids: list[str]) -> None:
+        now = now_iso()
+        for note_id in note_ids:
+            await self.db.conn.execute(
+                "UPDATE memory_notes SET recall_count = recall_count + 1, last_recalled_at = ? WHERE id = ?",
+                (now, note_id),
+            )
+        await self.db.conn.commit()
+
+    async def create_dream(self, values: dict[str, Any]) -> None:
+        await self.db.insert("dream_runs", values)
+
+    async def update_dream(self, run_id: str, values: dict[str, Any]) -> None:
+        await self.db.update("dream_runs", run_id, values)
+
+    async def list_dreams(self, limit: int = 30) -> list[dict[str, Any]]:
+        return await self.db.fetchall("SELECT * FROM dream_runs ORDER BY started_at DESC LIMIT ?", (limit,))
+
+    async def tasks_updated_since(self, since: str, limit: int) -> list[dict[str, Any]]:
+        marks = ",".join("?" for _ in TERMINAL_STATUSES)
+        return await self.db.fetchall(
+            f"SELECT * FROM tasks WHERE updated_at > ? AND status IN ({marks}) ORDER BY updated_at LIMIT ?",
+            (since, *TERMINAL_STATUSES, limit),
+        )
+
+    async def list_tool_calls(self, task_id: str) -> list[dict[str, Any]]:
+        return await self.db.fetchall("SELECT * FROM tool_calls WHERE task_id = ? ORDER BY created_at", (task_id,))
 
     # events
     async def add_event(self, task_id: str, event: str, payload: dict[str, Any]) -> dict[str, Any]:

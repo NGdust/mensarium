@@ -20,6 +20,7 @@ from mensarium.contracts.protocol import (
 from mensarium.core.config import CoreConfig
 from mensarium.core.events import EventBus
 from mensarium.core.extensions import Toolbox, parse_manifests
+from mensarium.core.memory import Memory, NoteError
 from mensarium.core.repo import TERMINAL_STATUSES, Repo
 from mensarium.core.target_hub import TargetHub, TargetUnavailable
 from mensarium.llm_providers.base import LLMError, LLMProvider
@@ -66,8 +67,10 @@ class Orchestrator:
         cfg: CoreConfig,
         workspace_id: str,
         artifacts_dir: Path,
+        memory: Memory,
     ) -> None:
         self.repo = repo
+        self.memory = memory
         self.hub = hub
         self.bus = bus
         self.provider = provider
@@ -308,13 +311,14 @@ class Orchestrator:
             toolbox = Toolbox(profile, parse_manifests(await self.repo.list_extensions(enabled_only=True)))
             available = toolbox.available(target)
             skills = toolbox.skills if "skills.read" in available else []
+            memory = await self.memory.context() if "memory.search" in available else None
 
             await self._set_status(task_id, "PLANNING")
             llm_steps += 1
             steps = await self.repo.list_steps(task_id)
             request = ChatRequest(
                 model=model,
-                system=build_system_prompt(profile, target["name"], target["platform"], policy, available, skills),
+                system=build_system_prompt(profile, target["name"], target["platform"], policy, available, skills, memory),
                 messages=build_messages(steps, profile.llm.max_context_tokens),
                 temperature=profile.llm.temperature,
                 max_output_tokens=profile.llm.max_output_tokens,
@@ -636,8 +640,8 @@ class Orchestrator:
         await self.repo.update_tool_call(tc_id, {"status": "executing"})
         await self.bus.emit(task_id, "tool_call.executing", {"tool_call_id": tc_id, "tool": call.tool, "display": decision.display})
         try:
-            content, status = self._core_tool(call.tool, decision.arguments, toolbox), "succeeded"
-        except TaskError as e:
+            content, status = await self._core_tool(task_id, call.tool, decision.arguments, toolbox), "succeeded"
+        except (TaskError, NoteError) as e:
             content, status = f"ERROR: {e}", "failed"
         await self.repo.update_tool_call(tc_id, {"status": status})
         await self._observe(task_id, call, content, f"{call.tool} {decision.display} -> {status}")
@@ -650,8 +654,13 @@ class Orchestrator:
             self.workspace_id, "core", "tool.core", {"task_id": task_id, "tool": call.tool, "display": decision.display, "status": status}
         )
 
-    @staticmethod
-    def _core_tool(tool: str, args: dict[str, Any], toolbox: Toolbox) -> str:
+    async def _core_tool(self, task_id: str, tool: str, args: dict[str, Any], toolbox: Toolbox) -> str:
+        if tool == "memory.search":
+            return await self.memory.agent_search(args["query"], args["limit"])
+        if tool == "memory.read":
+            return await self.memory.agent_read(args["title"])
+        if tool == "memory.save":
+            return await self.memory.agent_save(args["title"], args["content"], args["kind"], args["tags"], task_id)
         if tool == "skills.read":
             skill = next((e for e in toolbox.extensions if e.id == args["id"] and e.instructions), None)
             if skill is None:

@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -57,7 +59,28 @@ TOOL_ARGS: dict[str, type[_Args]] = {
     "shell.exec": ShellExecArgs,
 }
 
-CORE_TOOL_ARGS: dict[str, type[_Args]] = {"skills.read": SkillsReadArgs}
+class MemorySearchArgs(_Args):
+    query: str = Field(min_length=1, description="Words to look for in memory note titles, tags and text")
+    limit: int = Field(8, ge=1, le=20)
+
+
+class MemoryReadArgs(_Args):
+    title: str = Field(min_length=1, description="Exact note title")
+
+
+class MemorySaveArgs(_Args):
+    title: str = Field(min_length=1, max_length=120, description="Short noun phrase; reuse an existing title to add to it")
+    content: str = Field(min_length=1, max_length=4000, description="What to remember, 1-4 sentences; may link [[Other note]]")
+    kind: Literal["fact", "preference", "project", "person", "device", "howto"] = "fact"
+    tags: list[str] = Field(default_factory=list, max_length=8)
+
+
+CORE_TOOL_ARGS: dict[str, type[_Args]] = {
+    "skills.read": SkillsReadArgs,
+    "memory.search": MemorySearchArgs,
+    "memory.read": MemoryReadArgs,
+    "memory.save": MemorySaveArgs,
+}
 
 PATH_FIELDS: dict[str, tuple[str, ...]] = {
     "files.list": ("path",),

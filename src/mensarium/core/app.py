@@ -24,9 +24,11 @@ from mensarium.core import distribution, pairing
 from mensarium.core.catalog import Catalog
 from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secret, save_config
 from mensarium.core.db import Database
+from mensarium.core.dreaming import Dreamer, DreamError
 from mensarium.core.events import EventBus
 from mensarium.core.extensions import ExtensionError, check_conflicts, listing, parse_manifests
 from mensarium.core.local_target import ensure_local_target, local_target_paths
+from mensarium.core.memory import KINDS, Memory, NoteError
 from mensarium.core.orchestrator import Orchestrator, TaskError, full_access
 from mensarium.core.repo import Repo
 from mensarium.core.target_hub import TargetHub
@@ -58,6 +60,8 @@ class Core:
     pair_failures: deque[float]
     local_target_id: str | None
     catalog: Catalog
+    memory: Memory
+    dreamer: Dreamer
 
 
 class LoginBody(BaseModel):
@@ -83,6 +87,30 @@ class ModelBody(BaseModel):
 class ToolToggle(BaseModel):
     tool: str
     enabled: bool
+
+
+class NoteBody(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    body: str = Field("", max_length=20000)
+    kind: str = "note"
+    tags: list[str] = []
+    pinned: bool = False
+    importance: int = Field(5, ge=1, le=10)
+
+
+class NotePatch(BaseModel):
+    title: str | None = Field(None, min_length=1, max_length=120)
+    body: str | None = Field(None, max_length=20000)
+    kind: str | None = None
+    tags: list[str] | None = None
+    pinned: bool | None = None
+    importance: int | None = Field(None, ge=1, le=10)
+
+
+class DreamSettings(BaseModel):
+    dreaming: bool | None = None
+    hour: int | None = Field(None, ge=0, le=23)
+    min_importance: int | None = Field(None, ge=1, le=10)
 
 
 class InstallBody(BaseModel):
@@ -136,8 +164,12 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         key = load_or_create_private_key(paths.signing_key)
         hub = TargetHub(repo, key)
         bus = EventBus(repo)
-        orchestrator = Orchestrator(repo, hub, bus, provider, cfg, workspace_id, paths.artifacts)
+        memory = Memory(repo)
+        orchestrator = Orchestrator(repo, hub, bus, provider, cfg, workspace_id, paths.artifacts, memory)
         await orchestrator.recover_after_restart()
+        dreamer = Dreamer(repo, memory, provider, cfg, workspace_id)
+        await dreamer.recover()
+        dream_scheduler = asyncio.create_task(dreamer.run_forever())
         await repo.audit(workspace_id, "core", "core.started", {"version": __version__})
         local = await ensure_local_target(repo, paths, cfg, public_key_b64(key), workspace_id)
         local_agent = None
@@ -158,12 +190,17 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             pair_failures=deque(maxlen=50),
             local_target_id=local[0].target_id if local else None,
             catalog=Catalog(cfg.marketplace.url),
+            memory=memory,
+            dreamer=dreamer,
         )
         try:
             yield
         finally:
             for runner in list(orchestrator.runners.values()):
                 runner.cancel()
+            dream_scheduler.cancel()
+            for dream in list(dreamer.tasks):
+                dream.cancel()
             if local_agent:
                 local_agent.cancel()
             await provider.aclose()
@@ -468,6 +505,71 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         await c.repo.delete_extension(ext_id)
         await c.repo.audit(c.workspace_id, "user", "extension.removed", {"id": ext_id})
         return {"ok": True}
+
+    def note_error(e: NoteError) -> HTTPException:
+        return HTTPException(404 if "not found" in str(e) else 409, str(e))
+
+    @app.get("/v1/memory/notes")
+    async def list_notes(q: str = "", c: Core = Depends(auth)) -> dict[str, Any]:
+        rows = await c.memory.search(q, 500) if q.strip() else await c.repo.list_notes()
+        return {"notes": [Memory.view(r) for r in rows], "kinds": list(KINDS)}
+
+    @app.get("/v1/memory/notes/{note_id}")
+    async def get_note(note_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        row = await c.repo.get_note(note_id)
+        if not row:
+            raise HTTPException(404, "note not found")
+        return Memory.view(row, full=True) | {"backlinks": await c.memory.backlinks(row["title"])}
+
+    @app.post("/v1/memory/notes")
+    async def create_note(body: NoteBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            row = await c.memory.create(**body.model_dump())
+        except NoteError as e:
+            raise note_error(e) from e
+        await c.repo.audit(c.workspace_id, "user", "memory.note_created", {"note_id": row["id"], "title": row["title"]})
+        return Memory.view(row, full=True)
+
+    @app.patch("/v1/memory/notes/{note_id}")
+    async def update_note(note_id: str, body: NotePatch, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            row = await c.memory.update(note_id, body.model_dump(exclude_none=True))
+        except NoteError as e:
+            raise note_error(e) from e
+        await c.repo.audit(c.workspace_id, "user", "memory.note_updated", {"note_id": note_id, "title": row["title"]})
+        return Memory.view(row, full=True)
+
+    @app.delete("/v1/memory/notes/{note_id}")
+    async def delete_note(note_id: str, c: Core = Depends(auth)) -> dict[str, bool]:
+        row = await c.repo.get_note(note_id)
+        if not row:
+            raise HTTPException(404, "note not found")
+        await c.repo.delete_note(note_id)
+        await c.repo.audit(c.workspace_id, "user", "memory.note_deleted", {"note_id": note_id, "title": row["title"]})
+        return {"ok": True}
+
+    @app.get("/v1/memory/graph")
+    async def memory_graph(tags: bool = False, c: Core = Depends(auth)) -> dict[str, Any]:
+        return await c.memory.graph(tags)
+
+    @app.get("/v1/memory/dreams")
+    async def dreams(c: Core = Depends(auth)) -> dict[str, Any]:
+        return {"settings": await c.dreamer.settings(), "running": c.dreamer.running, "runs": await c.repo.list_dreams()}
+
+    @app.put("/v1/memory/dreams/settings")
+    async def dream_settings(body: DreamSettings, c: Core = Depends(auth)) -> dict[str, Any]:
+        settings = await c.dreamer.save_settings(body.model_dump(exclude_none=True))
+        await c.repo.audit(c.workspace_id, "user", "memory.dream_settings", settings)
+        return settings
+
+    @app.post("/v1/memory/dreams")
+    async def start_dream(c: Core = Depends(auth)) -> dict[str, str]:
+        try:
+            run_id = await c.dreamer.start("manual")
+        except DreamError as e:
+            raise HTTPException(409, str(e)) from e
+        await c.repo.audit(c.workspace_id, "user", "memory.dream_started", {"run_id": run_id})
+        return {"id": run_id}
 
     def task_view(t: dict[str, Any]) -> dict[str, Any]:
         keys = ("id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result", "mode", "model")

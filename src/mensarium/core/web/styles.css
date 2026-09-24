@@ -114,6 +114,12 @@ input[type="text"], input[type="password"], input[type="search"], textarea {
   width: 100%; background: var(--surface); color: var(--text);
   border: 1px solid var(--line-strong); border-radius: var(--r); padding: 10px 14px; font: 15px var(--font);
 }
+select {
+  height: 38px; padding: 0 34px 0 12px; border-radius: var(--r); border: 1px solid var(--line-strong); color: var(--text);
+  background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238f8a9b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 11px center / 15px;
+  font: 14px var(--font); appearance: none; cursor: pointer;
+}
+select:focus { outline: none; border-color: var(--accent-line); }
 input::placeholder, textarea::placeholder { color: var(--muted); }
 input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 
@@ -506,6 +512,89 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .market-instructions { max-height: 320px; overflow-y: auto; padding: 12px 14px; margin-bottom: 18px; border-radius: var(--r); border: 1px solid var(--line); background: var(--frame); font-size: 14px; }
 .market-yaml { font: 13px/1.5 var(--mono); resize: vertical; margin-bottom: 16px; background: var(--frame); }
 
+/* memory */
+.page-inner.page-wide { max-width: 1180px; }
+.memory-host { margin-top: 16px; }
+.muted { margin: 0 0 12px; color: var(--muted); font-size: 13.5px; }
+.graph-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.graph-toolbar .spacer { flex: 1; }
+.graph-search { flex: 0 1 320px; margin: 0; }
+.zoom-sign { font-size: 21px; line-height: 1; }
+.graph-stage {
+  position: relative; height: clamp(420px, calc(100vh - 400px), 900px); overflow: hidden;
+  border-radius: var(--r-lg); border: 1px solid var(--line);
+  background: radial-gradient(70% 60% at 50% 40%, rgba(120, 70, 200, 0.12), transparent 75%), var(--frame);
+}
+.graph-canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.graph-side {
+  position: absolute; top: 12px; right: 12px; bottom: 12px; width: min(340px, calc(100% - 24px)); overflow-y: auto;
+  padding: 14px 16px 16px; border-radius: var(--r-lg); background: rgba(22, 20, 28, 0.95); border: 1px solid var(--line-strong); box-shadow: var(--pop);
+}
+.graph-side-head { display: flex; align-items: flex-start; gap: 8px; }
+.graph-side-head h3 { flex: 1; margin: 6px 0 10px; font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
+.graph-side-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.graph-side-meta .pill, .graph-side-meta .pill.tag { height: 24px; font-size: 12px; padding: 0 10px; }
+.graph-side-meta .pill .icon { width: 13px; height: 13px; }
+.graph-side-body { margin-bottom: 12px; font-size: 14px; }
+.graph-side .btn { margin-top: 12px; }
+.graph-side-list { display: flex; flex-direction: column; }
+.graph-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; text-align: center; color: var(--muted); }
+.graph-empty h3 { margin: 10px 0 0; color: var(--text); font-size: 17px; font-weight: 600; }
+.graph-empty p { max-width: 420px; margin: 0 0 10px; font-size: 14px; }
+.graph-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 12.5px; color: var(--muted); }
+.graph-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.kind-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.pill.kind-pill { gap: 6px; }
+.wikilink { color: var(--accent-strong); border-bottom: 1px dashed var(--accent-line); }
+.wikilink:hover { text-decoration: none; border-bottom-style: solid; }
+.note-form { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+.note-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.note-field { display: flex; flex-direction: column; gap: 5px; }
+.note-field > span { font-size: 12.5px; color: var(--muted); }
+.note-body { min-height: 200px; resize: vertical; font: 14.5px/1.55 var(--font); }
+.note-backlinks { font-size: 13.5px; color: var(--muted); }
+.modal-actions .spacer { flex: 1; }
+.note-item {
+  display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 14px 20px; border: 0; border-top: 1px solid var(--line);
+  background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer;
+}
+.note-item:first-child { border-top: 0; }
+.note-item:hover { background: rgba(255, 255, 255, 0.025); }
+.note-item > .kind-dot { margin-top: 8px; }
+.note-item-meta { margin-top: 4px; font-size: 12.5px; color: var(--faint); }
+.note-pin .icon { width: 14px; height: 14px; color: var(--accent-strong); }
+.dream-card { display: flex; align-items: center; gap: 24px; padding: 22px 24px; border-radius: var(--r-lg); border: 1px solid var(--line); background: rgba(22, 20, 28, 0.7); }
+.dream-card.running { border-color: var(--accent-line); }
+.dream-text { flex: 1; min-width: 0; }
+.dream-text h2 { margin: 0 0 6px; font-size: 20px; font-weight: 500; letter-spacing: -0.015em; }
+.dream-text p { margin: 0 0 14px; max-width: 640px; color: var(--muted); font-size: 14px; }
+.dream-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.dream-controls .spacer { flex: 1; }
+.dream-phases { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
+.dream-phase { display: flex; gap: 10px; padding: 12px 14px; border-radius: var(--r); border: 1px solid var(--line); background: rgba(22, 20, 28, 0.5); opacity: 0.5; }
+.dream-phase.done, .dream-phase.current { opacity: 1; }
+.dream-phase.current { border-color: var(--accent-line); background: var(--accent-soft); }
+.dream-phase-title { font-size: 14px; font-weight: 600; }
+.dream-phase-dot { display: grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: 50%; background: var(--surface-3); font-size: 12px; }
+.dream-phase-dot .icon { width: 14px; height: 14px; }
+.dream-phase.done .dream-phase-dot { color: var(--ok); }
+.dream-phase.current .dream-phase-dot { background: var(--accent-btn); color: #fff; animation: dot 1.5s ease-in-out infinite; }
+.dream-diary-head { margin-top: 32px; }
+.dream-runs { display: flex; flex-direction: column; gap: 10px; }
+.dream-entry { padding: 16px 20px; border-radius: var(--r-lg); border: 1px solid var(--line); background: rgba(22, 20, 28, 0.7); }
+.dream-entry-head { display: flex; align-items: center; gap: 10px; margin-bottom: 2px; flex-wrap: wrap; }
+.dream-entry-head .pill { height: 24px; font-size: 12px; padding: 0 10px; }
+.dream-date { font-weight: 600; }
+.dream-diary { margin: 10px 0; max-width: none; color: var(--text-2); }
+.dream-error { margin: 8px 0 0; color: var(--danger); font-size: 13.5px; }
+.dream-entry .muted { margin: 8px 0 0; }
+.dream-entry .market-tags { margin-top: 8px; }
+.dream-changes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.dream-change { height: 28px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text-2); font: 13px var(--font); cursor: pointer; }
+.dream-change:hover { background: var(--surface-2); color: var(--text); }
+.dream-change.created { color: var(--ok); border-color: rgba(90, 212, 154, 0.35); }
+.dream-change.reinforced { color: var(--accent-strong); border-color: var(--accent-line); }
+
 /* modal */
 .backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 16px; background: rgba(3, 2, 6, 0.7); }
 .modal { width: 100%; max-width: 540px; padding: 24px; border-radius: var(--r-xl); background: var(--surface); box-shadow: var(--pop); }
@@ -568,6 +657,10 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
   .row-value { max-width: 100%; text-align: left; }
   .audit-item { grid-template-columns: 1fr; gap: 4px; }
   .segmented { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .graph-stage { height: 62vh; }
+  .graph-side { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 58%; }
+  .dream-card { flex-direction: column; align-items: flex-start; }
+  .dream-phases { grid-template-columns: 1fr 1fr; }
   .segmented::-webkit-scrollbar { display: none; }
   .seg { flex: none; padding: 0 11px; }
   .market-grid { grid-template-columns: 1fr; }

@@ -1,6 +1,7 @@
 // Mensarium web UI. Vanilla ES module, no build step, no dependencies.
 
 import { createOrb } from './orb.js';
+import { createGraph, graphColor } from './graph.js';
 
 const $app = document.getElementById('app');
 const $toasts = document.getElementById('toasts');
@@ -88,6 +89,9 @@ const ICONS = {
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
   package: '<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>',
   book: '<path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5z"/><path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19v-3"/>',
+  graph: '<circle cx="6" cy="7" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.2 8.4 10.9 15.8M16.9 8.2l-3.8 7.6M8.5 6.8l7-.6"/>',
+  pin: '<path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z"/><path d="M12 14v6"/>',
+  moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
   robot: '<rect x="4.5" y="8" width="15" height="11" rx="3"/><path d="M12 8V5.2M2.5 12.5v3M21.5 12.5v3M9.5 16h5"/><circle cx="12" cy="4.2" r="1"/><circle cx="9.3" cy="12.4" r=".9"/><circle cx="14.7" cy="12.4" r=".9"/>',
 };
 
@@ -245,7 +249,7 @@ const TEMPLATES = [
   ['folder', 'Как устроен проект', 'Изучи структуру проекта и расскажи, как он устроен: точки входа, основные модули, как запускать.'],
   ['search', 'Исправить ошибку', 'Найди причину ошибки и предложи минимальное исправление: '],
 ];
-const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'git.status': 'git', 'git.diff': 'git', 'shell.exec': 'terminal', 'skills.read': 'book' };
+const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'git.status': 'git', 'git.diff': 'git', 'shell.exec': 'terminal', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph' };
 // Marketplace texts are either plain strings or {en, ru} maps.
 const txt = (v) => (typeof v === 'string' ? v : (v?.ru || v?.en || ''));
 const RESUMABLE = ['PAUSED', 'FAILED_RECOVERABLE'];
@@ -966,6 +970,7 @@ const SETTINGS = [
   ['overview', 'pulse', 'Обзор'],
   ['model', 'robot', 'Модель'],
   ['devices', 'laptop', 'Устройства'],
+  ['memory', 'graph', 'Память'],
   ['marketplace', 'package', 'Маркетплейс'],
   ['profiles', 'layers', 'Профили'],
   ['audit', 'list', 'Журнал действий'],
@@ -1023,7 +1028,7 @@ const cmdValue = (cmd) => [h('code', {}, cmd), copyBtn(cmd)];
 async function viewSettings(key) {
   const shell = ensureSettingsShell();
   shell.setActive();
-  const views = { overview: settingsOverview, model: settingsModel, devices: settingsDevices, marketplace: settingsMarketplace, profiles: settingsProfiles, audit: settingsAudit };
+  const views = { overview: settingsOverview, model: settingsModel, devices: settingsDevices, memory: settingsMemory, marketplace: settingsMarketplace, profiles: settingsProfiles, audit: settingsAudit };
   await (views[key] || settingsOverview)(shell);
 }
 
@@ -1219,6 +1224,254 @@ async function settingsDevices(shell) {
   viewCleanups.push(() => clearInterval(iv));
 }
 
+// ---------- memory ----------
+
+const MEM_KINDS = { fact: 'Факт', preference: 'Предпочтение', project: 'Проект', person: 'Человек', device: 'Устройство', howto: 'Инструкция', note: 'Заметка' };
+const MEM_SOURCES = { user: 'вы', agent: 'агент', dream: 'сновидение' };
+const DREAM_PHASES = [['light', 'Лёгкий сон', 'собираю новые чаты'], ['rem', 'REM', 'ищу важное и связи'], ['deep', 'Глубокий сон', 'закрепляю в памяти'], ['diary', 'Дневник', 'записываю, что запомнил']];
+const DREAM_TRIGGER = { schedule: 'по расписанию', manual: 'вручную' };
+
+// Markdown plus [[wikilinks]]; titles arrive HTML-escaped from markdown(), so they are safe in the attribute.
+const memoryMd = (text) => markdown(text).replace(/\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g, (_, title, alias) => `<a href="#" class="wikilink" data-title="${title}">${alias || title}</a>`);
+
+function kindPill(kind) {
+  return h('span', { class: 'pill kind-pill' }, h('span', { class: 'kind-dot', style: `background:${graphColor(kind)}` }), MEM_KINDS[kind] || kind);
+}
+
+async function openNoteEditor(note, { onSaved, onOpenTitle } = {}) {
+  const full = note?.id ? await get(`/v1/memory/notes/${note.id}`) : null;
+  const n = full || { title: note?.title || '', body: '', kind: 'fact', tags: [], pinned: false, importance: 5 };
+  const title = h('input', { type: 'text', value: n.title, placeholder: 'Короткое название', 'aria-label': 'Название', maxlength: '120' });
+  const kind = h('select', { 'aria-label': 'Тип' }, Object.entries(MEM_KINDS).map(([k, label]) => h('option', { value: k, selected: k === n.kind }, label)));
+  const importance = h('select', { 'aria-label': 'Важность' }, Array.from({ length: 10 }, (_, i) => h('option', { value: String(i + 1), selected: i + 1 === n.importance }, `Важность ${i + 1}`)));
+  let pinned = n.pinned;
+  const pin = toggleSwitch(pinned, { label: 'Всегда в контексте агента', onChange: async (v) => { pinned = v; } });
+  const tags = h('input', { type: 'text', value: (n.tags || []).join(', '), placeholder: 'теги через запятую', 'aria-label': 'Теги' });
+  const body = h('textarea', { class: 'note-body', rows: 11, placeholder: 'Что запомнить. Ссылка на другую заметку: [[Название]]', 'aria-label': 'Текст заметки' });
+  body.value = n.body || '';
+  const save = h('button', { class: 'btn btn-primary' }, 'Сохранить');
+  save.addEventListener('click', async () => {
+    const payload = { title: title.value.trim(), body: body.value, kind: kind.value, importance: Number(importance.value), pinned, tags: tags.value.split(',').map((t) => t.trim()).filter(Boolean) };
+    if (!payload.title) { title.focus(); return; }
+    save.disabled = true;
+    try {
+      const saved = full ? await api(`/v1/memory/notes/${full.id}`, { method: 'PATCH', body: JSON.stringify(payload) }) : await post('/v1/memory/notes', payload);
+      closeLayer();
+      toast(full ? 'Заметка сохранена' : 'Заметка создана');
+      onSaved?.(saved);
+    } catch (err) { fail(err); } finally { save.disabled = false; }
+  });
+  const remove = full ? h('button', { class: 'btn btn-danger', onclick: async () => {
+    if (!await confirmDialog({ title: `Удалить «${full.title}»?`, text: 'Агент забудет эту заметку. Ссылки на неё в других заметках останутся и станут пустыми узлами графа.', action: 'Удалить', danger: true })) return;
+    try { await del(`/v1/memory/notes/${full.id}`); toast('Заметка удалена'); onSaved?.(null); } catch (err) { fail(err); }
+  } }, 'Удалить') : null;
+  const backlinks = full?.backlinks?.length ? h('div', { class: 'note-backlinks' }, 'Ссылаются сюда: ', full.backlinks.map((b, i) => [i ? ', ' : '', h('a', { href: '#', onclick: (e) => { e.preventDefault(); closeLayer(); onOpenTitle?.(b.title); } }, b.title)])) : null;
+  const meta = full ? h('div', { class: 'market-meta' }, [`источник: ${MEM_SOURCES[full.source] || full.source}`, full.source_task_id ? h('a', { href: `#/chat/${full.source_task_id}` }, 'чат') : null, `обновлена ${relTime(full.updated_at)}`, full.recall_count ? `агент обращался ${full.recall_count} раз` : null].filter(Boolean).flatMap((x, i) => (i ? [' · ', x] : [x]))) : null;
+  openModal(
+    h('div', { class: 'modal-head' }, h('h2', {}, full ? 'Заметка' : 'Новая заметка'), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': 'Закрыть' }, icon('x'))),
+    meta,
+    h('div', { class: 'note-form' },
+      h('label', { class: 'note-field' }, h('span', {}, 'Название'), title),
+      h('div', { class: 'note-row' }, kind, importance, h('label', { class: 'switch-label', title: 'Заметка попадает в каждый запрос к модели' }, pin, 'Всегда в контексте')),
+      h('label', { class: 'note-field' }, h('span', {}, 'Теги'), tags),
+      h('label', { class: 'note-field' }, h('span', {}, 'Текст'), body),
+      backlinks),
+    h('div', { class: 'modal-actions' }, remove, h('span', { class: 'spacer' }), h('button', { class: 'btn', onclick: closeLayer }, 'Отмена'), save),
+  ).classList.add('modal-wide');
+  (full ? body : title).focus();
+}
+
+async function settingsMemory(shell) {
+  const TABS = [['graph', 'Граф'], ['notes', 'Заметки'], ['dreams', 'Сновидения']];
+  let tab = localStorageGet('memory-tab') || 'graph';
+  const tabs = h('div', { class: 'segmented', role: 'tablist' });
+  const host = h('div', { class: 'memory-host' });
+  let cleanup = null;
+  const renderTabs = () => tabs.replaceChildren(...TABS.map(([key, label]) => h('button', {
+    class: `seg${key === tab ? ' active' : ''}`, role: 'tab', 'aria-selected': String(key === tab),
+    onclick: () => { tab = key; localStorageSet('memory-tab', key); show(); },
+  }, label)));
+  const byTitle = async (title) => (await get(`/v1/memory/notes?q=${encodeURIComponent(title)}`)).notes.find((n) => n.title.toLowerCase() === title.toLowerCase());
+  const openTitle = async (title) => {
+    const note = await byTitle(title);
+    openNoteEditor(note || { title }, { onSaved: () => show(), onOpenTitle: openTitle });
+  };
+  const newNote = () => openNoteEditor(null, { onSaved: () => show(), onOpenTitle: openTitle });
+
+  async function show() {
+    if (cleanup) { cleanup(); cleanup = null; }
+    renderTabs();
+    host.replaceChildren();
+    cleanup = await ({ graph: memoryGraph, notes: memoryNotes, dreams: memoryDreams }[tab] || memoryGraph)();
+  }
+
+  async function memoryGraph() {
+    const canvas = h('canvas', { class: 'graph-canvas', 'aria-label': 'Граф памяти: перетаскивайте узлы, колесо — масштаб' });
+    const side = h('aside', { class: 'graph-side hidden' });
+    const search = h('input', { type: 'search', placeholder: 'Найти заметку', 'aria-label': 'Найти заметку на графе' });
+    let withTags = localStorageGet('graph-tags') === '1';
+    const tagsChip = h('button', { class: `chip${withTags ? ' accent' : ''}`, 'aria-pressed': String(withTags) }, '#', 'Теги');
+    let data = { nodes: [], links: [] };
+    const graph = createGraph(canvas, { onSelect: (node) => preview(node) });
+    const empty = h('div', { class: 'graph-empty hidden' }, orb('md'), h('h3', {}, 'Память пока пуста'), h('p', {}, 'Агент начнёт запоминать сам, а сновидения соберут важное из чатов. Можно добавить заметку вручную.'), h('button', { class: 'btn btn-primary', onclick: newNote }, icon('plus'), 'Новая заметка'));
+
+    async function load() {
+      data = await get(`/v1/memory/graph?tags=${withTags}`);
+      empty.classList.toggle('hidden', data.nodes.length > 0);
+      graph.setData(data);
+    }
+    async function preview(node) {
+      if (!node) { side.classList.add('hidden'); return; }
+      side.classList.remove('hidden');
+      const close = h('button', { class: 'icon-btn', 'aria-label': 'Закрыть', onclick: () => { side.classList.add('hidden'); graph.select(null); } }, icon('x'));
+      if (node.kind === 'tag') {
+        const notes = data.links.filter((l) => l.target === node.id).map((l) => data.nodes.find((x) => x.id === l.source)).filter(Boolean);
+        side.replaceChildren(h('div', { class: 'graph-side-head' }, h('h3', {}, node.label), close), h('div', { class: 'graph-side-list' }, notes.map((x) => h('button', { class: 'menu-item', onclick: () => { graph.select(x.id); preview(x); } }, h('span', { class: 'kind-dot', style: `background:${graphColor(x.kind)}` }), x.label))));
+        return;
+      }
+      if (node.ghost) {
+        side.replaceChildren(h('div', { class: 'graph-side-head' }, h('h3', {}, node.label), close), h('p', { class: 'muted' }, 'На эту заметку ссылаются, но её ещё нет.'), h('button', { class: 'btn btn-primary btn-sm', onclick: () => openNoteEditor({ title: node.label }, { onSaved: load, onOpenTitle: openTitle }) }, icon('plus'), 'Создать заметку'));
+        return;
+      }
+      side.replaceChildren(h('div', { class: 'graph-side-head' }, h('h3', {}, node.label), close), h('p', { class: 'muted' }, 'Загружаем...'));
+      let n;
+      try { n = await get(`/v1/memory/notes/${node.id}`); } catch (err) { fail(err); return; }
+      const bodyEl = h('div', { class: 'prose graph-side-body', html: memoryMd(n.body || '_Пусто_') });
+      bodyEl.addEventListener('click', (e) => {
+        const link = e.target.closest('.wikilink');
+        if (!link) return;
+        e.preventDefault();
+        const target = data.nodes.find((x) => !x.kind.startsWith('tag') && x.label.toLowerCase() === link.dataset.title.toLowerCase());
+        if (target) { graph.select(target.id); preview(target); }
+      });
+      side.replaceChildren(
+        h('div', { class: 'graph-side-head' }, h('h3', {}, n.title), close),
+        h('div', { class: 'graph-side-meta' }, kindPill(n.kind), n.pinned ? h('span', { class: 'pill accent', title: 'Всегда в контексте агента' }, icon('pin'), 'закреплена') : null, (n.tags || []).map((t) => h('span', { class: 'pill tag' }, `#${t}`))),
+        bodyEl,
+        n.backlinks.length ? h('div', { class: 'note-backlinks' }, 'Ссылаются сюда: ', n.backlinks.map((b, i) => [i ? ', ' : '', h('a', { href: '#', onclick: (e) => { e.preventDefault(); graph.select(b.id); preview(data.nodes.find((x) => x.id === b.id)); } }, b.title)])) : null,
+        h('div', { class: 'market-meta' }, `источник: ${MEM_SOURCES[n.source] || n.source} · важность ${n.importance}`),
+        h('button', { class: 'btn btn-sm', onclick: () => openNoteEditor(n, { onSaved: async () => { await load(); side.classList.add('hidden'); }, onOpenTitle: openTitle }) }, 'Изменить'),
+      );
+    }
+    tagsChip.addEventListener('click', async () => {
+      withTags = !withTags;
+      localStorageSet('graph-tags', withTags ? '1' : '0');
+      tagsChip.classList.toggle('accent', withTags);
+      tagsChip.setAttribute('aria-pressed', String(withTags));
+      await load();
+    });
+    search.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      const q = search.value.trim().toLowerCase();
+      const node = data.nodes.find((x) => x.label.toLowerCase() === q) || data.nodes.find((x) => x.label.toLowerCase().includes(q));
+      if (node) { graph.select(node.id); preview(node); } else toast('Не нашлось такой заметки');
+    });
+    const legend = h('div', { class: 'graph-legend' }, Object.entries(MEM_KINDS).map(([k, label]) => h('span', {}, h('span', { class: 'kind-dot', style: `background:${graphColor(k)}` }), label)));
+    host.append(
+      h('div', { class: 'graph-toolbar' },
+        h('div', { class: 'settings-search graph-search' }, icon('search'), search),
+        tagsChip,
+        h('span', { class: 'spacer' }),
+        h('button', { class: 'icon-btn', title: 'Уменьшить', 'aria-label': 'Уменьшить', onclick: () => graph.zoom(1 / 1.3) }, h('span', { class: 'zoom-sign' }, '−')),
+        h('button', { class: 'icon-btn', title: 'Показать всё', 'aria-label': 'Показать всё', onclick: () => graph.fit() }, icon('layers')),
+        h('button', { class: 'icon-btn', title: 'Увеличить', 'aria-label': 'Увеличить', onclick: () => graph.zoom(1.3) }, icon('plus'))),
+      h('div', { class: 'graph-stage' }, canvas, side, empty),
+      legend,
+    );
+    await load();
+    return () => graph.destroy();
+  }
+
+  async function memoryNotes() {
+    const search = h('input', { type: 'search', placeholder: 'Поиск по заметкам', 'aria-label': 'Поиск по заметкам' });
+    const kindFilter = h('select', { 'aria-label': 'Тип заметок' }, h('option', { value: '' }, 'Все типы'), Object.entries(MEM_KINDS).map(([k, label]) => h('option', { value: k }, label)));
+    const list = h('div', { class: 'rows' }, h('div', { class: 'empty' }, 'Загружаем...'));
+    let timer = 0;
+    async function load() {
+      const q = search.value.trim();
+      const { notes } = await get(`/v1/memory/notes${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+      const shown = notes.filter((n) => !kindFilter.value || n.kind === kindFilter.value);
+      list.replaceChildren(...(shown.length ? shown.map((n) => h('button', { class: 'note-item', onclick: () => openNoteEditor(n, { onSaved: load, onOpenTitle: openTitle }) },
+        h('span', { class: 'kind-dot', style: `background:${graphColor(n.kind)}` }),
+        h('div', { class: 'row-text' },
+          h('div', { class: 'row-title' }, n.title, n.pinned ? h('span', { class: 'note-pin', title: 'Всегда в контексте агента' }, icon('pin')) : null),
+          h('div', { class: 'row-desc' }, n.snippet || 'Пусто'),
+          h('div', { class: 'note-item-meta' }, [MEM_KINDS[n.kind] || n.kind, MEM_SOURCES[n.source] || n.source, relTime(n.updated_at), ...(n.tags || []).map((t) => `#${t}`)].join(' · ')))))
+        : [h('div', { class: 'empty' }, q || kindFilter.value ? 'Ничего не нашлось.' : 'Заметок пока нет. Агент будет сохранять важное сам, а сновидения — собирать из чатов.')]));
+    }
+    search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => load().catch(fail), 200); });
+    kindFilter.addEventListener('change', () => load().catch(fail));
+    host.append(h('div', { class: 'graph-toolbar' }, h('div', { class: 'settings-search graph-search' }, icon('search'), search), kindFilter), list);
+    await load();
+    return () => clearTimeout(timer);
+  }
+
+  async function memoryDreams() {
+    const box = h('div', {});
+    let timer = 0;
+    let signature = '';
+    async function load() {
+      const d = await get('/v1/memory/dreams');
+      const s = d.settings;
+      clearTimeout(timer);
+      timer = setTimeout(() => load().catch(() => {}), d.running ? 1500 : 20000);
+      const sig = JSON.stringify(d);
+      if (sig === signature) return;
+      signature = sig;
+      const current = d.runs.find((r) => r.status === 'running');
+      const run = h('button', { class: 'btn btn-primary', disabled: d.running, onclick: async () => {
+        try { await post('/v1/memory/dreams'); toast('Агент засыпает'); signature = ''; await load(); } catch (err) { fail(err); }
+      } }, icon('moon'), d.running ? 'Видит сны...' : 'Запустить сейчас');
+      const hour = h('select', { 'aria-label': 'Час запуска' }, Array.from({ length: 24 }, (_, i) => h('option', { value: String(i), selected: i === s.hour }, `в ${String(i).padStart(2, '0')}:00`)));
+      hour.addEventListener('change', () => put({ hour: Number(hour.value) }));
+      const threshold = h('select', { 'aria-label': 'Порог важности' }, Array.from({ length: 10 }, (_, i) => h('option', { value: String(i + 1), selected: i + 1 === s.min_importance }, `важность от ${i + 1}`)));
+      threshold.addEventListener('change', () => put({ min_importance: Number(threshold.value) }));
+      const phaseIdx = current ? DREAM_PHASES.findIndex(([k]) => k === current.phase) : -1;
+      box.replaceChildren(...[
+        h('div', { class: `dream-card${d.running ? ' running' : ''}` },
+          createOrb(72, { animate: true, live: d.running, className: 'md' }),
+          h('div', { class: 'dream-text' },
+            h('h2', {}, 'Сновидения'),
+            h('p', {}, 'Ночью агент перебирает новые чаты: в лёгком сне собирает, что вы говорили и что он делал, в REM ищет важное и связи с тем, что уже знает, в глубоком сне закрепляет в памяти только то, что прошло порог важности, а утром оставляет запись в дневнике.'),
+            h('div', { class: 'dream-controls' },
+              h('label', { class: 'switch-label' }, toggleSwitch(s.dreaming, { label: 'Каждую ночь', onChange: (v) => put({ dreaming: v }) }), 'Каждую ночь'),
+              hour, threshold, h('span', { class: 'spacer' }), run))),
+        current ? h('div', { class: 'dream-phases' }, DREAM_PHASES.map(([k, label, desc], i) => h('div', { class: `dream-phase${i < phaseIdx ? ' done' : i === phaseIdx ? ' current' : ''}` },
+          h('span', { class: 'dream-phase-dot' }, i < phaseIdx ? icon('check') : String(i + 1)), h('div', {}, h('div', { class: 'dream-phase-title' }, label), h('div', { class: 'row-desc' }, desc))))) : null,
+        h('div', { class: 'section-head dream-diary-head' }, h('div', {}, h('h2', {}, 'Дневник сновидений'))),
+        d.runs.filter((r) => r.status !== 'running').length
+          ? h('div', { class: 'dream-runs' }, d.runs.filter((r) => r.status !== 'running').map(dreamEntry))
+          : h('div', { class: 'rows' }, h('div', { class: 'empty' }, 'Агент ещё ни разу не видел снов.')),
+      ].filter(Boolean));
+    }
+    const put = async (values) => { try { await api('/v1/memory/dreams/settings', { method: 'PUT', body: JSON.stringify(values) }); } catch (err) { fail(err); } };
+    function dreamEntry(r) {
+      const st = r.stats || {};
+      const status = { done: ['', ''], empty: ['без снов', ''], failed: ['ошибка', 'danger'] }[r.status] || [r.status, ''];
+      const numbers = [st.chats != null && `чатов: ${st.chats}`, st.created && `новых: ${st.created}`, st.updated && `дополнено: ${st.updated}`, st.reinforced && `укреплено: ${st.reinforced}`, st.discarded && `отпущено: ${st.discarded}`].filter(Boolean).join(' · ');
+      return h('article', { class: 'dream-entry' },
+        h('div', { class: 'dream-entry-head' }, h('span', { class: 'dream-date' }, new Date(r.started_at).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })), h('span', { class: 'market-meta' }, DREAM_TRIGGER[r.trigger] || r.trigger), status[0] ? h('span', { class: `pill ${status[1]}` }, status[0]) : null),
+        numbers ? h('div', { class: 'market-meta' }, numbers) : null,
+        r.status === 'empty' ? h('p', { class: 'muted' }, 'Новых разговоров не было, спал без снов.') : null,
+        r.error ? h('p', { class: 'dream-error' }, r.error) : null,
+        r.diary ? h('div', { class: 'prose dream-diary' }, h('p', {}, r.diary)) : null,
+        (st.themes || []).length ? h('div', { class: 'market-tags' }, st.themes.map((t) => h('span', { class: 'pill tag-kind' }, t))) : null,
+        (r.changes || []).length ? h('div', { class: 'dream-changes' }, r.changes.map((c) => h('button', { class: `dream-change ${c.action}`, onclick: () => openNoteEditor({ id: c.id }, { onSaved: () => show(), onOpenTitle: openTitle }).catch(() => toast('Заметка уже удалена', true)) },
+          { created: '+', updated: '~', reinforced: '↑' }[c.action] || '', ` ${c.title}`))) : null);
+    }
+    host.append(box);
+    await load();
+    return () => clearTimeout(timer);
+  }
+
+  page(shell, 'Память', 'Что агент помнит о вас, проектах и устройствах. Заметки связываются ссылками [[Название]], а сновидения по ночам собирают важное из новых чатов.',
+    h('button', { class: 'btn', onclick: newNote }, icon('plus'), 'Новая заметка'),
+    tabs, host);
+  shell.panel.querySelector('.page-inner').classList.add('page-wide');
+  viewCleanups.push(() => { if (cleanup) cleanup(); });
+  await show();
+}
+
 const RISK_SHORT = { read: 'чтение', write: 'изменения', execute: 'запуск', network: 'сеть', destructive: 'необратимое' };
 const extKind = (e) => [e.instructions ? 'Навык' : null, e.tools.length ? `Инструменты: ${e.tools.length}` : null].filter(Boolean);
 const extIcon = (e) => (e.instructions && e.tools.length ? 'layers' : e.instructions ? 'book' : 'terminal');
@@ -1351,6 +1604,8 @@ async function settingsAudit(shell) {
     'target.tool': 'Инструмент устройства переключён',
     'extension.installed': 'Установлен пакет', 'extension.toggled': 'Пакет включён или выключен', 'extension.removed': 'Удалён пакет',
     'tool.core': 'Инструмент Core',
+    'memory.note_created': 'Создана заметка', 'memory.note_updated': 'Изменена заметка', 'memory.note_deleted': 'Удалена заметка',
+    'memory.dreamed': 'Сновидение', 'memory.dream_started': 'Запущено сновидение', 'memory.dream_settings': 'Настройки сновидений',
   };
   const ACTORS = { core: 'Core', target: 'устройство', user: 'вы' };
   const describe = (p) => {
@@ -1358,7 +1613,9 @@ async function settingsAudit(shell) {
     return [
       p.display || p.tool,
       p.name,
+      p.title,
       p.id && !p.task_id && p.id,
+      p.created != null && `новых заметок: ${p.created}`,
       p.source === 'custom' && 'свой пакет',
       p.status && (EXEC_STATUS[p.status] || statusOf(p.status)[0]),
       p.exit_code != null && `код ${p.exit_code}`,
