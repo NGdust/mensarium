@@ -52,6 +52,7 @@
   --pop: 0 24px 60px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--line-strong);
   --sidebar-w: 252px;
   --chat-w: 720px;
+  --gutter: 44px;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
   color-scheme: dark;
 }
@@ -221,10 +222,12 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 
 /* ---------- chat ---------- */
 
-.thread { flex: 1; min-height: 0; overflow-y: auto; }
-.thread-inner { max-width: var(--chat-w); margin: 0 auto; padding: 8px 28px 36px; }
+/* thread and composer share one column: same width, same gutter, so every edge lines up with the input */
+.thread { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; }
+.thread-inner { max-width: calc(var(--chat-w) + 2 * var(--gutter)); margin: 0 auto; padding: 8px var(--gutter) 36px; }
 
 .msg { display: grid; grid-template-columns: 26px 1fr; column-gap: 12px; margin: 18px 0; }
+.msg-agent { margin-left: -38px; }
 .msg-body { min-width: 0; padding-top: 3px; }
 .msg.cont { margin-top: 8px; }
 .msg.cont > .orb { visibility: hidden; height: 0; }
@@ -250,7 +253,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 }
 .prose pre code { background: none; border: 0; padding: 0; font-size: inherit; }
 
-.step { margin: 6px 0 6px 38px; }
+.step { margin: 6px 0; }
 .tool { border: 1px solid var(--line); border-radius: var(--r); background: rgba(22, 20, 28, 0.7); overflow: hidden; }
 .tool-head {
   display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 12px;
@@ -275,9 +278,9 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .note .icon { width: 16px; height: 16px; margin-top: 2px; }
 .note.error { color: var(--danger); }
 /* activity of one agent turn: a rolling line while it works, a folded log afterwards */
-.work { margin: 6px 0 6px 38px; }
+.work { margin: 6px 0; }
 .work-head {
-  display: flex; align-items: center; gap: 10px; width: 100%; max-width: 560px; padding: 5px 10px 5px 6px;
+  display: flex; align-items: center; gap: 10px; width: calc(100% + 6px); max-width: 566px; margin-left: -6px; padding: 5px 10px 5px 6px;
   border: 0; border-radius: 10px; background: none; color: var(--text-2); font: 13.5px var(--font); text-align: left; cursor: pointer;
 }
 .work-head:hover { background: var(--surface); }
@@ -334,7 +337,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .approval-result { font-size: 13px; color: var(--muted); }
 
 /* composer */
-.composer-wrap { flex: none; padding: 0 28px 22px; }
+.composer-wrap { flex: none; padding: 0 var(--gutter) 20px; }
 .composer {
   max-width: var(--chat-w); margin: 0 auto; padding: 12px 10px 8px 14px; border-radius: 18px;
   background: rgba(22, 20, 28, 0.86); border: 1px solid var(--line-strong);
@@ -683,10 +686,12 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
   .main, .shell.collapsed .main { padding: 0; }
   .panel { border-radius: 0; border: 0; }
   .topbar { min-height: 54px; padding: 8px 10px; }
-  .thread-inner { padding: 4px 16px 28px; }
-  .composer-wrap { padding: 0 10px 10px; }
+  :root { --gutter: 12px; }
+  .thread-inner { padding: 4px var(--gutter) 28px; }
+  .composer-wrap { padding: 0 var(--gutter) 10px; }
   .welcome { padding: 0 14px 4vh; }
-  .step, .work { margin-left: 34px; }
+  .msg-agent { margin-left: 0; grid-template-columns: 1fr; }
+  .msg-agent > .orb { display: none; }
   .msg { grid-template-columns: 24px 1fr; column-gap: 10px; }
   .msg > .orb { --s: 24px !important; }
   .bubble-user { max-width: 88%; }
