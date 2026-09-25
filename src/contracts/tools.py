@@ -218,6 +218,14 @@ class WebFetchArgs(_Args):
     max_chars: int = Field(20000, ge=500, le=100000, description="Longest text to return")
 
 
+class PluginsFindArgs(_Args):
+    query: str = Field(min_length=1, max_length=200, description="What the plugin should do: 'web search', 'github', 'postgres', 'browser'")
+
+
+class PluginsInstallArgs(_Args):
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,48}$", description="Plugin id from plugins.find")
+
+
 class McpArgs(BaseModel):
     """MCP tools bring their own JSON schema; the harness checks it separately."""
 
@@ -231,6 +239,8 @@ CORE_TOOL_ARGS: dict[str, type[BaseModel]] = {
     "memory.save": MemorySaveArgs,
     "web.search": WebSearchArgs,
     "web.fetch": WebFetchArgs,
+    "plugins.find": PluginsFindArgs,
+    "plugins.install": PluginsInstallArgs,
 }
 
 PATH_FIELDS: dict[str, tuple[str, ...]] = {

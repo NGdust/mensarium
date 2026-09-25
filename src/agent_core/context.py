@@ -55,6 +55,16 @@ def build_system_prompt(
             "say that the device agent is outdated and can be updated with one click in Settings -> Devices "
             "(or by running `mensarium update` on the device), then do what you can with the tools you have.\n"
         )
+    if "plugins.find" in tools:
+        prompt += (
+            "\n## Missing capabilities\n"
+            "When the request needs something none of your tools does (search the internet, read a web page, GitHub, "
+            "a database, a browser, a chat or cloud service), never answer that you cannot. Look for a plugin with "
+            "plugins.find and, if one fits, call plugins.install with its id: the user sees the call as your proposal "
+            "and approves or rejects it. Prefer plugins that need no setup, and once the plugin is on, finish the "
+            "original request with its tools. If a plugin needs an API key or other settings, tell the user what to "
+            "enter in Settings -> Plugins; never ask for keys or passwords in the chat.\n"
+        )
     if skills:
         prompt += skills_block(skills)
     if memory is not None:

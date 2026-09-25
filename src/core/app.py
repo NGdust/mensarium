@@ -234,7 +234,8 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         plugins.device_tools_supported = lambda target_id: hub.supports(target_id, "mcp.call")
         hub.on_connect = plugins.sync_device
         await plugins.start()
-        orchestrator = Orchestrator(repo, hub, bus, provider, cfg, workspace_id, paths.artifacts, memory, plugins, skills)
+        catalog = Catalog(cfg.plugins.catalog_url)
+        orchestrator = Orchestrator(repo, hub, bus, provider, cfg, workspace_id, paths.artifacts, memory, plugins, skills, catalog)
         await orchestrator.recover_after_restart()
         dreamer = Dreamer(repo, memory, provider, cfg, workspace_id)
         await dreamer.recover()
@@ -262,7 +263,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             admin_token=admin_token,
             pair_failures=deque(maxlen=50),
             local_target_id=local[0].target_id if local else None,
-            catalog=Catalog(cfg.plugins.catalog_url),
+            catalog=catalog,
             plugins=plugins,
             skills=skills,
             memory=memory,

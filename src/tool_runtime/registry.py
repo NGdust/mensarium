@@ -15,7 +15,8 @@ RunsOn = Literal["target", "core"]
 @dataclass(frozen=True)
 class ToolSpec:
     """`runs_on="core"` tools run inside the Core; `command` tools run on the device as shell.exec and
-    `mcp` tools are (server, tool) of an MCP server in the Core or on the device."""
+    `mcp` tools are (server, tool) of an MCP server in the Core or on the device. `always_ask` tools wait
+    for the user's approval even in full access mode."""
 
     name: str
     description: str
@@ -26,6 +27,7 @@ class ToolSpec:
     command: CommandTool | None = None
     mcp: tuple[str, str] | None = None
     schema: dict[str, Any] | None = None
+    always_ask: bool = False
 
     def definition(self) -> ToolDefinition:
         schema = dict(self.schema) if self.schema else self.args_model.model_json_schema()
@@ -279,5 +281,27 @@ MEMORY_TOOLS: dict[str, ToolSpec] = {
         CORE_TOOL_ARGS["memory.save"],
         lambda a: f"memory save {a['title']}",
         runs_on="core",
+    ),
+}
+
+PLUGIN_TOOLS: dict[str, ToolSpec] = {
+    "plugins.find": ToolSpec(
+        "plugins.find",
+        "Search the Mensarium plugin catalog for a plugin that adds a capability you lack: web search, reading "
+        "web pages, GitHub, databases, a browser, cloud and chat services. Shows what each plugin needs to work.",
+        "read",
+        CORE_TOOL_ARGS["plugins.find"],
+        lambda a: f"find plugin {a['query']!r}",
+        runs_on="core",
+    ),
+    "plugins.install": ToolSpec(
+        "plugins.install",
+        "Install and turn on a catalog plugin by id, or turn on an installed one. The user approves every call; "
+        "the plugin's tools are available from the next step.",
+        "execute",
+        CORE_TOOL_ARGS["plugins.install"],
+        lambda a: f"install plugin {a['id']}",
+        runs_on="core",
+        always_ask=True,
     ),
 }

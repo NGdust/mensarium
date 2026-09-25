@@ -20,6 +20,7 @@ from mensarium.contracts.protocol import (
     policy_snapshot_hash,
 )
 from mensarium.contracts.skills import SkillError
+from mensarium.core.catalog import Catalog
 from mensarium.core.config import CoreConfig
 from mensarium.core.events import EventBus
 from mensarium.core.memory import Memory, NoteError
@@ -104,11 +105,13 @@ class Orchestrator:
         memory: Memory,
         plugins: PluginManager,
         skills: SkillStore,
+        catalog: Catalog,
     ) -> None:
         self.repo = repo
         self.memory = memory
         self.plugins = plugins
         self.skills = skills
+        self.catalog = catalog
         self.hub = hub
         self.bus = bus
         self.provider = provider
@@ -549,7 +552,7 @@ class Orchestrator:
         if mode == "full" and not in_core and not policy.allow_full_access:
             mode = "ask"
         approval_ref = None
-        if decision.requires_approval and mode == "ask":
+        if (decision.requires_approval and mode == "ask") or toolbox.registry[call.tool].always_ask:
             approval_ref = await self._await_approval(task, {"name": "Core"} if in_core else target, call, tc_id, decision)
             if approval_ref is None:
                 return
@@ -787,6 +790,13 @@ class Orchestrator:
                 return self.skills.read(skill, args.get("path"))
             except SkillError as e:
                 raise TaskError(str(e)) from e
+        if tool == "plugins.find":
+            return await self.plugins.agent_find((await self.catalog.load())[0], args["query"])
+        if tool == "plugins.install":
+            target = await self.repo.get_target((await self._task(task_id))["target_id"])
+            if not target:
+                raise TaskError("the device of this task is gone")
+            return await self.plugins.agent_install((await self.catalog.load())[0], args["id"], target)
         return await self.plugins.call_core(toolbox, toolbox.registry[tool], args)
 
     @staticmethod
