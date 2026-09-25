@@ -359,7 +359,7 @@ def target_permissions() -> None:
             pass
         if service.is_running("target"):
             service.restart("target")
-            ok("The agent restarts and macOS asks to allow Screen Recording and Accessibility for Python. Allow both in the dialogs or in System Settings -> Privacy & Security.")
+            ok("The agent restarts and macOS asks to allow Screen Recording and Accessibility for Mensarium. Allow both in the dialogs or in System Settings -> Privacy & Security.")
         else:
             desktop.request_permissions()
             ok("macOS asked for Screen Recording and Accessibility; start the agent afterwards.")

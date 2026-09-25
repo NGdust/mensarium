@@ -2,13 +2,60 @@ import os
 import shutil
 import subprocess
 import sys
+from importlib import resources
 from pathlib import Path
 from typing import Literal
 
+from mensarium import __version__
 from mensarium.shared.paths import mensarium_home
 
 Role = Literal["core", "target"]
 COMMANDS: dict[str, list[str]] = {"core": ["core", "serve"], "target": ["target", "run"]}
+APP_BUNDLE_ID = "com.mensarium.agent"
+INFO_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>Mensarium</string>
+<key>CFBundleIdentifier</key><string>{bundle_id}</string>
+<key>CFBundleName</key><string>Mensarium</string>
+<key>CFBundleDisplayName</key><string>Mensarium</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>{version}</string>
+<key>CFBundleVersion</key><string>{version}</string>
+<key>LSUIElement</key><true/>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSAppleEventsUsageDescription</key><string>Mensarium operates apps on this Mac when you ask the agent to.</string>
+</dict></plist>
+"""
+
+
+def app_bundle() -> Path:
+    return Path.home() / "Applications" / "Mensarium.app"
+
+
+def install_app_bundle() -> Path | None:
+    """Mensarium.app around a tiny launcher that runs the agent as its child, so macOS shows Mensarium with its icon
+    in Privacy & Security instead of the Python interpreter. Returns the launcher path, or None off macOS."""
+    if sys.platform != "darwin":
+        return None
+    src = Path(str(resources.files("mensarium.target") / "macos"))
+    launcher = src / "Mensarium"
+    if not launcher.exists():
+        return None
+    app = app_bundle()
+    macos, res = app / "Contents" / "MacOS", app / "Contents" / "Resources"
+    macos.mkdir(parents=True, exist_ok=True)
+    res.mkdir(parents=True, exist_ok=True)
+    target = macos / "Mensarium"
+    if not target.exists() or target.read_bytes() != launcher.read_bytes():
+        shutil.copy2(launcher, target)
+    target.chmod(0o755)
+    icon = src / "AppIcon.icns"
+    if icon.exists():
+        shutil.copy2(icon, res / "AppIcon.icns")
+    (app / "Contents" / "Info.plist").write_text(INFO_PLIST.format(bundle_id=APP_BUNDLE_ID, version=__version__))
+    return target
 
 
 def mensarium_bin() -> str:
@@ -60,6 +107,8 @@ def _run(*cmd: str, check: bool = False) -> subprocess.CompletedProcess[str]:
 
 def install(role: Role) -> str:
     argv = [mensarium_bin(), *COMMANDS[role]]
+    if role == "target" and (launcher := install_app_bundle()):
+        argv = [str(launcher), *argv]
     env = {"MENSARIUM_HOME": str(mensarium_home()), "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
     log = log_file(role)
     kind = backend()
@@ -149,6 +198,8 @@ def uninstall(role: Role) -> None:
     kind = backend()
     if kind == "launchd":
         _plist_path(role).unlink(missing_ok=True)
+        if role == "target":
+            shutil.rmtree(app_bundle(), ignore_errors=True)
     elif kind == "systemd":
         _systemctl("disable", _unit_name(role))
         (_systemd_user_dir() / _unit_name(role)).unlink(missing_ok=True)

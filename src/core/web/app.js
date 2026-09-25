@@ -1548,7 +1548,7 @@ async function settingsDevices(shell) {
     const mac = (t.platform || '').startsWith('darwin');
     const item = (label, value) => h('span', { class: `pill ${value === true ? 'ok' : value === false ? 'warn' : ''}` }, `${label}: ${value === true ? tr('allowed') : value === false ? tr('not allowed') : tr('unknown')}`);
     const hint = (d.screen === false || d.input === false)
-      ? (mac ? tr('Allow Screen Recording and Accessibility for Python in System Settings, Privacy & Security, or run mensarium target permissions on the device.') : tr('Install xdotool, wmctrl and scrot (or grim) on the device.'))
+      ? (mac ? tr('Allow Screen Recording and Accessibility for Mensarium in System Settings, Privacy & Security, or run mensarium target permissions on the device.') : tr('Install xdotool, wmctrl and scrot (or grim) on the device.'))
       : '';
     return h('div', { class: 'device-desktop' }, h('span', { class: 'device-text' }, tr('Screen and input:')), item(tr('screen'), d.screen), item(tr('input'), d.input), hint ? h('span', { class: 'row-desc' }, hint) : null);
   }

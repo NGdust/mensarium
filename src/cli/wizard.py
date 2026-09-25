@@ -417,7 +417,7 @@ def _desktop_setup() -> None:
     """Screen and input control need OS permissions and, on macOS, cliclick for mouse moves."""
     if sys.platform == "darwin":
         console.print(
-            "macOS now asks to allow [bold]Screen Recording[/bold] and [bold]Accessibility[/bold] for Python: allow both so the agent "
+            "macOS now asks to allow [bold]Screen Recording[/bold] and [bold]Accessibility[/bold] for Mensarium: allow both so the agent "
             "can see the screen and use the mouse and keyboard. Later: [bold]mensarium target permissions[/bold]."
         )
         if not shutil.which("cliclick") and shutil.which("brew") and ask(

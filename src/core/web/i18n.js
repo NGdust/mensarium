@@ -675,7 +675,7 @@ const RU = {
   'unknown': 'неизвестно',
   'screen': 'экран',
   'input': 'ввод',
-  'Allow Screen Recording and Accessibility for Python in System Settings, Privacy & Security, or run mensarium target permissions on the device.': 'Разрешите Python «Запись экрана» и «Универсальный доступ» в Системных настройках, «Конфиденциальность и безопасность», или выполните mensarium target permissions на устройстве.',
+  'Allow Screen Recording and Accessibility for Mensarium in System Settings, Privacy & Security, or run mensarium target permissions on the device.': 'Разрешите Mensarium «Запись экрана» и «Универсальный доступ» в Системных настройках, «Конфиденциальность и безопасность», или выполните mensarium target permissions на устройстве.',
   'Install xdotool, wmctrl and scrot (or grim) on the device.': 'Установите на устройстве xdotool, wmctrl и scrot (или grim).',
   'Model for images': 'Модель для изображений',
   'Used automatically on steps where the agent looks at a screenshot; leave empty if the default model accepts images.': 'Подставляется сама на шагах, где агент смотрит скриншот; оставьте пустым, если модель по умолчанию понимает картинки.',
