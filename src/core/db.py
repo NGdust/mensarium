@@ -4,7 +4,7 @@ from typing import Any
 
 import aiosqlite
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 COLUMN_MIGRATIONS = [
     ("tasks", "mode", "TEXT NOT NULL DEFAULT 'ask'"),
@@ -15,6 +15,7 @@ COLUMN_MIGRATIONS = [
     ("tasks", "parent_id", "TEXT"),
     ("tasks", "label", "TEXT"),
     ("tasks", "plan", "TEXT NOT NULL DEFAULT '[]'"),
+    ("tasks", "automation_id", "TEXT"),
 ]
 
 SCHEMA = """
@@ -86,11 +87,26 @@ CREATE TABLE IF NOT EXISTS plugins (
     manifest TEXT NOT NULL, config TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT '{}',
     installed_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS automations (
+    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL, prompt TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1, schedule TEXT NOT NULL, target_id TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'ask', model TEXT, timeout_s INTEGER NOT NULL DEFAULT 3600,
+    notify INTEGER NOT NULL DEFAULT 1, delete_after_run INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT NOT NULL DEFAULT 'user', next_run_at TEXT, last_run_at TEXT, last_status TEXT, last_error TEXT,
+    failures INTEGER NOT NULL DEFAULT 0, disabled_reason TEXT, running_run_id TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS automation_runs (
+    id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, task_id TEXT, trigger TEXT NOT NULL, status TEXT NOT NULL,
+    result TEXT, error TEXT, started_at TEXT NOT NULL, finished_at TEXT, duration_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS automation_runs_auto ON automation_runs(automation_id, started_at);
 """
 
 JSON_COLUMNS = {
     "settings", "capabilities", "policy", "body", "budget", "input", "output", "params", "usage",
     "arguments", "metadata", "payload", "disabled_tools", "manifest", "tags", "stats", "changes", "config", "status", "plan",
+    "schedule",
 }
 
 

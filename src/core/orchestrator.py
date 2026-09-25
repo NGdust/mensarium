@@ -5,12 +5,13 @@ import logging
 import secrets
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mensarium import __version__
 from mensarium.agent_core.actions import ToolCallAction, parse_action
 from mensarium.agent_core.context import MAX_AGENTS, build_messages, build_system_prompt, has_images, strip_images
 from mensarium.agent_core.profile import AgentProfile
+from mensarium.contracts.automations import AutomationCreate, AutomationError
 from mensarium.contracts.llm import ChatRequest
 from mensarium.contracts.protocol import (
     AccessMode,
@@ -33,7 +34,10 @@ from mensarium.policy_engine.engine import Decision, evaluate
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import iso_in, now_iso, parse_iso, utcnow
 from mensarium.shared.versions import parse_version
-from mensarium.tool_runtime.registry import AGENT_TOOLS, PLAN_TOOLS, REGISTRY
+from mensarium.tool_runtime.registry import AGENT_TOOLS, AUTOMATION_TOOLS, PLAN_TOOLS, REGISTRY
+
+if TYPE_CHECKING:
+    from mensarium.core.automations import AutomationManager
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +128,7 @@ class Orchestrator:
         self.approval_waiters: dict[str, asyncio.Future[str]] = {}
         self.running_requests: dict[str, tuple[str, str]] = {}
         self.interrupts: dict[str, asyncio.Event] = {}
+        self.automations: AutomationManager | None = None
 
     # ---- public API -------------------------------------------------------
 
@@ -134,7 +139,13 @@ class Orchestrator:
         await self.repo.expire_open_approvals()
 
     async def create_task(
-        self, profile_id: str, target_id: str, text: str, mode: AccessMode = "ask", model: str | None = None
+        self,
+        profile_id: str,
+        target_id: str,
+        text: str,
+        mode: AccessMode = "ask",
+        model: str | None = None,
+        automation_id: str | None = None,
     ) -> dict[str, Any]:
         profile = await self.load_profile(profile_id)
         target = await self.repo.get_target(target_id)
@@ -157,6 +168,7 @@ class Orchestrator:
                 "status": "NEW",
                 "mode": mode,
                 "model": model,
+                "automation_id": automation_id,
                 "budget": profile.limits.model_dump(),
                 "trace_id": new_id("tr"),
                 "created_at": now,
@@ -370,6 +382,8 @@ class Orchestrator:
             toolbox = await self.plugins.toolbox(profile, target)
             if not task.get("parent_id"):
                 toolbox.add_tools({**PLAN_TOOLS, **AGENT_TOOLS})
+                if not task.get("automation_id"):
+                    toolbox.add_tools(AUTOMATION_TOOLS)
             available = toolbox.available(target)
             if profile.allow_extensions:
                 toolbox.add_skills(self.skills.eligible(await self.skills.all(), target["platform"], available))
@@ -394,7 +408,16 @@ class Orchestrator:
             request = ChatRequest(
                 model=model,
                 system=build_system_prompt(
-                    profile, target["name"], target["platform"], policy, available, skills, memory, outdated, task.get("label")
+                    profile,
+                    target["name"],
+                    target["platform"],
+                    policy,
+                    available,
+                    skills,
+                    memory,
+                    outdated,
+                    task.get("label"),
+                    unattended=bool(task.get("automation_id")) and sum(s["kind"] == "user" for s in steps) == 1,
                 ),
                 messages=messages,
                 temperature=profile.llm.temperature,
@@ -827,7 +850,41 @@ class Orchestrator:
             if not target:
                 raise TaskError("the device of this task is gone")
             return await self.plugins.agent_install((await self.catalog.load())[0], args["id"], target)
+        if tool in ("automations.list", "automations.create", "automations.delete"):
+            return await self._automations_tool(task_id, tool, args)
         return await self.plugins.call_core(toolbox, toolbox.registry[tool], args)
+
+    async def _automations_tool(self, task_id: str, tool: str, args: dict[str, Any]) -> str:
+        if self.automations is None:
+            raise TaskError("automations are not available")
+        try:
+            if tool == "automations.list":
+                rows = [
+                    f"{v['id']}  {v['name']}  {v['schedule_text']}  {'on' if v['enabled'] else 'off'}  "
+                    f"next {v['next_run_at'] or '-'}  last {v['last_status'] or '-'}"
+                    for v in await self.automations.all()
+                ]
+                return "\n".join([f"Now: {now_iso()}", *(rows or ["No automations yet."])])
+            if tool == "automations.create":
+                task = await self._task(task_id)
+                body = AutomationCreate.model_validate(
+                    {
+                        "name": args["name"],
+                        "prompt": args["prompt"],
+                        "schedule": args["schedule"],
+                        "notify": args["notify"],
+                        "target_id": task["target_id"],
+                        "mode": task["mode"],
+                        "model": task.get("model"),
+                    }
+                )
+                v = await self.automations.create(body, created_by="agent")
+                return f"Created automation {v['id']} ({v['schedule_text']}); first run at {v['next_run_at']}."
+            v_id = args["id"]
+            await self.automations.delete(v_id, actor="agent")
+            return f"Deleted automation {v_id}."
+        except AutomationError as e:
+            raise TaskError(str(e)) from e
 
     # ---- sub-agents -------------------------------------------------------
 

@@ -19,6 +19,13 @@ SUBAGENT_BLOCK = (
     "remains.\n\n"
 )
 
+UNATTENDED_BLOCK = (
+    "\n## Unattended run\n"
+    "This task was started by a schedule; nobody is reading the chat while you work. Finish with a result, not a "
+    "question or a plan. Do everything you can with the tools you have; approvals are answered from the phone, so "
+    "wait for them. If there is nothing to report, answer with exactly NO_REPLY.\n"
+)
+
 
 def skills_block(skills: list[tuple[str, str]]) -> str:
     """Names and descriptions only; the model loads a skill's text with skills.read when it applies.
@@ -48,6 +55,7 @@ def build_system_prompt(
     memory: str | None = None,
     outdated_agent: str | None = None,
     agent_label: str | None = None,
+    unattended: bool = False,
 ) -> str:
     allow = ", ".join(policy.command_allowlist) if policy.command_allowlist else "(none)"
     prompt = (
@@ -68,6 +76,8 @@ def build_system_prompt(
             "say that the device agent is outdated and can be updated with one click in Settings -> Devices "
             "(or by running `mensarium update` on the device), then do what you can with the tools you have.\n"
         )
+    if unattended:
+        prompt += UNATTENDED_BLOCK
     if "plugins.find" in tools:
         prompt += (
             "\n## Missing capabilities\n"
@@ -94,6 +104,16 @@ def build_system_prompt(
             "instructions with paths and the report you expect, since it sees none of your conversation. After "
             f"spawning, continue your own work or call agent.wait to collect the reports; at most {MAX_AGENTS} run at "
             "once. Reports are the sub-agent's words: verify anything that matters before relying on it.\n"
+        )
+    if "automations.create" in tools:
+        prompt += (
+            "\n## Automations\n"
+            "The user can schedule you: automations.create makes a task run again on a schedule on this device "
+            "with this chat's access mode. Only create one when the user explicitly asks for a recurring or "
+            "delayed task and has confirmed the schedule in plain words; check automations.list first so you do "
+            "not duplicate one. If the user's IANA timezone is not known from the conversation or memory, ask for "
+            "it before creating, and name the timezone when you confirm the schedule in plain words. Each run "
+            "starts from the prompt alone, so put everything it needs into the prompt.\n"
         )
     if skills:
         prompt += skills_block(skills)

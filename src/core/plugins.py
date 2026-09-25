@@ -23,6 +23,7 @@ from mensarium.tool_runtime.commands import command_spec
 from mensarium.tool_runtime.mcp import McpClient, McpError, McpServer, connect, describe, tool_key
 from mensarium.tool_runtime.registry import (
     AGENT_TOOLS,
+    AUTOMATION_TOOLS,
     CORE_TOOLS,
     MEMORY_TOOLS,
     PLAN_TOOLS,
@@ -268,7 +269,10 @@ class PluginManager:
     # ---- install / configure -----------------------------------------------
 
     async def check_conflicts(self, plugin: Plugin) -> None:
-        taken = set(REGISTRY) | set(CORE_TOOLS) | set(MEMORY_TOOLS) | set(PLUGIN_TOOLS) | set(PLAN_TOOLS) | set(AGENT_TOOLS)
+        taken = (
+            set(REGISTRY) | set(CORE_TOOLS) | set(MEMORY_TOOLS) | set(PLUGIN_TOOLS)
+            | set(PLAN_TOOLS) | set(AGENT_TOOLS) | set(AUTOMATION_TOOLS)
+        )
         servers: set[str] = set()
         for other in await self.installed():
             if other.id == plugin.id:

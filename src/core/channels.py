@@ -463,6 +463,8 @@ class TelegramChannel:
         text = f"<b>Approval needed</b> · {esc(risk)}\n{esc(str(tc.get('display') or tc.get('tool') or ''))}"
         if cmd := args.get("command"):
             text += f"\n<pre>{esc(str(cmd))}</pre>"
+        if prompt := str(args.get("prompt") or ""):
+            text += f"\n<pre>{esc(prompt[:3000])}{'…' if len(prompt) > 3000 else ''}</pre>"
         text += f"\nTool: <code>{esc(str(tc.get('tool') or ''))}</code> · Device: {esc(str(tc.get('target_name') or ''))}"
         if left is not None:
             text += f"\nExpires in {left} min"

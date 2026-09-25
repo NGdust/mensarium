@@ -98,7 +98,7 @@ class Repo:
     async def list_tasks(self, limit: int = 100) -> list[dict[str, Any]]:
         return await self.db.fetchall(
             "SELECT t.*, g.name AS target_name FROM tasks t LEFT JOIN targets g ON g.id = t.target_id "
-            "WHERE t.parent_id IS NULL ORDER BY t.updated_at DESC LIMIT ?",
+            "WHERE t.parent_id IS NULL AND t.automation_id IS NULL ORDER BY t.updated_at DESC LIMIT ?",
             (limit,),
         )
 
@@ -225,6 +225,72 @@ class Repo:
     async def delete_plugin(self, plugin_id: str) -> None:
         await self.db.execute("DELETE FROM plugins WHERE id = ?", (plugin_id,))
 
+    # automations
+    async def create_automation(self, values: dict[str, Any]) -> None:
+        await self.db.insert("automations", values)
+
+    async def get_automation(self, automation_id: str) -> dict[str, Any] | None:
+        return await self.db.fetchone(
+            "SELECT a.*, g.name AS target_name FROM automations a LEFT JOIN targets g ON g.id = a.target_id "
+            "WHERE a.id = ?",
+            (automation_id,),
+        )
+
+    async def list_automations(self) -> list[dict[str, Any]]:
+        return await self.db.fetchall(
+            "SELECT a.*, g.name AS target_name FROM automations a LEFT JOIN targets g ON g.id = a.target_id "
+            "ORDER BY a.created_at"
+        )
+
+    async def update_automation(self, automation_id: str, values: dict[str, Any]) -> None:
+        await self.db.update("automations", automation_id, {**values, "updated_at": now_iso()})
+
+    async def delete_automation(self, automation_id: str) -> list[str]:
+        runs = await self.db.fetchall(
+            "SELECT task_id FROM automation_runs WHERE automation_id = ? AND task_id IS NOT NULL", (automation_id,)
+        )
+        await self.db.conn.execute("DELETE FROM automation_runs WHERE automation_id = ?", (automation_id,))
+        await self.db.conn.execute("DELETE FROM automations WHERE id = ?", (automation_id,))
+        await self.db.conn.commit()
+        return [str(r["task_id"]) for r in runs]
+
+    async def due_automations(self, now: str) -> list[dict[str, Any]]:
+        return await self.db.fetchall(
+            "SELECT * FROM automations WHERE enabled = 1 AND running_run_id IS NULL AND next_run_at IS NOT NULL "
+            "AND next_run_at <= ? ORDER BY next_run_at",
+            (now,),
+        )
+
+    async def create_run(self, values: dict[str, Any]) -> None:
+        await self.db.insert("automation_runs", values)
+
+    async def update_run(self, run_id: str, values: dict[str, Any]) -> None:
+        await self.db.update("automation_runs", run_id, values)
+
+    async def get_run(self, run_id: str) -> dict[str, Any] | None:
+        return await self.db.fetchone("SELECT * FROM automation_runs WHERE id = ?", (run_id,))
+
+    async def list_runs(self, automation_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        return await self.db.fetchall(
+            "SELECT r.*, t.status AS task_status FROM automation_runs r LEFT JOIN tasks t ON t.id = r.task_id "
+            "WHERE r.automation_id = ? ORDER BY r.started_at DESC LIMIT ?",
+            (automation_id, limit),
+        )
+
+    async def running_runs(self) -> list[dict[str, Any]]:
+        return await self.db.fetchall("SELECT * FROM automation_runs WHERE status = 'running'")
+
+    async def prune_runs(self, automation_id: str, keep: int, before: str) -> list[str]:
+        where = (
+            "automation_id = ? AND (started_at < ? OR id NOT IN "
+            "(SELECT id FROM automation_runs WHERE automation_id = ? ORDER BY started_at DESC LIMIT ?))"
+        )
+        params = (automation_id, before, automation_id, keep)
+        runs = await self.db.fetchall(f"SELECT task_id FROM automation_runs WHERE {where}", params)
+        await self.db.conn.execute(f"DELETE FROM automation_runs WHERE {where}", params)
+        await self.db.conn.commit()
+        return [str(r["task_id"]) for r in runs if r["task_id"]]
+
     # settings (kv)
     async def get_setting(self, key: str) -> Any:
         row = await self.db.fetchone("SELECT value FROM kv WHERE key = ?", (key,))
@@ -279,7 +345,8 @@ class Repo:
     async def tasks_updated_since(self, since: str, limit: int) -> list[dict[str, Any]]:
         marks = ",".join("?" for _ in TERMINAL_STATUSES)
         return await self.db.fetchall(
-            f"SELECT * FROM tasks WHERE updated_at > ? AND parent_id IS NULL AND status IN ({marks}) ORDER BY updated_at LIMIT ?",
+            f"SELECT * FROM tasks WHERE updated_at > ? AND parent_id IS NULL AND automation_id IS NULL "
+            f"AND status IN ({marks}) ORDER BY updated_at LIMIT ?",
             (since, *TERMINAL_STATUSES, limit),
         )
 

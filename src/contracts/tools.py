@@ -2,9 +2,15 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from mensarium.contracts.automations import Schedule
+
 
 class _Args(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class NoArgs(_Args):
+    pass
 
 
 class FilesListArgs(_Args):
@@ -245,6 +251,17 @@ class AgentWaitArgs(_Args):
     ids: list[str] = Field(default_factory=list, max_length=20, description="Sub-agent ids to wait for; all of them when empty")
 
 
+class AutomationsCreateArgs(_Args):
+    name: str = Field(min_length=1, max_length=120, description="Short name shown in the automations list")
+    prompt: str = Field(min_length=1, max_length=20_000, description="Complete instructions for each run; the run does not see this chat")
+    schedule: Schedule
+    notify: bool = Field(True, description="Send each result to the user's Telegram when it is connected")
+
+
+class AutomationsDeleteArgs(_Args):
+    id: str = Field(pattern=r"^auto_[0-9A-Za-z]+$")
+
+
 class McpArgs(BaseModel):
     """MCP tools bring their own JSON schema; the harness checks it separately."""
 
@@ -263,6 +280,9 @@ CORE_TOOL_ARGS: dict[str, type[BaseModel]] = {
     "plan.update": PlanUpdateArgs,
     "agent.spawn": AgentSpawnArgs,
     "agent.wait": AgentWaitArgs,
+    "automations.list": NoArgs,
+    "automations.create": AutomationsCreateArgs,
+    "automations.delete": AutomationsDeleteArgs,
 }
 
 PATH_FIELDS: dict[str, tuple[str, ...]] = {

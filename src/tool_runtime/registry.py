@@ -4,6 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from mensarium.contracts.automations import Schedule
 from mensarium.contracts.llm import ToolDefinition
 from mensarium.contracts.plugins import CommandTool
 from mensarium.contracts.tools import CORE_TOOL_ARGS, TOOL_ARGS
@@ -316,6 +317,39 @@ PLAN_TOOLS: dict[str, ToolSpec] = {
         CORE_TOOL_ARGS["plan.update"],
         lambda a: f"plan: {sum(i['status'] == 'done' for i in a['items'])}/{len(a['items'])} done",
         runs_on="core",
+    ),
+}
+
+AUTOMATION_TOOLS: dict[str, ToolSpec] = {
+    "automations.list": ToolSpec(
+        "automations.list",
+        "List the user's automations: scheduled or delayed re-runs of a task. Call it before automations.create "
+        "to avoid creating a duplicate.",
+        "read",
+        CORE_TOOL_ARGS["automations.list"],
+        lambda a: "automations list",
+        runs_on="core",
+    ),
+    "automations.create": ToolSpec(
+        "automations.create",
+        "Schedule this task to run again on its own, on this device with this chat's access mode. Only call it "
+        "after the user has explicitly asked for a recurring or delayed task and confirmed the schedule in plain "
+        "words; call automations.list first to avoid duplicates. Each run starts from the prompt alone, with no "
+        "memory of this chat, so put everything it needs into the prompt.",
+        "write",
+        CORE_TOOL_ARGS["automations.create"],
+        lambda a: f"create automation {a['name']!r}: {Schedule.model_validate(a['schedule']).text()}",
+        runs_on="core",
+        always_ask=True,
+    ),
+    "automations.delete": ToolSpec(
+        "automations.delete",
+        "Delete an automation by id.",
+        "write",
+        CORE_TOOL_ARGS["automations.delete"],
+        lambda a: f"delete automation {a['id']}",
+        runs_on="core",
+        always_ask=True,
     ),
 }
 

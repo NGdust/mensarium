@@ -20,10 +20,12 @@ from pydantic import BaseModel, Field, ValidationError
 
 from mensarium import __version__
 from mensarium.agent_core.profile import AgentProfile, builtin_profiles
+from mensarium.contracts.automations import AutomationCreate, AutomationError, AutomationPatch, Schedule
 from mensarium.contracts.plugins import Plugin
 from mensarium.contracts.protocol import AccessMode, PairRequest, PairResponse
 from mensarium.contracts.skills import OS, SkillError, SkillMeta, SkillRequires
 from mensarium.core import distribution, pairing
+from mensarium.core.automations import AutomationManager
 from mensarium.core.catalog import Catalog
 from mensarium.core.channels import ChannelError, ChannelManager
 from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secret, save_config
@@ -73,6 +75,7 @@ class Core:
     memory: Memory
     dreamer: Dreamer
     channels: ChannelManager
+    automations: AutomationManager
 
 
 class LoginBody(BaseModel):
@@ -248,6 +251,9 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         channels = ChannelManager(repo, paths, workspace_id, orchestrator, bus)
         channels.default_target_id = local[0].target_id if local else None
         await channels.start()
+        automations = AutomationManager(repo, workspace_id, orchestrator, channels, cfg.server.public_url)
+        orchestrator.automations = automations
+        await automations.start()
         app.state.core = Core(
             cfg=cfg,
             paths=paths,
@@ -269,10 +275,12 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             memory=memory,
             dreamer=dreamer,
             channels=channels,
+            automations=automations,
         )
         try:
             yield
         finally:
+            await automations.stop()
             await channels.stop()
             for runner in list(orchestrator.runners.values()):
                 runner.cancel()
@@ -761,14 +769,16 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     async def target_plugin_tools(target_id: str, c: Core = Depends(auth)) -> list[dict[str, Any]]:
         return await c.plugins.device_tools(target_id)
 
-    @app.get("/v1/channels")
-    async def list_channels(c: Core = Depends(auth)) -> dict[str, Any]:
-        devices = [
+    async def device_choices(c: Core) -> list[dict[str, Any]]:
+        return [
             {"id": t["id"], "name": t["name"], "online": c.hub.is_online(t["id"]), "full_access": full_access(t) == "allowed"}
             for t in await c.repo.list_targets()
             if t["status"] != "revoked"
         ]
-        return {"items": [await c.channels.view()], "devices": devices, "local_target_id": c.local_target_id}
+
+    @app.get("/v1/channels")
+    async def list_channels(c: Core = Depends(auth)) -> dict[str, Any]:
+        return {"items": [await c.channels.view()], "devices": await device_choices(c), "local_target_id": c.local_target_id}
 
     @app.put("/v1/channels/telegram")
     async def configure_telegram(body: ChannelBody, c: Core = Depends(auth)) -> dict[str, Any]:
@@ -785,6 +795,77 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     async def remove_telegram(c: Core = Depends(auth)) -> dict[str, bool]:
         await c.channels.remove()
         return {"ok": True}
+
+    def automation_error(e: AutomationError) -> HTTPException:
+        return HTTPException(e.code, str(e))
+
+    @app.get("/v1/automations")
+    async def list_automations(c: Core = Depends(auth)) -> dict[str, Any]:
+        return {
+            "items": await c.automations.all(),
+            "devices": await device_choices(c),
+            "local_target_id": c.local_target_id,
+            "telegram_ready": bool(c.channels.telegram and c.channels.telegram.chat_id),
+        }
+
+    @app.post("/v1/automations/preview")
+    async def preview_automation(body: Schedule, c: Core = Depends(auth)) -> dict[str, list[str]]:
+        return {"next": c.automations.preview(body)}
+
+    @app.post("/v1/automations")
+    async def create_automation(body: AutomationCreate, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return await c.automations.create(body)
+        except AutomationError as e:
+            raise automation_error(e) from e
+
+    @app.get("/v1/automations/{automation_id}")
+    async def get_automation(automation_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            view = await c.automations.get(automation_id)
+        except AutomationError as e:
+            raise automation_error(e) from e
+        return {**view, "runs": await c.automations.runs(automation_id)}
+
+    @app.put("/v1/automations/{automation_id}")
+    async def update_automation(automation_id: str, body: AutomationPatch, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return await c.automations.update(automation_id, body)
+        except AutomationError as e:
+            raise automation_error(e) from e
+
+    @app.delete("/v1/automations/{automation_id}")
+    async def delete_automation(automation_id: str, c: Core = Depends(auth)) -> dict[str, bool]:
+        try:
+            await c.automations.delete(automation_id)
+        except AutomationError as e:
+            raise automation_error(e) from e
+        return {"ok": True}
+
+    @app.post("/v1/automations/{automation_id}/run")
+    async def run_automation(automation_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return await c.automations.run(automation_id)
+        except AutomationError as e:
+            raise automation_error(e) from e
+
+    @app.post("/v1/automations/{automation_id}/enable")
+    async def enable_automation(automation_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return await c.automations.set_enabled(automation_id, True)
+        except AutomationError as e:
+            raise automation_error(e) from e
+
+    @app.post("/v1/automations/{automation_id}/disable")
+    async def disable_automation(automation_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return await c.automations.set_enabled(automation_id, False)
+        except AutomationError as e:
+            raise automation_error(e) from e
+
+    @app.get("/v1/automations/{automation_id}/runs")
+    async def list_automation_runs(automation_id: str, limit: int = 50, c: Core = Depends(auth)) -> list[dict[str, Any]]:
+        return await c.automations.runs(automation_id, min(max(limit, 1), 200))
 
     def skill_error(e: SkillError) -> HTTPException:
         return HTTPException(404 if "not found" in str(e) else 422, str(e))
@@ -917,7 +998,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         return {"id": run_id}
 
     def task_view(t: dict[str, Any]) -> dict[str, Any]:
-        keys = ("id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result", "mode", "model", "parent_id", "label")
+        keys = ("id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result", "mode", "model", "parent_id", "label", "automation_id")
         return {k: t.get(k) for k in keys} | {"plan": t.get("plan") or [], "created_at": t["created_at"], "updated_at": t["updated_at"]}
 
     @app.get("/v1/tasks")

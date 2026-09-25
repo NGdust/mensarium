@@ -26,7 +26,10 @@ async function api(path, opts = {}) {
   const text = await res.text();
   let data = null;
   if (text) { try { data = JSON.parse(text); } catch { data = text; } }
-  if (!res.ok) throw new Error((data && data.detail) || tr('Request error ({0})', res.status));
+  if (!res.ok) {
+    const detail = Array.isArray(data?.detail) ? data.detail.map((d) => String(d.msg).replace(/^Value error, /, '')).join('; ') : data?.detail;
+    throw Object.assign(new Error(detail || tr('Request error ({0})', res.status)), { status: res.status });
+  }
   return data;
 }
 const get = (path) => api(path);
@@ -98,6 +101,7 @@ const ICONS = {
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.7 5.7 3.7 9s-1.2 6.3-3.7 9c-2.5-2.7-3.7-5.7-3.7-9S9.5 5.7 12 3z"/>',
   robot: '<rect x="4.5" y="8" width="15" height="11" rx="3"/><path d="M12 8V5.2M2.5 12.5v3M21.5 12.5v3M9.5 16h5"/><circle cx="12" cy="4.2" r="1"/><circle cx="9.3" cy="12.4" r=".9"/><circle cx="14.7" cy="12.4" r=".9"/>',
   send: '<path d="m21 3-7 18-4-8-8-4z"/><path d="M21 3 10 13"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   agents: '<circle cx="9" cy="8" r="3.2"/><path d="M3 19c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><circle cx="17" cy="9" r="2.5"/><path d="M16.5 13.6c2.7.3 4.5 2.3 4.5 5.4"/>',
 };
 
@@ -510,11 +514,13 @@ function ensureAppShell() {
   const sessions = h('div', { class: 'sessions' });
   const devicesCount = h('span', { class: 'count' });
   const newChat = h('a', { class: 'new-chat', href: '#/' }, icon('plus'), tr('New chat'));
+  const automationsLink = h('a', { class: 'nav-item nav-automations', href: '#/automations' }, icon('clock'), tr('Automations'));
   const devicesLink = h('a', { class: 'nav-item', href: '#/settings/devices' }, icon('laptop'), tr('Devices'), devicesCount);
   let s;
   const collapse = h('button', { class: 'icon-btn collapse-nav', 'aria-label': tr('Hide sidebar'), title: tr('Hide sidebar'), onclick: () => s.toggleNav() }, icon('sidebar'));
   s = frame('app', [
     h('div', { class: 'brand' }, orb('sm'), h('span', { class: 'brand-name' }, 'Mensarium'), collapse),
+    automationsLink,
     newChat,
     h('div', { class: 'nav-label' }, tr('Chats')),
     sessions,
@@ -526,7 +532,9 @@ function ensureAppShell() {
     const online = devices().filter((t) => t.status === 'online').length;
     devicesCount.replaceChildren(h('span', { class: `dot${online ? ' ok' : ''}` }), tr('{0} online', online));
     const activeId = (location.hash.match(/^#\/chat\/(.+)$/) || [])[1];
-    newChat.classList.toggle('active', !activeId && !location.hash.startsWith('#/settings'));
+    const onAutomations = location.hash.startsWith('#/automations');
+    automationsLink.classList.toggle('active', onAutomations);
+    newChat.classList.toggle('active', !activeId && !onAutomations && !location.hash.startsWith('#/settings'));
     if (!state.tasks.length) {
       sessions.replaceChildren(h('div', { class: 'sessions-empty' }, tr('Chats with the agent will appear here.')));
       return;
@@ -1140,6 +1148,7 @@ async function viewChat(taskId) {
         args.timeout_s ? [h('dt', {}, tr('Limit')), h('dd', {}, tr('{0} s', args.timeout_s))] : null,
       ),
       args.stdin ? [h('div', { class: 'approval-sub' }, tr('Input data')), h('pre', { class: 'approval-cmd approval-stdin' }, args.stdin)] : null,
+      args.prompt ? [h('div', { class: 'approval-sub' }, tr('Prompt')), h('pre', { class: 'approval-cmd approval-stdin' }, args.prompt)] : null,
     );
     if (tc.risk === 'destructive') {
       const cb = h('input', { type: 'checkbox' });
@@ -1387,6 +1396,8 @@ const section = (title, desc, ...body) => h('section', { class: 'section' },
 const row = (title, desc, value, mono = false) => h('div', { class: 'row' },
   h('div', { class: 'row-text' }, h('div', { class: 'row-title' }, title), desc ? h('div', { class: 'row-desc' }, desc) : null),
   value != null ? h('div', { class: `row-value${mono ? ' mono' : ''}` }, value) : null);
+
+const field = (label, control, hint) => h('label', { class: 'plugin-field' }, h('div', { class: 'plugin-field-head' }, h('span', {}, label)), control, hint ? h('div', { class: 'row-desc' }, hint) : null);
 
 const copyBtn = (text) => h('button', { class: 'icon-btn', 'aria-label': tr('Copy'), title: tr('Copy'), onclick: (e) => copy(text, e.currentTarget) }, icon('copy'));
 const cmdValue = (cmd) => [h('code', {}, cmd), copyBtn(cmd)];
@@ -2156,7 +2167,6 @@ async function settingsSkills(shell) {
       try { s = await get(`/v1/skills/${name}`); } catch (err) { fail(err); return; }
     }
     const isUser = s?.source === 'user';
-    const field = (label, control, hint) => h('label', { class: 'plugin-field' }, h('div', { class: 'plugin-field-head' }, h('span', {}, label)), control, hint ? h('div', { class: 'row-desc' }, hint) : null);
     const nameInput = h('input', { type: 'text', value: s?.name || '', placeholder: 'my-skill', disabled: !!s, 'aria-label': tr('Name'), maxlength: 64 });
     const description = h('input', { type: 'text', value: s?.description || '', placeholder: tr('One line: what it does and when to use it'), 'aria-label': tr('Description'), maxlength: 1024 });
     const body = h('textarea', { class: 'market-yaml skill-body', rows: 18, spellcheck: 'false', 'aria-label': tr('Instructions'), placeholder: tr('# How to work\n\n1. Read the relevant files with files.read.\n2. ...\n\nReport format: ...') });
@@ -2487,7 +2497,6 @@ async function settingsPlugins(shell) {
     const env = h('textarea', { class: 'market-yaml', rows: 3, spellcheck: 'false', placeholder: 'KEY=value', 'aria-label': tr('Environment variables') });
     const secretEnv = h('textarea', { class: 'market-yaml', rows: 2, spellcheck: 'false', placeholder: 'API_TOKEN=...', 'aria-label': tr('Secret values') });
     const description = h('input', { type: 'text', placeholder: tr('What it is for'), 'aria-label': tr('Description') });
-    const field = (label, control, hint) => h('label', { class: 'plugin-field' }, h('div', { class: 'plugin-field-head' }, h('span', {}, label)), control, hint ? h('div', { class: 'row-desc' }, hint) : null);
     const cmdField = field(tr('Command'), command, tr('The program must be installed where the server runs; on a device it must also be in its allowed programs.'));
     const urlField = field(tr('Address'), url, null);
     const sync = () => { cmdField.classList.toggle('hidden', transport.value !== 'stdio'); urlField.classList.toggle('hidden', transport.value === 'stdio'); };
@@ -2602,6 +2611,348 @@ async function settingsAudit(shell) {
   await load();
 }
 
+// ---------- automations ----------
+
+const SCHEDULE_KINDS = { every: tr('Every N minutes or hours'), daily: tr('Every day'), weekly: tr('On days of the week'), once: tr('Once'), cron: tr('Cron expression') };
+const WEEK = [1, 2, 3, 4, 5, 6, 0];
+const RUN_STATUS = { running: [tr('Running'), 'accent'], ok: [tr('Done'), 'ok'], error: [tr('Error'), 'danger'], timeout: [tr('Timed out'), 'danger'], canceled: [tr('Canceled'), 'warn'], lost: [tr('Lost'), 'danger'] };
+const DISABLED = { 'consecutive-failures': (a) => tr('Off after {0} failures', a.failures), 'one-shot-done': () => tr('Done'), 'never-fires': () => tr('Never fires again') };
+const AUTO_ERRORS = { 'the time is in the past': tr('This time has already passed'), 'the schedule never fires': tr('The schedule never fires'), 'unknown or revoked device': tr('The device is unknown or revoked') };
+const autoError = (err) => (AUTO_ERRORS[err.message] ? new Error(AUTO_ERRORS[err.message]) : err);
+const pad2 = (n) => String(n).padStart(2, '0');
+const browserTz = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+const dayName = (d) => {
+  const s = new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' }).format(new Date(Date.UTC(2026, 0, 4 + d)));
+  return s[0].toUpperCase() + s.slice(1);
+};
+const fmtTime = (iso, tz) => new Date(iso).toLocaleString(locale, { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+function inTime(iso) {
+  const s = Math.round((new Date(iso).getTime() - Date.now()) / 1000);
+  if (s < 60) return tr('in less than a minute');
+  const m = Math.round(s / 60);
+  if (m < 60) return tr('in {0} min', m);
+  const hr = Math.round(m / 60);
+  if (hr < 24) return tr('in {0} h', hr);
+  return tr('in {0} d', Math.round(hr / 24));
+}
+
+// The clock of a time zone at a given instant, as year/month/day/hour/minute strings.
+function wallParts(ms, tz) {
+  return Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    .formatToParts(new Date(ms)).map((p) => [p.type, p.value]));
+}
+const wallOf = (iso, tz) => { const p = wallParts(Date.parse(iso), tz); return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`; };
+
+// A datetime-local value read in the zone becomes ISO with that zone's offset at that moment.
+function isoIn(value, tz) {
+  const offset = (ms) => { const p = wallParts(ms, tz); return (Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) - ms) / 60000; };
+  const guess = Date.parse(`${value}:00Z`);
+  const off = offset(guess - offset(guess) * 60000);
+  const abs = Math.abs(off);
+  return `${value}:00${off < 0 ? '-' : '+'}${pad2(Math.floor(abs / 60))}:${pad2(abs % 60)}`;
+}
+
+// The editor shows daily and weekly cron expressions as their own kinds; anything else stays raw cron.
+function formFromSchedule(s) {
+  const tz = s?.tz || browserTz();
+  const soon = new Date(Math.ceil((Date.now() + 3600000) / 3600000) * 3600000).toISOString();
+  const f = { kind: 'daily', n: 1, unit: 'h', time: '09:00', days: [1, 2, 3, 4, 5], at: wallOf(soon, tz), expr: '0 9 * * 1-5', tz };
+  if (!s) return f;
+  if (s.kind === 'every') {
+    return { ...f, kind: 'every', ...(s.every_s % 60 ? { n: s.every_s, unit: 's' } : s.every_s % 3600 ? { n: Math.round(s.every_s / 60), unit: 'm' } : { n: s.every_s / 3600, unit: 'h' }) };
+  }
+  if (s.kind === 'at') return { ...f, kind: 'once', at: wallOf(s.at, tz) };
+  const expr = s.expr.trim().split(/\s+/).join(' ');
+  const m = expr.match(/^(\d{1,2}) (\d{1,2}) \* \* (\*|[0-6](?:,[0-6])*)$/);
+  if (!m || Number(m[1]) > 59 || Number(m[2]) > 23) return { ...f, kind: 'cron', expr };
+  const time = `${pad2(m[2])}:${pad2(m[1])}`;
+  if (m[3] === '*') return { ...f, kind: 'daily', time };
+  return { ...f, kind: 'weekly', time, days: WEEK.filter((d) => m[3].split(',').includes(String(d))) };
+}
+
+function scheduleFromForm(f) {
+  const s = { kind: 'cron', at: null, every_s: null, expr: null, tz: f.tz };
+  const [hh, mm] = (f.time || '').split(':').map(Number);
+  if (f.kind === 'every') {
+    if (!(Number(f.n) > 0)) throw new Error(tr('Set the interval'));
+    return { ...s, kind: 'every', every_s: Math.round(Number(f.n) * (f.unit === 'h' ? 3600 : f.unit === 's' ? 1 : 60)) };
+  }
+  if (f.kind === 'once') {
+    if (!f.at) throw new Error(tr('Set the date and time'));
+    return { ...s, kind: 'at', at: isoIn(f.at, f.tz) };
+  }
+  if (f.kind === 'cron') return { ...s, expr: f.expr.trim() };
+  if (!f.time || Number.isNaN(hh) || Number.isNaN(mm)) throw new Error(tr('Set the time'));
+  if (f.kind === 'daily') return { ...s, expr: `${mm} ${hh} * * *` };
+  if (!f.days.length) throw new Error(tr('Pick at least one day'));
+  return { ...s, expr: `${mm} ${hh} * * ${f.days.join(',')}` };
+}
+
+function scheduleText(s) {
+  const f = formFromSchedule(s);
+  const text = {
+    every: () => (f.unit === 'h' ? tr('Every {0} h', f.n) : f.unit === 's' ? tr('Every {0} s', f.n) : tr('Every {0} min', f.n)),
+    daily: () => tr('Daily at {0}', f.time),
+    weekly: () => tr('Weekly on {0} at {1}', f.days.map(dayName).join(', '), f.time),
+    once: () => tr('Once at {0}', fmtTime(s.at, s.tz)),
+    cron: () => tr('Cron {0}', f.expr),
+  }[f.kind]();
+  return s.kind === 'every' || s.tz === browserTz() ? text : `${text} (${s.tz})`;
+}
+
+const safeScheduleText = (a) => { try { return scheduleText(a.schedule); } catch { return a.schedule_text; } };
+
+const nextText = (a) => (a.enabled && a.next_run_at ? inTime(a.next_run_at) : DISABLED[a.disabled_reason]?.(a) || tr('Off'));
+
+function tzSelect(value) {
+  let zones;
+  try { zones = Intl.supportedValuesOf('timeZone'); } catch { return h('input', { type: 'text', value, 'aria-label': tr('Time zone') }); }
+  if (!zones.includes(value)) zones = [value, ...zones];
+  return h('select', { 'aria-label': tr('Time zone') }, zones.map((z) => h('option', { value: z, selected: z === value }, z)));
+}
+
+async function runAutomation(id) {
+  try {
+    await post(`/v1/automations/${id}/run`);
+    toast(tr('Started'));
+  } catch (err) {
+    if (err.status === 409) toast(tr('Already running'));
+    else fail(err);
+  }
+}
+
+function automationRow(a, reload) {
+  const [label, cls] = a.running ? RUN_STATUS.running : RUN_STATUS[a.last_status] || [tr('No runs yet'), ''];
+  const runBtn = h('button', { class: 'btn btn-sm', disabled: a.running, onclick: async () => { runBtn.disabled = true; await runAutomation(a.id); runBtn.disabled = false; reload().catch(() => {}); } }, icon('play'), tr('Run now'));
+  return h('div', { class: 'row' },
+    h('a', { class: 'row-text', href: `#/automations/${a.id}` },
+      h('div', { class: 'row-title' }, h('span', { class: `dot ${cls}${a.running ? ' live' : ''}`, title: a.last_error || label }), a.name),
+      h('div', { class: 'row-desc' }, [safeScheduleText(a), a.target_name || a.target_id, a.created_by === 'agent' ? tr('created by the agent') : null].filter(Boolean).join(' · '))),
+    h('div', { class: 'row-value' },
+      h('span', { class: 'auto-next', title: a.next_run_at ? new Date(a.next_run_at).toLocaleString(locale) : null }, nextText(a)),
+      toggleSwitch(a.enabled, { label: tr('Enable “{0}”', a.name), onChange: async (v) => {
+        try { await post(`/v1/automations/${a.id}/${v ? 'enable' : 'disable'}`); } catch (err) { throw autoError(err); }
+        reload().catch(() => {});
+      } }),
+      runBtn));
+}
+
+async function viewAutomations() {
+  const shell = ensureAppShell();
+  shell.setActive(null);
+  const body = h('div', {});
+  const newBtn = h('a', { class: 'btn btn-primary hidden', href: '#/automations/new' }, icon('plus'), tr('New automation'));
+  let shown = '';
+  const load = async () => {
+    const data = await get('/v1/automations');
+    const key = JSON.stringify(data.items) + Math.floor(Date.now() / 60000);
+    if (key === shown) return;
+    shown = key;
+    newBtn.classList.toggle('hidden', !data.items.length);
+    body.replaceChildren(data.items.length
+      ? h('div', { class: 'rows autos' }, data.items.map((a) => automationRow(a, load)))
+      : h('div', { class: 'empty' }, orb('md'), h('h3', {}, tr('No automations yet')),
+        h('p', {}, tr('Recurring or delayed tasks: a morning report, a disk check, a reminder. Set one up here or ask the agent in a chat.')),
+        h('a', { class: 'btn btn-primary', href: '#/automations/new' }, icon('plus'), tr('New automation'))));
+  };
+  page(shell, tr('Automations'), tr('Tasks the agent runs on a schedule. Each run is logged under its automation.'), newBtn, body);
+  await load();
+  const iv = setInterval(() => load().catch(() => {}), 5000);
+  viewCleanups.push(() => clearInterval(iv));
+}
+
+function runRow(r) {
+  const waiting = r.status === 'running' && r.task_status === 'WAITING_APPROVAL';
+  const [label, cls] = waiting ? [tr('Waiting for approval'), 'warn'] : RUN_STATUS[r.status] || [r.status, ''];
+  const line = String(r.result || r.error || '').split('\n').find((x) => x.trim());
+  const desc = waiting ? tr('Open the transcript to approve the action.') : line || (r.status === 'running' ? null : tr('No reply'));
+  return h('div', { class: 'row' },
+    h('div', { class: 'row-text' },
+      h('div', { class: 'row-title' }, h('span', { title: new Date(r.started_at).toLocaleString(locale) }, relTime(r.started_at)),
+        h('span', { class: `pill ${cls}` }, r.status === 'running' && !waiting ? h('span', { class: 'dot accent live' }) : null, label)),
+      desc ? h('div', { class: 'row-desc' }, desc) : null),
+    h('div', { class: 'row-value' },
+      r.duration_ms != null ? h('span', { class: 'mono' }, mmss(Math.round(r.duration_ms / 1000))) : null,
+      r.task_id ? h('a', { class: 'btn btn-sm', href: `#/chat/${r.task_id}` }, tr('Transcript')) : null));
+}
+
+async function viewAutomationEditor(id) {
+  const shell = ensureAppShell();
+  shell.setActive(null);
+  let data;
+  let a = null;
+  try { [data, a] = await Promise.all([get('/v1/automations'), id ? get(`/v1/automations/${id}`) : null]); } catch (err) { fail(err); go('#/automations'); return; }
+  const f = formFromSchedule(a?.schedule);
+
+  const name = h('input', { type: 'text', value: a?.name || '', maxlength: 120, placeholder: tr('Morning report'), 'aria-label': tr('Name') });
+  const prompt = h('textarea', { class: 'auto-prompt', rows: 5, placeholder: tr('Check free disk space and warn me if it is below 10%.'), 'aria-label': tr('Prompt') });
+  prompt.value = a?.prompt || '';
+
+  const kind = h('select', { 'aria-label': tr('Repeat') }, Object.entries(SCHEDULE_KINDS).map(([k, label]) => h('option', { value: k, selected: k === f.kind }, label)));
+  const every = h('input', { type: 'number', min: 1, step: 1, value: f.n, 'aria-label': tr('Interval') });
+  const unit = h('select', { 'aria-label': tr('Unit') },
+    h('option', { value: 's', selected: f.unit === 's' }, tr('seconds')),
+    h('option', { value: 'm', selected: f.unit === 'm' }, tr('minutes')),
+    h('option', { value: 'h', selected: f.unit === 'h' }, tr('hours')));
+  const time = h('input', { type: 'time', value: f.time, 'aria-label': tr('Time') });
+  const days = WEEK.map((d) => h('label', { class: 'day-chip' }, h('input', { type: 'checkbox', value: d, checked: f.days.includes(d) }), dayName(d)));
+  const at = h('input', { type: 'datetime-local', value: f.at, 'aria-label': tr('Date and time') });
+  const expr = h('input', { type: 'text', class: 'mono', value: f.expr, placeholder: '0 9 * * 1-5', spellcheck: 'false', 'aria-label': tr('Cron expression') });
+  const tz = tzSelect(f.tz);
+  const fields = {
+    every: field(tr('Interval'), h('div', { class: 'auto-inline' }, every, unit)),
+    weekly: h('div', { class: 'plugin-field auto-days' }, h('div', { class: 'plugin-field-head' }, h('span', {}, tr('Days'))), h('div', { class: 'day-chips' }, days)),
+    time: field(tr('Time'), time),
+    once: field(tr('Date and time'), at),
+    cron: field(tr('Cron expression'), expr, tr('Five fields: minute, hour, day of month, month, day of week.')),
+    tz: field(tr('Time zone'), tz),
+  };
+  const read = () => ({ kind: kind.value, n: every.value, unit: unit.value, time: time.value, days: days.map((l) => l.firstChild).filter((b) => b.checked).map((b) => Number(b.value)), at: at.value, expr: expr.value, tz: tz.value });
+
+  const previewEl = h('div', { class: 'auto-preview' });
+  let previewTimer = 0;
+  let previewSeq = 0;
+  viewCleanups.push(() => clearTimeout(previewTimer));
+  const preview = async () => {
+    const seq = ++previewSeq;
+    const note = (text) => previewEl.replaceChildren(h('p', { class: 'market-note' }, text));
+    let s;
+    try { s = scheduleFromForm(read()); } catch (err) { note(err.message); return; }
+    try {
+      const { next } = await post('/v1/automations/preview', s);
+      if (seq !== previewSeq) return;
+      if (!next.length) { note(s.kind === 'at' ? tr('This time has already passed') : tr('The schedule never fires')); return; }
+      previewEl.replaceChildren(h('p', { class: 'row-desc' }, tr('Next runs: {0}', next.map((x) => fmtTime(x, s.tz)).join(' · '))));
+    } catch (err) {
+      if (err instanceof AuthError) fail(err);
+      else if (seq === previewSeq) note(err.message);
+    }
+  };
+
+  const devs = data.devices;
+  const fallback = devs.find((d) => d.id === data.local_target_id) || devs.find((d) => d.online) || devs[0];
+  const device = h('select', { 'aria-label': tr('Device') },
+    a && !devs.some((d) => d.id === a.target_id) ? h('option', { value: a.target_id, selected: true, disabled: true }, a.target_name || a.target_id) : null,
+    devs.map((d) => h('option', { value: d.id, selected: d.id === (a?.target_id || fallback?.id) }, d.online ? d.name : `${d.name} · ${tr('offline')}`)));
+  const modeSel = h('select', { 'aria-label': tr('Access mode') }, Object.entries(MODES).map(([k, m]) => h('option', { value: k, selected: k === (a?.mode || 'ask') }, m.label)));
+  const modeHint = h('span', {});
+  const syncMode = () => {
+    const full = modeSel.querySelector('[value="full"]');
+    full.disabled = !devs.find((d) => d.id === device.value)?.full_access;
+    if (full.disabled && modeSel.value === 'full') modeSel.value = 'ask';
+    modeHint.textContent = [MODES[modeSel.value].desc, full.disabled ? tr('Full access is off on this device.') : null].filter(Boolean).join(' ');
+  };
+  device.addEventListener('change', syncMode);
+  modeSel.addEventListener('change', syncMode);
+  syncMode();
+
+  const modelSel = h('select', { 'aria-label': tr('Model') }, h('option', { value: '' }, defaultModel() ? tr('{0} (default)', defaultModel()) : tr('default')));
+  loadModels().then((models) => {
+    const ids = models.map((m) => m.id).filter((x) => x !== defaultModel());
+    if (a?.model && !ids.includes(a.model)) ids.unshift(a.model);
+    modelSel.append(...ids.map((x) => h('option', { value: x }, modelLabel(x))));
+    modelSel.value = a?.model || '';
+  }).catch(() => {});
+  const timeout = h('input', { type: 'number', min: 1, max: 1440, step: 1, value: Math.round((a?.timeout_s || 3600) / 60), 'aria-label': tr('Time limit, min') });
+  let notify = a ? a.notify : true;
+  let dropAfter = a?.delete_after_run || false;
+  const dropLabel = h('label', { class: 'switch-label' }, toggleSwitch(dropAfter, { label: tr('Delete after the run'), onChange: async (v) => { dropAfter = v; } }), tr('Delete after the run'));
+
+  const sync = () => {
+    const k = kind.value;
+    fields.every.classList.toggle('hidden', k !== 'every');
+    fields.weekly.classList.toggle('hidden', k !== 'weekly');
+    fields.time.classList.toggle('hidden', k !== 'daily' && k !== 'weekly');
+    fields.once.classList.toggle('hidden', k !== 'once');
+    fields.cron.classList.toggle('hidden', k !== 'cron');
+    fields.tz.classList.toggle('hidden', k === 'every');
+    dropLabel.classList.toggle('hidden', k !== 'once');
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(preview, 300);
+  };
+  const scheduleForm = h('div', { class: 'plugin-form' },
+    h('div', { class: 'plugin-grid' }, field(tr('Repeat'), kind), fields.tz),
+    h('div', { class: 'plugin-grid' }, fields.every, fields.weekly, fields.time, fields.once, fields.cron),
+    previewEl);
+  scheduleForm.addEventListener('input', sync);
+  scheduleForm.addEventListener('change', sync);
+  sync();
+
+  const save = h('button', { class: 'btn btn-primary', onclick: async () => {
+    if (!name.value.trim()) { name.focus(); return; }
+    if (!prompt.value.trim()) { prompt.focus(); return; }
+    save.disabled = true;
+    try {
+      const payload = {
+        name: name.value.trim(),
+        prompt: prompt.value.trim(),
+        schedule: scheduleFromForm(read()),
+        target_id: device.value,
+        mode: modeSel.value,
+        model: modelSel.value || null,
+        timeout_s: Math.min(1440, Math.max(1, Math.round(Number(timeout.value) || 60))) * 60,
+        notify,
+        delete_after_run: kind.value === 'once' && dropAfter,
+      };
+      if (a) await api(`/v1/automations/${a.id}`, { method: 'PUT', body: JSON.stringify(payload) });
+      else await post('/v1/automations', payload);
+      toast(tr('Saved'));
+      go('#/automations');
+    } catch (err) { fail(autoError(err)); } finally { save.disabled = false; }
+  } }, a ? tr('Save') : tr('Create'));
+  const remove = a ? h('button', { class: 'btn btn-danger', onclick: async () => {
+    if (!await confirmDialog({ title: tr('Delete “{0}”?', a.name), text: tr('The schedule and its run log are deleted. A run in progress is stopped.'), action: tr('Delete'), danger: true })) return;
+    try { await del(`/v1/automations/${a.id}`); toast(tr('Automation deleted')); go('#/automations'); } catch (err) { fail(err); }
+  } }, icon('trash'), tr('Delete')) : null;
+
+  let runsHost = null;
+  let runBtn = null;
+  if (a) {
+    runsHost = h('div', {});
+    let running = a.running;
+    let starting = false;
+    let shown = '';
+    const renderRuns = (runs) => {
+      running = runs.some((r) => r.status === 'running');
+      runBtn.disabled = starting || running;
+      const key = JSON.stringify(runs) + Math.floor(Date.now() / 60000);
+      if (key === shown) return;
+      shown = key;
+      runsHost.replaceChildren(runs.length ? h('div', { class: 'rows runs' }, runs.map(runRow)) : h('div', { class: 'empty rows' }, tr('No runs yet.')));
+    };
+    const loadRuns = async () => renderRuns(await get(`/v1/automations/${a.id}/runs`));
+    runBtn = h('button', { class: 'btn', disabled: running, onclick: async () => {
+      starting = true;
+      runBtn.disabled = true;
+      await runAutomation(a.id);
+      starting = false;
+      await loadRuns().catch(() => {});
+    } }, icon('play'), tr('Run now'));
+    renderRuns(a.runs);
+    const iv = setInterval(() => loadRuns().catch(() => {}), 5000);
+    viewCleanups.push(() => clearInterval(iv));
+  }
+
+  const desc = a
+    ? [a.enabled && a.next_run_at ? tr('Next run {0}', inTime(a.next_run_at)) : nextText(a), a.created_by === 'agent' ? tr('created by the agent') : null].filter(Boolean).join(' · ')
+    : tr('The agent runs the prompt on schedule, each run in its own chat.');
+  page(shell, a ? a.name : tr('New automation'), desc, runBtn,
+    section(tr('Task'), null, h('div', { class: 'plugin-form' },
+      field(tr('Name'), name),
+      field(tr('Prompt'), prompt, tr('Each run starts from this text alone, with no memory of earlier runs or chats, so put everything the agent needs here.')))),
+    section(tr('Schedule'), null, scheduleForm),
+    section(tr('Where and how'), null, h('div', { class: 'plugin-form' },
+      h('div', { class: 'plugin-grid' }, field(tr('Device'), device), field(tr('Access mode'), modeSel, modeHint)),
+      h('div', { class: 'plugin-grid' }, field(tr('Model'), modelSel), field(tr('Time limit, min'), timeout, tr('A run that takes longer is stopped.'))),
+      data.telegram_ready ? h('label', { class: 'switch-label' }, toggleSwitch(notify, { label: tr('Send the result to Telegram'), onChange: async (v) => { notify = v; } }), tr('Send the result to Telegram')) : null,
+      dropLabel)),
+    h('div', { class: 'auto-actions' }, remove, h('span', { class: 'spacer' }), h('a', { class: 'btn', href: '#/automations' }, tr('Cancel')), save),
+    a ? section(tr('Runs'), null, runsHost) : null,
+  );
+  if (!a) name.focus();
+}
+
 // ---------- router ----------
 
 function go(hash) { if (location.hash === hash) route(); else location.hash = hash; }
@@ -2614,6 +2965,8 @@ async function route() {
   try {
     let m;
     if ((m = hash.match(/^#\/chat\/([^/]+)$/)) || (m = hash.match(/^#\/tasks\/([^/]+)$/))) await viewChat(m[1]);
+    else if (hash === '#/automations') await viewAutomations();
+    else if ((m = hash.match(/^#\/automations\/([^/]+)$/))) await viewAutomationEditor(m[1] === 'new' ? null : m[1]);
     else if ((m = hash.match(/^#\/settings\/?(\w*)$/))) await viewSettings(m[1] || 'overview');
     else await viewNewChat();
   } catch (err) { fail(err); }
