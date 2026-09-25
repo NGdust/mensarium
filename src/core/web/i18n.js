@@ -643,4 +643,7 @@ const RU = {
   'Stopping process {0}': 'Останавливает процесс {0}',
   'Checking listening ports': 'Смотрит открытые порты',
   'Requesting {0}': 'Запрашивает {0}',
+  'The agent on “{0}” is version {1}, Core is {2}: some tools are unavailable until it updates.': 'Агент на «{0}» версии {1}, в Core {2}: часть инструментов недоступна, пока он не обновится.',
+  '“{0}” is updating to {1}…': '«{0}» обновляется до {1}…',
+  'Update the agent': 'Обновить агента',
 };

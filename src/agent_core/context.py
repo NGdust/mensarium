@@ -36,6 +36,7 @@ def build_system_prompt(
     tools: list[str],
     skills: list[tuple[str, str]] | None = None,
     memory: str | None = None,
+    outdated_agent: str | None = None,
 ) -> str:
     allow = ", ".join(policy.command_allowlist) if policy.command_allowlist else "(none)"
     prompt = (
@@ -48,6 +49,12 @@ def build_system_prompt(
         f"- programs allowed for shell.exec: {allow}\n"
         f"- available tools: {', '.join(tools) or '(none)'}\n"
     )
+    if outdated_agent:
+        prompt += (
+            f"- device agent is outdated: {outdated_agent}. When the user asks for something those tools would do, "
+            "say that the device agent is outdated and can be updated with one click in Settings -> Devices "
+            "(or by running `mensarium update` on the device), then do what you can with the tools you have.\n"
+        )
     if skills:
         prompt += skills_block(skills)
     if memory is not None:

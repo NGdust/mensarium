@@ -787,3 +787,12 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .check-label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); }
 .check-label input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
 .empty.rows { padding: 28px 20px; }
+
+/* outdated device banner */
+.note-banner { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-radius: var(--r); border: 1px solid rgba(242, 184, 103, 0.35); background: rgba(242, 184, 103, 0.08); color: var(--text-2); font-size: 13px; }
+.note-banner > .icon { flex: none; color: var(--warn); }
+.note-banner > span { flex: 1; min-width: 0; }
+.note-banner code { font-size: 12px; }
+.welcome-banner:empty, .thread-banner:empty { display: none; }
+.welcome-banner { margin-top: 14px; }
+.thread-banner { max-width: calc(var(--chat-w) + 2 * var(--gutter)); margin: 0 auto; padding: 0 var(--gutter) 8px; }

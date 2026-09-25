@@ -741,7 +741,7 @@ async function viewNewChat() {
   function pickTarget() {
     const items = devices().map((t) => h('button', {
       class: `menu-item${selected && t.id === selected.id ? ' selected' : ''}`, disabled: t.status !== 'online',
-      onclick: () => { selected = t; localStorageSet('target', t.id); renderChip(); modeCtl.refresh(); hint.textContent = hintText(); closeLayer(); },
+      onclick: () => { selected = t; localStorageSet('target', t.id); renderChip(); modeCtl.refresh(); hint.textContent = hintText(); banner.replaceChildren(outdatedBanner(selected) || ''); closeLayer(); },
     }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.name, h('span', { class: 'popover-sub' }, isLocal(t) ? tr('Core server') : t.status === 'online' ? t.platform.split('-')[0] : tr('offline'))));
     items.push(h('div', { class: 'menu-sep' }), h('button', { class: 'menu-item', onclick: () => { closeLayer(); openPairing(); } }, icon('link'), tr('Pair a new device')));
     openPopover(targetChip, items);
@@ -749,6 +749,8 @@ async function viewNewChat() {
   renderChip();
 
   const hint = h('p', { class: 'welcome-hint' });
+  if (!state.system) { try { state.system = await get('/v1/system'); } catch { /* shown without version info */ } }
+  const banner = h('div', { class: 'welcome-banner' }, outdatedBanner(selected) || '');
   const hintText = (mode = modeCtl.effective()) => {
     if (!online.length) return tr('All devices are currently offline. Run mensarium target run on the machine you need.');
     return mode === 'full'
@@ -780,6 +782,7 @@ async function viewNewChat() {
       h('div', { class: 'templates' }, TEMPLATES.map(([ic, label, text]) => h('button', { class: 'template', onclick: () => c.setText(text) }, icon(ic), label))),
       c.el,
       hint,
+      banner,
     ]
     : h('div', { class: 'welcome-empty' },
       h('div', { class: 'welcome-hero' }, orb('lg'), h('h1', {}, tr('Connect a device'))),
@@ -788,6 +791,31 @@ async function viewNewChat() {
 
   shell.panel.replaceChildren(topbar(shell, [], null, { newChat: false }), h('div', { class: 'welcome' }, content));
   if (devices().length) c.textarea.focus();
+}
+
+// A device whose agent is older than Core and misses base tools: offer the update right in the chat.
+function outdatedBanner(t) {
+  const s = state.system;
+  const caps = t?.capabilities || {};
+  if (!t || !s || isLocal(t) || !t.agent_version || t.agent_version === s.version || !(caps.missing_tools || []).length) return null;
+  const pending = state.updates.get(t.id);
+  const text = h('span', {}, tr('The agent on “{0}” is version {1}, Core is {2}: some tools are unavailable until it updates.', t.name, t.agent_version, s.version));
+  if (pending) return h('div', { class: 'note-banner' }, icon('refresh'), h('span', {}, tr('“{0}” is updating to {1}…', t.name, pending.version)));
+  let action = null;
+  if (caps.remote_update && t.status === 'online') {
+    action = h('button', { class: 'btn btn-primary btn-sm', onclick: async (e) => {
+      e.currentTarget.disabled = true;
+      try {
+        const r = await post(`/v1/targets/${t.id}/update`);
+        state.updates.set(t.id, { version: r.version, at: Date.now() });
+        toast(tr('“{0}” is updating', t.name));
+        e.currentTarget.closest('.note-banner')?.replaceWith(outdatedBanner(t));
+      } catch (err) { fail(err); e.currentTarget.disabled = false; }
+    } }, icon('refresh'), tr('Update the agent'));
+  } else if (!caps.remote_update) {
+    action = h('code', {}, 'mensarium update');
+  }
+  return h('div', { class: 'note-banner' }, icon('alert'), text, action);
 }
 
 // ---------- chat ----------
@@ -828,11 +856,14 @@ async function viewChat(taskId) {
     onResume: () => act('resume'),
   });
 
+  if (!state.system) { try { state.system = await get('/v1/system'); } catch { /* shown without version info */ } }
+  const banner = outdatedBanner(target());
   shell.panel.replaceChildren(
     topbar(shell,
       [h('span', { class: 'crumb-device' }, icon('laptop'), task.target_name || tr('device'), h('span', { class: 'sep' }, '/')), h('span', { class: 'current', title: task.input }, taskTitle(task))],
       [btnDelete]),
     thread,
+    h('div', { class: 'thread-banner' }, banner || ''),
     c.el,
   );
 

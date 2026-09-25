@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from mensarium import __version__
 from mensarium.agent_core.actions import ToolCallAction, parse_action
 from mensarium.agent_core.context import build_messages, build_system_prompt
 from mensarium.agent_core.profile import AgentProfile
@@ -30,6 +31,7 @@ from mensarium.policy_engine.engine import Decision, evaluate
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import iso_in, now_iso, parse_iso, utcnow
 from mensarium.shared.versions import parse_version
+from mensarium.tool_runtime.registry import REGISTRY
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +47,14 @@ FULL_ACCESS_ERRORS = {
 def _brief(arguments: dict[str, Any]) -> dict[str, Any]:
     """Arguments for the chat's activity line; patches sent through stdin stay out of the event log."""
     return {k: v for k, v in arguments.items() if k != "stdin"}
+
+
+OPTIONAL_DEVICE_TOOLS = {"shell.bash"}
+
+
+def missing_tools(reported: list[str]) -> list[str]:
+    """Base device tools this agent version does not offer; the device needs an update to get them."""
+    return [t for t in REGISTRY if t not in reported and t not in OPTIONAL_DEVICE_TOOLS]
 
 
 def full_access(target: dict[str, Any]) -> str:
@@ -327,13 +337,20 @@ class Orchestrator:
                 available.append("skills.read")
             skills = [(s.name, s.description) for s in toolbox.skills]
             memory = await self.memory.context() if "memory.search" in available else None
+            missing = missing_tools((target.get("capabilities") or {}).get("tools", []))
+            outdated = (
+                f"{target.get('agent_version') or 'unknown'} (Core is {__version__}); tools it lacks until the user updates it: "
+                + ", ".join(missing)
+                if missing and parse_version(target.get("agent_version") or "0") < parse_version(__version__)
+                else None
+            )
 
             await self._set_status(task_id, "PLANNING")
             llm_steps += 1
             steps = await self.repo.list_steps(task_id)
             request = ChatRequest(
                 model=model,
-                system=build_system_prompt(profile, target["name"], target["platform"], policy, available, skills, memory),
+                system=build_system_prompt(profile, target["name"], target["platform"], policy, available, skills, memory, outdated),
                 messages=build_messages(steps, profile.llm.max_context_tokens),
                 temperature=profile.llm.temperature,
                 max_output_tokens=profile.llm.max_output_tokens,

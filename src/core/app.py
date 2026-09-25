@@ -31,7 +31,7 @@ from mensarium.core.dreaming import Dreamer, DreamError
 from mensarium.core.events import EventBus
 from mensarium.core.local_target import ensure_local_target, local_target_paths
 from mensarium.core.memory import KINDS, Memory, NoteError
-from mensarium.core.orchestrator import Orchestrator, TaskError, full_access
+from mensarium.core.orchestrator import Orchestrator, TaskError, full_access, missing_tools
 from mensarium.core.plugins import PluginError, PluginManager
 from mensarium.core.providers import ProviderError, Providers
 from mensarium.core.releases import ReleaseError, fetch_latest, spawn_update, updater
@@ -472,6 +472,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
                 "full_access": full_access(t),
                 "disabled_tools": t.get("disabled_tools") or [],
                 "remote_update": bool(caps.get("remote_update")) and t["id"] != c.local_target_id,
+                "missing_tools": missing_tools(caps.get("tools", [])),
             },
         }
 
