@@ -1,0 +1,41 @@
+id: dotnet-dev
+name: {en: .NET dev tools, ru: Инструменты .NET-разработки}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Run dotnet test, build and format check as dedicated tools.
+  ru: Запускает dotnet test, build и проверку форматирования отдельными инструментами.
+description:
+  en: Adds test, build and format-check tools for .NET projects. Each one runs a single allowlisted program on the device.
+  ru: Добавляет инструменты тестов, сборки и проверки форматирования для проектов .NET. Каждый запускает одну разрешённую программу на устройстве.
+tags: [dotnet, csharp, testing]
+category: development
+tools:
+  - name: dotnet.test
+    description: Run dotnet test, optionally scoped to a project and filtered.
+    risk: execute
+    argv: [dotnet, test, "{project}", "--filter={filter}"]
+    cwd: "{dir}"
+    timeout_s: 600
+    parameters:
+      dir: {description: Project directory, default: "."}
+      project: {description: "Project or solution file (optional)"}
+      filter: {description: "Test filter expression, e.g. FullyQualifiedName~Namespace (optional)"}
+  - name: dotnet.build
+    description: Build a .NET project or solution.
+    risk: execute
+    argv: [dotnet, build, "{project}"]
+    cwd: "{dir}"
+    timeout_s: 120
+    parameters:
+      dir: {description: Project directory, default: "."}
+      project: {description: "Project or solution file (optional)"}
+  - name: dotnet.format_check
+    description: Check formatting without modifying files.
+    risk: read
+    argv: [dotnet, format, "{project}", --verify-no-changes]
+    cwd: "{dir}"
+    timeout_s: 60
+    parameters:
+      dir: {description: Project directory, default: "."}
+      project: {description: "Project or solution file (optional)"}

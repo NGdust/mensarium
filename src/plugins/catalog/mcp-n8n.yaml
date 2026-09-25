@@ -1,0 +1,29 @@
+id: mcp-n8n
+name: n8n
+version: 1.0.0
+author: Community
+summary:
+  en: Look up n8n nodes, validate workflows and manage them through the n8n-mcp server.
+  ru: Поиск нод n8n, проверка воркфлоу и управление ими через сервер n8n-mcp.
+description:
+  en: Runs n8n-mcp with npx. Without an API URL and key it only serves the bundled node documentation; add both to let it create and manage workflows on your n8n instance. Writes go through approval unless you lower the risk.
+  ru: Запускает n8n-mcp через npx. Без URL и ключа API сервер отдаёт только встроенную документацию по нодам; добавьте оба поля, чтобы он мог создавать и менять воркфлоу на вашем экземпляре n8n. Запись идёт через подтверждение, если не понизить риск.
+tags: [mcp, n8n, automation]
+category: automation
+homepage: https://github.com/czlonkowski/n8n-mcp
+config:
+  api_url:
+    title: {en: n8n API URL, ru: URL API n8n}
+    placeholder: "https://your-instance.app.n8n.cloud"
+  api_key:
+    secret: true
+    title: {en: API key, ru: API-ключ}
+    help: {en: "https://docs.n8n.io/api/authentication/", ru: "https://docs.n8n.io/api/authentication/"}
+mcp:
+  command: npx
+  args: ["-y", "n8n-mcp"]
+  env:
+    N8N_API_URL: "{api_url}"
+    N8N_API_KEY: "{api_key}"
+    MCP_MODE: stdio
+  risk: write

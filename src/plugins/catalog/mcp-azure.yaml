@@ -1,0 +1,18 @@
+id: mcp-azure
+name: Azure
+version: 1.0.0
+author: Microsoft
+summary:
+  en: Manage Azure resources with the device's own az login session.
+  ru: Управление ресурсами Azure через сессию az login устройства.
+description:
+  en: Runs the official Azure MCP Server with npx on the device you choose, using its existing az login session; nothing is sent to the Core. The agent can create, change and delete Azure resources, so such calls go through approval unless you lower the risk. The device needs Node.js, npx and the Azure CLI already logged in.
+  ru: Запускает официальный Azure MCP Server через npx на выбранном устройстве, используя его текущую сессию az login; в Core ничего не уходит. Агент может создавать, менять и удалять ресурсы Azure, поэтому такие вызовы идут через подтверждение, если не понизить риск. На устройстве нужны Node.js, npx и уже выполненный вход в Azure CLI.
+tags: [mcp, azure, cloud]
+category: cloud
+homepage: https://github.com/microsoft/mcp
+mcp:
+  command: npx
+  args: ["-y", "@azure/mcp@latest", "server", "start"]
+  placement: device
+  risk: write

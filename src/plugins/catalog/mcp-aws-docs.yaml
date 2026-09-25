@@ -1,0 +1,17 @@
+id: mcp-aws-docs
+name: {en: AWS Documentation, ru: Документация AWS}
+version: 1.0.0
+author: AWS
+summary:
+  en: Search and read current AWS documentation.
+  ru: Поиск и чтение актуальной документации AWS.
+description:
+  en: Runs AWS Labs' aws-documentation-mcp-server with uvx in the Core. Lets the agent search AWS docs, fetch a page as markdown and get related-page recommendations instead of relying on memory. Read-only and free; no AWS account or credentials needed.
+  ru: Запускает aws-documentation-mcp-server от AWS Labs через uvx в Core. Позволяет агенту искать документацию AWS, получать страницу в формате markdown и рекомендации похожих страниц, вместо того чтобы полагаться на память. Только чтение, бесплатно; аккаунт и креды AWS не нужны.
+tags: [mcp, aws, cloud, docs]
+category: cloud
+homepage: https://github.com/awslabs/mcp/tree/main/src/aws-documentation-mcp-server
+mcp:
+  command: uvx
+  args: ["awslabs.aws-documentation-mcp-server@latest"]
+  risk: read

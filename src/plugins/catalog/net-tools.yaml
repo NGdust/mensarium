@@ -1,0 +1,48 @@
+id: net-tools
+name: {en: Network tools, ru: Сетевые инструменты}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: DNS lookups, ping, HTTP headers and open ports as dedicated tools.
+  ru: DNS-запросы, ping, HTTP-заголовки и открытые порты отдельными инструментами.
+description:
+  en: Gives the agent basic network diagnostics on the device. Open-ports reporting differs by platform, use net.ports_macos on macOS and net.ports_linux on Linux; the other one will simply fail there.
+  ru: Даёт агенту базовую сетевую диагностику на устройстве. Отчёт по открытым портам отличается на разных платформах, используйте net.ports_macos на macOS и net.ports_linux на Linux; на другой платформе соответствующий инструмент просто завершится с ошибкой.
+tags: [network, dns, diagnostics]
+category: system
+tools:
+  - name: net.dns
+    description: Resolve a DNS record with dig.
+    risk: network
+    argv: [dig, "+short", "{name}", "{type}"]
+    timeout_s: 60
+    parameters:
+      name: {description: Hostname or domain to resolve, required: true}
+      type: {description: "Record type, e.g. A, AAAA, MX, TXT", default: A}
+  - name: net.ping
+    description: Ping a host a fixed number of times.
+    risk: network
+    argv: [ping, -c, "{count}", "{host}"]
+    timeout_s: 60
+    parameters:
+      host: {description: Hostname or IP to ping, required: true}
+      count: {type: integer, default: 4, minimum: 1, maximum: 20, description: Number of echo requests}
+  - name: net.http_head
+    description: Fetch HTTP response headers only.
+    risk: network
+    argv: [curl, -sSI, --max-time, "15", "{url}"]
+    timeout_s: 60
+    parameters:
+      url: {description: URL to request, required: true}
+  - name: net.ports_macos
+    description: List open and listening network ports. Works on macOS, not Linux.
+    risk: read
+    argv: [lsof, -i, -P, -n]
+    timeout_s: 60
+    parameters: {}
+  - name: net.ports_linux
+    description: List listening network sockets. Works on Linux, not macOS.
+    risk: read
+    argv: [ss, -tulpn]
+    timeout_s: 60
+    parameters: {}

@@ -1,0 +1,30 @@
+id: mcp-mongodb
+name: MongoDB
+version: 1.0.0
+author: MongoDB
+summary:
+  en: Query and manage MongoDB collections through the official MCP server.
+  ru: Запросы и управление коллекциями MongoDB через официальный MCP-сервер.
+description:
+  en: Runs mongodb-mcp-server with npx in the Core, connected to your cluster with a connection string. Read-only is on by default, so the agent can only read documents and metadata; turn it off to also allow inserts, updates and deletes, which then go through approval unless you lower the risk.
+  ru: Запускает mongodb-mcp-server через npx в Core, подключаясь к кластеру по строке соединения. По умолчанию включён режим только для чтения, агент видит документы и метаданные. Отключите его, чтобы разрешить вставку, изменение и удаление; такие вызовы идут через подтверждение, если не понизить риск.
+tags: [mcp, database, mongodb]
+category: databases
+homepage: https://github.com/mongodb-js/mongodb-mcp-server
+config:
+  connection_string:
+    secret: true
+    required: true
+    title: {en: Connection string, ru: Строка подключения}
+    help: {en: "https://www.mongodb.com/docs/manual/reference/connection-string/", ru: "https://www.mongodb.com/docs/manual/reference/connection-string/"}
+  read_only:
+    enum: ["true", "false"]
+    default: "true"
+    title: {en: Read-only, ru: Только чтение}
+mcp:
+  command: npx
+  args: ["-y", "mongodb-mcp-server@latest"]
+  env:
+    MDB_MCP_CONNECTION_STRING: "{connection_string}"
+    MDB_MCP_READ_ONLY: "{read_only}"
+  risk: read

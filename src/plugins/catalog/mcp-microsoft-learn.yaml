@@ -1,0 +1,17 @@
+id: mcp-microsoft-learn
+name: Microsoft Learn
+version: 1.0.0
+author: Microsoft
+summary:
+  en: Search and fetch official Microsoft Learn documentation and code samples.
+  ru: Поиск и получение официальной документации и примеров кода Microsoft Learn.
+description:
+  en: Connects the Core to Microsoft's hosted Learn MCP server, free and without a key. Useful for Azure, .NET, Microsoft 365 and other Microsoft stack questions where the agent should quote current docs instead of guessing from memory.
+  ru: Подключает Core к облачному MCP-серверу Microsoft Learn — бесплатному и без ключа. Пригодится для вопросов по Azure, .NET, Microsoft 365 и прочему стеку Microsoft, когда агенту лучше сослаться на актуальную документацию, а не полагаться на память.
+tags: [mcp, docs]
+category: development
+homepage: https://github.com/MicrosoftDocs/mcp
+mcp:
+  transport: http
+  url: https://learn.microsoft.com/api/mcp
+  risk: read

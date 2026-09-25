@@ -1,0 +1,34 @@
+id: mcp-browserbase
+name: Browserbase
+version: 1.0.0
+author: Browserbase
+summary:
+  en: Drive a cloud browser session (Stagehand) to navigate, click and extract data from pages.
+  ru: Управление облачным браузером (Stagehand) — переходы по страницам, клики и извлечение данных.
+description:
+  en: Connects the Core to Browserbase's hosted MCP server with npx, running the browser session in Browserbase's cloud instead of on a device. Needs a Browserbase API key and project ID; natural-language actions like "click the login button" also need a model key, Gemini by default. Billed by Browserbase per session and minute beyond its free tier.
+  ru: Подключает Core к облачному MCP-серверу Browserbase через npx, сессия браузера выполняется в облаке Browserbase, а не на устройстве. Нужны API-ключ и project ID Browserbase; для действий на естественном языке вроде «нажми кнопку входа» нужен ещё ключ модели, по умолчанию Gemini. Browserbase выставляет счёт за сессии и минуты сверх бесплатного лимита.
+tags: [mcp, browser]
+category: browser
+homepage: https://github.com/browserbase/mcp-server-browserbase
+config:
+  api_key:
+    secret: true
+    required: true
+    title: {en: API key, ru: Ключ API}
+    help: {en: "https://www.browserbase.com/settings", ru: "https://www.browserbase.com/settings"}
+  project_id:
+    required: true
+    title: {en: Project ID, ru: Project ID}
+  gemini_api_key:
+    secret: true
+    title: {en: Model API key (Gemini), ru: Ключ модели (Gemini)}
+    help: {en: "https://aistudio.google.com/apikey", ru: "https://aistudio.google.com/apikey"}
+mcp:
+  command: npx
+  args: ["-y", "@browserbasehq/mcp"]
+  env:
+    BROWSERBASE_API_KEY: "{api_key}"
+    BROWSERBASE_PROJECT_ID: "{project_id}"
+    GEMINI_API_KEY: "{gemini_api_key}"
+  risk: execute

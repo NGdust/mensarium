@@ -1,0 +1,29 @@
+id: mcp-sentry
+name: Sentry
+version: 1.0.0
+author: Sentry
+summary:
+  en: Search and read Sentry issues, events and stack traces.
+  ru: Поиск и чтение issues, событий и стектрейсов Sentry.
+description:
+  en: Runs Sentry's official MCP server with npx in the Core, using an access token scoped to your organization. Read-only; lets the agent look up issues and errors instead of you copying them in by hand. Set a self-hosted host if you do not use sentry.io.
+  ru: Запускает официальный MCP-сервер Sentry через npx в Core по токену доступа, выданному на вашу организацию. Только чтение; агент сам находит issues и ошибки вместо того, чтобы вы копировали их вручную. Укажите свой хост, если используете self-hosted Sentry, а не sentry.io.
+tags: [mcp, sentry, observability, errors]
+category: observability
+homepage: https://github.com/getsentry/sentry-mcp
+config:
+  access_token:
+    secret: true
+    required: true
+    title: {en: Access token, ru: Токен доступа}
+    help: {en: "https://sentry.io/settings/account/api/auth-tokens/", ru: "https://sentry.io/settings/account/api/auth-tokens/"}
+  host:
+    placeholder: sentry.example.com
+    title: {en: "Self-hosted host (optional)", ru: "Свой хост (необязательно)"}
+mcp:
+  command: npx
+  args: ["-y", "@sentry/mcp-server@latest"]
+  env:
+    SENTRY_ACCESS_TOKEN: "{access_token}"
+    SENTRY_HOST: "{host}"
+  risk: read

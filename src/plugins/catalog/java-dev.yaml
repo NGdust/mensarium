@@ -1,0 +1,47 @@
+id: java-dev
+name: {en: Java dev tools, ru: Инструменты Java-разработки}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Run Maven and Gradle tests and builds as dedicated tools.
+  ru: Запускает тесты и сборку Maven и Gradle отдельными инструментами.
+description:
+  en: Adds test and build tools for Java projects using either Maven or Gradle, whichever the project uses. Each one runs a single allowlisted program on the device.
+  ru: Добавляет инструменты тестов и сборки для проектов Java на Maven или Gradle, в зависимости от того, что использует проект. Каждый запускает одну разрешённую программу на устройстве.
+tags: [java, maven, gradle, testing]
+category: development
+tools:
+  - name: java.maven_test
+    description: Run Maven tests, optionally filtered by a -Dtest pattern.
+    risk: execute
+    argv: [mvn, -q, test, "-Dtest={filter}"]
+    cwd: "{dir}"
+    timeout_s: 600
+    parameters:
+      dir: {description: Project directory, default: "."}
+      filter: {description: "Only run tests matching this -Dtest pattern (optional)"}
+  - name: java.maven_build
+    description: Build the project with Maven, skipping tests.
+    risk: execute
+    argv: [mvn, -q, -DskipTests, package]
+    cwd: "{dir}"
+    timeout_s: 120
+    parameters:
+      dir: {description: Project directory, default: "."}
+  - name: java.gradle_test
+    description: Run Gradle tests, optionally filtered by a --tests pattern.
+    risk: execute
+    argv: [gradle, test, "--tests={filter}"]
+    cwd: "{dir}"
+    timeout_s: 600
+    parameters:
+      dir: {description: Project directory, default: "."}
+      filter: {description: "Only run tests matching this --tests pattern (optional)"}
+  - name: java.gradle_build
+    description: Build the project with Gradle, skipping tests.
+    risk: execute
+    argv: [gradle, build, -x, test]
+    cwd: "{dir}"
+    timeout_s: 120
+    parameters:
+      dir: {description: Project directory, default: "."}

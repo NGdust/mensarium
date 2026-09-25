@@ -1,0 +1,17 @@
+id: mcp-sequential-thinking
+name: {en: Sequential thinking, ru: Пошаговое рассуждение}
+version: 1.0.0
+author: Anthropic
+summary:
+  en: Structured step-by-step reasoning scratchpad for working through a hard problem.
+  ru: Структурированный пошаговый черновик рассуждений для сложной задачи.
+description:
+  en: Runs the reference @modelcontextprotocol/server-sequential-thinking with npx in the Core. Gives the agent a tool to lay out and revise a chain of thoughts instead of reasoning silently; nothing leaves the process and it does not touch files or the network.
+  ru: Запускает эталонный @modelcontextprotocol/server-sequential-thinking через npx в Core. Даёт агенту инструмент выкладывать и пересматривать цепочку рассуждений вместо молчаливого размышления; ничего не покидает процесс, сервер не трогает файлы и сеть.
+tags: [mcp, reasoning]
+category: development
+homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking
+mcp:
+  command: npx
+  args: ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+  risk: read

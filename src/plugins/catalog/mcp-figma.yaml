@@ -1,0 +1,25 @@
+id: mcp-figma
+name: Figma
+version: 1.0.0
+author: Community
+summary:
+  en: Read Figma file layers, styles and images through the community Figma MCP server.
+  ru: Чтение слоёв, стилей и изображений файлов Figma через community MCP-сервер Figma.
+description:
+  en: Runs figma-developer-mcp with npx and your personal access token. Read-only, it fetches file data and rendered images but never edits a Figma file. The token stays in the Core.
+  ru: Запускает figma-developer-mcp через npx с вашим личным токеном доступа. Только чтение, получает данные файла и рендер изображений, но никогда не редактирует файл Figma. Токен хранится в Core.
+tags: [mcp, figma, design]
+category: productivity
+homepage: https://github.com/GLips/Figma-Context-MCP
+config:
+  api_key:
+    secret: true
+    required: true
+    title: {en: Personal access token, ru: Личный токен доступа}
+    help: {en: "https://www.figma.com/developers/api#access-tokens", ru: "https://www.figma.com/developers/api#access-tokens"}
+mcp:
+  command: npx
+  args: ["-y", "figma-developer-mcp", "--stdio"]
+  env:
+    FIGMA_API_KEY: "{api_key}"
+  risk: read

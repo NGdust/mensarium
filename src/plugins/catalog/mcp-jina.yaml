@@ -1,0 +1,25 @@
+id: mcp-jina
+name: Jina
+version: 1.0.0
+author: Jina AI
+summary:
+  en: Read and search the web as clean, LLM-ready text through Jina's Reader API.
+  ru: Чтение и поиск в вебе в виде чистого текста для LLM через Jina Reader API.
+description:
+  en: Connects the Core to Jina AI's hosted MCP server over http, with your Jina API key sent as a bearer token. Converts pages to clean markdown and can run web search; Jina's free tier covers a limited number of tokens per month, then bills per token.
+  ru: Подключает Core к облачному MCP-серверу Jina AI по http, ключ Jina передаётся как bearer-токен. Преобразует страницы в чистый markdown и умеет искать в вебе; бесплатный тариф Jina покрывает ограниченное число токенов в месяц, дальше — оплата за токены.
+tags: [mcp, search, web]
+category: web
+homepage: https://github.com/jina-ai/MCP
+config:
+  api_key:
+    secret: true
+    required: true
+    title: {en: API key, ru: Ключ API}
+    help: {en: "https://jina.ai/api-dashboard/", ru: "https://jina.ai/api-dashboard/"}
+mcp:
+  transport: http
+  url: https://mcp.jina.ai/v1
+  headers:
+    Authorization: "Bearer {api_key}"
+  risk: read

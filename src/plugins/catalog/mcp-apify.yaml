@@ -1,0 +1,25 @@
+id: mcp-apify
+name: Apify
+version: 1.0.0
+author: Apify
+summary:
+  en: Run Apify Actors (scrapers and automations) and browse their results.
+  ru: Запуск Apify Actors (скраперов и автоматизаций) и просмотр их результатов.
+description:
+  en: Runs @apify/actors-mcp-server with npx in the Core using your Apify API token. Actors it calls run on Apify's infrastructure and are billed per Apify's usage-based pricing, on top of a monthly free-tier credit.
+  ru: Запускает @apify/actors-mcp-server через npx в Core по вашему токену Apify. Вызываемые Actors выполняются на инфраструктуре Apify и тарифицируются по её usage-based модели, сверх ежемесячного бесплатного лимита.
+tags: [mcp, web, automation]
+category: web
+homepage: https://github.com/apify/actors-mcp-server
+config:
+  api_token:
+    secret: true
+    required: true
+    title: {en: API token, ru: Токен API}
+    help: {en: "https://console.apify.com/settings/integrations", ru: "https://console.apify.com/settings/integrations"}
+mcp:
+  command: npx
+  args: ["-y", "@apify/actors-mcp-server"]
+  env:
+    APIFY_TOKEN: "{api_token}"
+  risk: network

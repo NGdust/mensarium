@@ -1,0 +1,33 @@
+id: mcp-redis
+name: Redis
+version: 1.0.0
+author: Redis
+summary:
+  en: Read and write keys in a Redis database through the official MCP server.
+  ru: Чтение и запись ключей в базе Redis через официальный MCP-сервер.
+description:
+  en: Runs redis-mcp-server with uvx in the Core, pointed at your Redis instance by host and port; the password stays a Core secret. The agent can set, expire and delete keys, so such calls go through approval unless you lower the risk.
+  ru: Запускает redis-mcp-server через uvx в Core, подключаясь к инстансу Redis по хосту и порту; пароль хранится как секрет Core. Агент может устанавливать, задавать TTL и удалять ключи, поэтому такие вызовы идут через подтверждение, если не понизить риск.
+tags: [mcp, database, redis]
+category: databases
+homepage: https://github.com/redis/mcp-redis
+config:
+  host:
+    required: true
+    default: 127.0.0.1
+    placeholder: redis.example.com
+    title: {en: Host, ru: Хост}
+  port:
+    type: integer
+    default: 6379
+    title: {en: Port, ru: Порт}
+  password:
+    secret: true
+    title: {en: Password, ru: Пароль}
+    help: {en: "https://redis.io/docs/latest/operate/oss_and_stack/management/security/", ru: "https://redis.io/docs/latest/operate/oss_and_stack/management/security/"}
+mcp:
+  command: uvx
+  args: ["--from", "redis-mcp-server@latest", "redis-mcp-server", "--host={host}", "--port={port}"]
+  env:
+    REDIS_PWD: "{password}"
+  risk: write

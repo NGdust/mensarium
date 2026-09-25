@@ -1,0 +1,29 @@
+id: mcp-supabase
+name: Supabase
+version: 1.0.0
+author: Supabase
+summary:
+  en: Manage Supabase projects, tables and edge functions through the hosted MCP server.
+  ru: Управление проектами, таблицами и edge-функциями Supabase через облачный MCP-сервер.
+description:
+  en: Connects the Core to Supabase's hosted MCP server with your personal access token. Read-only is on by default, so the agent can only query and inspect; turn it off to also allow schema and data changes, which then go through approval unless you lower the risk.
+  ru: Подключает Core к облачному MCP-серверу Supabase по вашему персональному токену. По умолчанию включён режим только для чтения, агент может запрашивать и просматривать данные. Отключите его, чтобы разрешить изменения схемы и данных; такие вызовы идут через подтверждение, если не понизить риск.
+tags: [mcp, database, supabase]
+category: databases
+homepage: https://supabase.com/docs/guides/getting-started/mcp
+config:
+  access_token:
+    secret: true
+    required: true
+    title: {en: Personal access token, ru: Персональный токен}
+    help: {en: "https://supabase.com/dashboard/account/tokens", ru: "https://supabase.com/dashboard/account/tokens"}
+  read_only:
+    enum: ["true", "false"]
+    default: "true"
+    title: {en: Read-only, ru: Только чтение}
+mcp:
+  transport: http
+  url: "https://mcp.supabase.com/mcp?read_only={read_only}"
+  headers:
+    Authorization: "Bearer {access_token}"
+  risk: read

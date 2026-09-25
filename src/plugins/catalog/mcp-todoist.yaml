@@ -1,0 +1,25 @@
+id: mcp-todoist
+name: Todoist
+version: 1.0.0
+author: Doist
+summary:
+  en: Create, update and complete Todoist tasks through Doist's official MCP server.
+  ru: Создание, изменение и завершение задач Todoist через официальный MCP-сервер Doist.
+description:
+  en: Runs @doist/todoist-mcp with npx and your personal API token. The token stays in the Core; writes to Todoist go through approval unless you lower the risk.
+  ru: Запускает @doist/todoist-mcp через npx с вашим персональным API-токеном. Токен хранится в Core; запись в Todoist идёт через подтверждение, если не понизить риск.
+tags: [mcp, todoist, tasks, productivity]
+category: productivity
+homepage: https://github.com/Doist/todoist-mcp
+config:
+  api_key:
+    secret: true
+    required: true
+    title: {en: API token, ru: API-токен}
+    help: {en: "https://app.todoist.com/app/settings/integrations/developer", ru: "https://app.todoist.com/app/settings/integrations/developer"}
+mcp:
+  command: npx
+  args: ["-y", "@doist/todoist-mcp"]
+  env:
+    TODOIST_API_KEY: "{api_key}"
+  risk: write

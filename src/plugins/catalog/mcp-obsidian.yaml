@@ -1,0 +1,37 @@
+id: mcp-obsidian
+name: Obsidian
+version: 1.0.0
+author: Community
+summary:
+  en: Read, search and edit notes in an Obsidian vault through its Local REST API plugin.
+  ru: Чтение, поиск и правка заметок в хранилище Obsidian через его плагин Local REST API.
+description:
+  en: Runs mcp-obsidian with uvx on the device where Obsidian is open, with the Local REST API community plugin installed and enabled. The device needs Python and uv, and uvx must be in its list of allowed programs.
+  ru: Запускает mcp-obsidian через uvx на устройстве, где открыт Obsidian с включённым community-плагином Local REST API. На устройстве нужны Python и uv, а uvx должен быть в списке разрешённых программ.
+tags: [mcp, obsidian, notes, productivity]
+category: productivity
+homepage: https://github.com/MarkusPfundstein/mcp-obsidian
+config:
+  api_key:
+    type: string
+    required: true
+    title: {en: "Local REST API plugin key (not a cloud credential)", ru: "Ключ плагина Local REST API (не облачный credential)"}
+    help: {en: "https://github.com/coddingtonbear/obsidian-local-rest-api", ru: "https://github.com/coddingtonbear/obsidian-local-rest-api"}
+  host:
+    default: "127.0.0.1"
+    title: {en: Host, ru: Хост}
+  port:
+    type: integer
+    default: 27124
+    minimum: 1
+    maximum: 65535
+    title: {en: Port, ru: Порт}
+mcp:
+  command: uvx
+  args: [mcp-obsidian]
+  env:
+    OBSIDIAN_API_KEY: "{api_key}"
+    OBSIDIAN_HOST: "{host}"
+    OBSIDIAN_PORT: "{port}"
+  placement: device
+  risk: write

@@ -1,0 +1,25 @@
+id: mcp-kubernetes
+name: Kubernetes
+version: 1.0.0
+author: Community
+summary:
+  en: Inspect and manage Kubernetes resources with the device's own kubeconfig.
+  ru: Просмотр и управление ресурсами Kubernetes через kubeconfig устройства.
+description:
+  en: Runs mcp-server-kubernetes with npx on the device you choose, using its existing kubeconfig; nothing is sent to the Core. Non-destructive mode is on by default, so the agent can only read and list resources; turn it off to also allow deleting pods, deployments and namespaces, which then go through approval unless you lower the risk.
+  ru: Запускает mcp-server-kubernetes через npx на выбранном устройстве, используя его собственный kubeconfig; в Core ничего не уходит. По умолчанию включён неразрушающий режим, агент может только читать и перечислять ресурсы. Отключите его, чтобы разрешить удаление подов, деплойментов и namespace; такие вызовы идут через подтверждение, если не понизить риск.
+tags: [mcp, kubernetes, cloud]
+category: cloud
+homepage: https://github.com/Flux159/mcp-server-kubernetes
+config:
+  non_destructive:
+    enum: ["true", "false"]
+    default: "true"
+    title: {en: Non-destructive mode, ru: Неразрушающий режим}
+mcp:
+  command: npx
+  args: ["-y", "mcp-server-kubernetes"]
+  env:
+    ALLOW_ONLY_NON_DESTRUCTIVE_TOOLS: "{non_destructive}"
+  placement: device
+  risk: read

@@ -1,0 +1,25 @@
+id: mcp-ref
+name: Ref
+version: 1.0.0
+author: Ref
+summary:
+  en: Token-efficient search over API and library documentation for coding agents.
+  ru: Экономный по токенам поиск по документации API и библиотек для агентов, пишущих код.
+description:
+  en: Runs ref-tools-mcp with npx in the Core using your Ref API key. Built to return only the relevant slice of a doc page instead of the whole thing, keeping context usage low; free tier covers a limited number of searches per month.
+  ru: Запускает ref-tools-mcp через npx в Core по вашему ключу Ref. Возвращает только нужный фрагмент страницы документации, а не её целиком, экономя контекст; бесплатный тариф покрывает ограниченное число запросов в месяц.
+tags: [mcp, docs, web]
+category: web
+homepage: https://github.com/ref-tools/ref-tools-mcp
+config:
+  api_key:
+    secret: true
+    required: true
+    title: {en: API key, ru: Ключ API}
+    help: {en: "https://ref.tools", ru: "https://ref.tools"}
+mcp:
+  command: npx
+  args: ["-y", "ref-tools-mcp@latest"]
+  env:
+    REF_API_KEY: "{api_key}"
+  risk: read

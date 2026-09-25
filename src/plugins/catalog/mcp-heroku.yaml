@@ -1,0 +1,18 @@
+id: mcp-heroku
+name: Heroku
+version: 1.0.0
+author: Heroku
+summary:
+  en: Manage Heroku apps, dynos and add-ons with the device's own CLI login.
+  ru: Управление приложениями, динами и аддонами Heroku через вход в CLI устройства.
+description:
+  en: Starts Heroku's official MCP server through the Heroku CLI (heroku mcp:start) on the device you choose, using its existing CLI login; nothing is sent to the Core. The agent can scale dynos, change config vars and provision add-ons, so such calls go through approval unless you lower the risk. The device needs the Heroku CLI installed and logged in.
+  ru: Запускает официальный MCP-сервер Heroku через Heroku CLI (heroku mcp:start) на выбранном устройстве, используя его текущий вход в CLI; в Core ничего не уходит. Агент может масштабировать дины, менять config vars и подключать аддоны, поэтому такие вызовы идут через подтверждение, если не понизить риск. На устройстве нужен установленный и авторизованный Heroku CLI.
+tags: [mcp, heroku, cloud, deploy]
+category: cloud
+homepage: https://github.com/heroku/mcp-server
+mcp:
+  command: heroku
+  args: ["mcp:start"]
+  placement: device
+  risk: write

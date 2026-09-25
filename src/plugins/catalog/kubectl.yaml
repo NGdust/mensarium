@@ -1,0 +1,59 @@
+id: kubectl
+name: {en: kubectl, ru: kubectl}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Inspect Kubernetes resources, logs and events as read-only tools.
+  ru: Просмотр ресурсов, логов и событий Kubernetes инструментами только для чтения.
+description:
+  en: Gives the agent read-only visibility into a Kubernetes cluster through kubectl. Nothing here creates, patches, scales or deletes a resource. The device needs a working kubeconfig; pass a context name to target a non-default cluster.
+  ru: Даёт агенту доступ только на чтение к кластеру Kubernetes через kubectl. Ничего не создаёт, не патчит, не масштабирует и не удаляет ресурсы. На устройстве нужен рабочий kubeconfig; укажите context, чтобы обратиться не к кластеру по умолчанию.
+tags: [kubernetes, kubectl, cloud]
+category: cloud
+homepage: https://kubernetes.io/docs/reference/kubectl/
+tools:
+  - name: kubectl.get
+    description: List resources of a kind in a namespace.
+    risk: read
+    argv: [kubectl, get, "{kind}", "--namespace={namespace}", -o, wide, "--context={context}"]
+    timeout_s: 60
+    parameters:
+      kind: {description: "Resource kind, e.g. pods, deployments, services, nodes", required: true}
+      namespace: {description: Namespace, default: default}
+      context: {description: "Kubeconfig context to use (optional)"}
+  - name: kubectl.describe
+    description: Show detailed information about one resource.
+    risk: read
+    argv: [kubectl, describe, "{kind}", "{name}", "--namespace={namespace}", "--context={context}"]
+    timeout_s: 60
+    parameters:
+      kind: {description: "Resource kind, e.g. pod, deployment, service", required: true}
+      name: {description: Resource name, required: true}
+      namespace: {description: Namespace, default: default}
+      context: {description: "Kubeconfig context to use (optional)"}
+  - name: kubectl.logs
+    description: Show the last N lines of a pod's logs.
+    risk: read
+    argv: [kubectl, logs, "{name}", "--namespace={namespace}", "--tail={lines}", "--context={context}"]
+    timeout_s: 90
+    parameters:
+      name: {description: Pod name, required: true}
+      namespace: {description: Namespace, default: default}
+      lines: {type: integer, default: 200, minimum: 1, maximum: 100000, description: Number of lines to show}
+      context: {description: "Kubeconfig context to use (optional)"}
+  - name: kubectl.top_pods
+    description: Show CPU and memory usage for pods in a namespace.
+    risk: read
+    argv: [kubectl, top, pods, "--namespace={namespace}", "--context={context}"]
+    timeout_s: 60
+    parameters:
+      namespace: {description: Namespace, default: default}
+      context: {description: "Kubeconfig context to use (optional)"}
+  - name: kubectl.events
+    description: List recent events in a namespace, most recent last.
+    risk: read
+    argv: [kubectl, get, events, "--namespace={namespace}", "--sort-by=.lastTimestamp", "--context={context}"]
+    timeout_s: 60
+    parameters:
+      namespace: {description: Namespace, default: default}
+      context: {description: "Kubeconfig context to use (optional)"}

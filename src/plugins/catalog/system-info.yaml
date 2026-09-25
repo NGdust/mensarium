@@ -1,0 +1,50 @@
+id: system-info
+name: {en: System info, ru: Информация о системе}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Kernel, disk, process, uptime and memory information as read-only tools.
+  ru: Информация о ядре, диске, процессах, времени работы и памяти инструментами только для чтения.
+description:
+  en: Gives the agent read-only visibility into the device's OS. Memory reporting differs by platform, use system.memory_linux on Linux and system.memory_macos on macOS; the other one will simply fail there.
+  ru: Даёт агенту доступ только на чтение к ОС устройства. Отчёт по памяти отличается на разных платформах, используйте system.memory_linux на Linux и system.memory_macos на macOS; на другой платформе соответствующий инструмент просто завершится с ошибкой.
+tags: [system, monitoring]
+category: system
+tools:
+  - name: system.info
+    description: Show kernel and OS version information.
+    risk: read
+    argv: [uname, -a]
+    timeout_s: 60
+    parameters: {}
+  - name: system.disk
+    description: Show disk usage in human-readable form, optionally scoped to one path.
+    risk: read
+    argv: [df, -h, "{path}"]
+    timeout_s: 60
+    parameters:
+      path: {description: "Mount point or path to check (optional)"}
+  - name: system.processes
+    description: List running processes.
+    risk: read
+    argv: [ps, aux]
+    timeout_s: 60
+    parameters: {}
+  - name: system.uptime
+    description: Show system uptime and load averages.
+    risk: read
+    argv: [uptime]
+    timeout_s: 60
+    parameters: {}
+  - name: system.memory_linux
+    description: Show memory usage in human-readable form. Works on Linux, not macOS.
+    risk: read
+    argv: [free, -h]
+    timeout_s: 60
+    parameters: {}
+  - name: system.memory_macos
+    description: Show virtual memory statistics. Works on macOS, not Linux.
+    risk: read
+    argv: [vm_stat]
+    timeout_s: 60
+    parameters: {}

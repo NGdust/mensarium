@@ -1,0 +1,48 @@
+id: php-dev
+name: {en: PHP dev tools, ru: Инструменты PHP-разработки}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Run PHPUnit tests, a syntax lint and Composer checks as dedicated tools.
+  ru: Запускает тесты PHPUnit, проверку синтаксиса и осмотр Composer отдельными инструментами.
+description:
+  en: Adds a PHPUnit test runner plus read-only syntax lint and Composer checks for PHP projects. Each one runs a single allowlisted program on the device.
+  ru: Добавляет запуск тестов PHPUnit и проверки синтаксиса и Composer только на чтение для проектов PHP. Каждый запускает одну разрешённую программу на устройстве.
+tags: [php, phpunit, composer, testing]
+category: development
+tools:
+  - name: php.phpunit
+    description: Run PHPUnit tests via vendor/bin/phpunit, optionally scoped to a path and filtered.
+    risk: execute
+    argv: [php, vendor/bin/phpunit, "{path}", "--filter={filter}"]
+    cwd: "{dir}"
+    timeout_s: 600
+    parameters:
+      dir: {description: Project directory, default: "."}
+      path: {description: "Test file or directory to run (optional)"}
+      filter: {description: "Only run tests matching this --filter expression (optional)"}
+  - name: php.lint
+    description: Check a PHP file for syntax errors.
+    risk: read
+    argv: [php, -l, "{file}"]
+    cwd: "{dir}"
+    timeout_s: 60
+    parameters:
+      dir: {description: Project directory, default: "."}
+      file: {description: PHP file to check, required: true}
+  - name: php.composer_validate
+    description: Validate composer.json and composer.lock.
+    risk: read
+    argv: [composer, validate]
+    cwd: "{dir}"
+    timeout_s: 60
+    parameters:
+      dir: {description: Project directory, default: "."}
+  - name: php.composer_outdated
+    description: List outdated Composer dependencies.
+    risk: read
+    argv: [composer, outdated]
+    cwd: "{dir}"
+    timeout_s: 60
+    parameters:
+      dir: {description: Project directory, default: "."}

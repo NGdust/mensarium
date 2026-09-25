@@ -1,0 +1,23 @@
+id: mcp-serena
+name: Serena
+version: 1.0.0
+author: Community
+summary:
+  en: Semantic code navigation and editing over a project using language-server symbols.
+  ru: Семантическая навигация и правка кода по проекту через символы языкового сервера.
+description:
+  en: Runs Serena with uvx on the device straight from its git repository and points it at one project. The device needs Python and uv/uvx, and the first start is slower while language servers warm up. Serena can rename symbols and edit files across the project, so keep those calls behind approval.
+  ru: Запускает Serena через uvx на устройстве прямо из её git-репозитория и указывает на один проект. На устройстве нужны Python и uv/uvx, первый запуск медленнее — прогреваются языковые серверы. Serena умеет переименовывать символы и править файлы по всему проекту, такие вызовы стоит подтверждать.
+tags: [mcp, code, lsp]
+category: development
+homepage: https://github.com/oraios/serena
+config:
+  project:
+    required: true
+    placeholder: /Users/me/Projects/repo
+    title: {en: Project path, ru: Путь к проекту}
+mcp:
+  command: uvx
+  args: ["--from", "git+https://github.com/oraios/serena", "serena", "start-mcp-server", "--project", "{project}"]
+  placement: device
+  risk: write

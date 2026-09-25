@@ -1,0 +1,25 @@
+id: mcp-firecrawl
+name: Firecrawl
+version: 1.0.0
+author: Firecrawl
+summary:
+  en: Scrape, crawl and map websites into clean markdown or structured data.
+  ru: Скрапинг, обход и карта сайтов с получением чистого markdown или структурированных данных.
+description:
+  en: Runs firecrawl-mcp with npx in the Core using your Firecrawl API key. Handles JavaScript-heavy pages and can crawl many pages under a site, which is billed per page by Firecrawl beyond its free credits.
+  ru: Запускает firecrawl-mcp через npx в Core по вашему ключу Firecrawl. Справляется со страницами, тяжёлыми на JavaScript, и умеет обходить много страниц сайта — это тарифицируется Firecrawl постранично сверх бесплатных кредитов.
+tags: [mcp, search, web]
+category: web
+homepage: https://github.com/mendableai/firecrawl-mcp-server
+config:
+  api_key:
+    secret: true
+    required: true
+    title: {en: API key, ru: Ключ API}
+    help: {en: "https://www.firecrawl.dev/app/api-keys", ru: "https://www.firecrawl.dev/app/api-keys"}
+mcp:
+  command: npx
+  args: ["-y", "firecrawl-mcp"]
+  env:
+    FIRECRAWL_API_KEY: "{api_key}"
+  risk: read

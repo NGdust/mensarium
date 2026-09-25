@@ -1,0 +1,23 @@
+id: mcp-git
+name: Git
+version: 1.0.0
+author: Anthropic
+summary:
+  en: Read history, diffs, branches and status of a local git repository.
+  ru: Чтение истории, диффов, веток и статуса локального git-репозитория.
+description:
+  en: Runs the reference mcp-server-git with uvx on the device and points it at one repository. The device needs Python and uv/uvx installed. Beyond reading log and diff it can also stage, commit and reset, so those calls should stay behind approval.
+  ru: Запускает эталонный mcp-server-git через uvx на устройстве и указывает на один репозиторий. На устройстве нужны Python и uv/uvx. Кроме чтения лога и диффов сервер умеет стейджить, коммитить и делать reset, такие вызовы стоит подтверждать.
+tags: [mcp, git]
+category: development
+homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/git
+config:
+  repo:
+    required: true
+    placeholder: /Users/me/Projects/repo
+    title: {en: Repository path, ru: Путь к репозиторию}
+mcp:
+  command: uvx
+  args: ["mcp-server-git", "--repository", "{repo}"]
+  placement: device
+  risk: write

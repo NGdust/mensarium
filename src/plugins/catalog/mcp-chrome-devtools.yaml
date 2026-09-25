@@ -1,0 +1,24 @@
+id: mcp-chrome-devtools
+name: {en: Chrome DevTools, ru: Chrome DevTools}
+version: 1.0.0
+author: Google
+summary:
+  en: Drive a real Chrome instance and inspect the page, network and performance through DevTools.
+  ru: Управление настоящим Chrome и анализ страницы, сети и производительности через DevTools.
+description:
+  en: Runs Google's chrome-devtools-mcp with npx on the device, controlling a real Chrome or Chrome for Testing install. Needs Node.js and Chrome on that device; the agent can execute JavaScript in the page and change data there, so keep the risk high enough to approve each step. Runs headed by default; enable the headless option to run without a window.
+  ru: Запускает chrome-devtools-mcp от Google через npx на устройстве, управляя настоящим Chrome или Chrome for Testing. На устройстве нужны Node.js и Chrome; агент может выполнять JavaScript на странице и менять там данные, поэтому держите риск достаточным для подтверждения каждого шага. По умолчанию запускается с окном; опция headless отключает его.
+tags: [mcp, browser, chrome]
+category: browser
+homepage: https://github.com/ChromeDevTools/chrome-devtools-mcp
+config:
+  headless:
+    type: boolean
+    default: false
+    flag: "--headless=true"
+    title: {en: Headless, ru: Без окна}
+mcp:
+  command: npx
+  args: ["-y", "chrome-devtools-mcp@latest", "{headless}"]
+  placement: device
+  risk: execute

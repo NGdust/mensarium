@@ -1,0 +1,17 @@
+id: mcp-deepwiki
+name: DeepWiki
+version: 1.0.0
+author: Cognition
+summary:
+  en: AI-generated documentation and Q&A over any public GitHub repository.
+  ru: Сгенерированная ИИ документация и ответы на вопросы по любому публичному репозиторию GitHub.
+description:
+  en: Connects the Core to the hosted DeepWiki MCP server, free and without a key, covering public GitHub repositories. Handy for understanding an unfamiliar dependency before pulling it in. Private repositories are not covered by this free endpoint.
+  ru: Подключает Core к облачному MCP-серверу DeepWiki — бесплатному и без ключа, покрывает публичные репозитории GitHub. Удобно, чтобы разобраться в незнакомой зависимости перед тем, как её подключать. Приватные репозитории этот бесплатный эндпоинт не обслуживает.
+tags: [mcp, docs]
+category: development
+homepage: https://docs.devin.ai/work-with-devin/deepwiki-mcp
+mcp:
+  transport: http
+  url: https://mcp.deepwiki.com/mcp
+  risk: read

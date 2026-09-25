@@ -1,0 +1,17 @@
+id: mcp-youtube-transcript
+name: {en: YouTube transcript, ru: Транскрипт YouTube}
+version: 1.0.0
+author: Community
+summary:
+  en: Fetch the transcript of a YouTube video for the agent to read or summarize.
+  ru: Получение транскрипта видео YouTube для чтения или пересказа агентом.
+description:
+  en: Runs @kimtaeyoon83/mcp-server-youtube-transcript with npx in the Core. Works without a key for transcript retrieval; an optional TwelveLabs key unlocks a separate video-analysis tool that this plugin does not configure.
+  ru: Запускает @kimtaeyoon83/mcp-server-youtube-transcript через npx в Core. Для получения транскрипта ключ не нужен; опциональный ключ TwelveLabs открывает отдельный инструмент анализа видео, который этот плагин не настраивает.
+tags: [mcp, web, video]
+category: web
+homepage: https://github.com/kimtaeyoon83/mcp-server-youtube-transcript
+mcp:
+  command: npx
+  args: ["-y", "@kimtaeyoon83/mcp-server-youtube-transcript"]
+  risk: read

@@ -1,0 +1,25 @@
+id: mcp-perplexity
+name: Perplexity
+version: 1.0.0
+author: Perplexity
+summary:
+  en: Ask Perplexity's Sonar models for answers backed by live web search.
+  ru: Вопросы к моделям Sonar от Perplexity с ответами на основе живого веб-поиска.
+description:
+  en: Runs Perplexity's official @perplexity-ai/mcp-server with npx in the Core using your Perplexity API key. Each call spends Sonar API credits billed by Perplexity, separate from a Perplexity Pro subscription.
+  ru: Запускает официальный @perplexity-ai/mcp-server от Perplexity через npx в Core по вашему ключу Perplexity. Каждый вызов тратит платные кредиты Sonar API у Perplexity — отдельно от подписки Perplexity Pro.
+tags: [mcp, search, web]
+category: web
+homepage: https://github.com/ppl-ai/modelcontextprotocol
+config:
+  api_key:
+    secret: true
+    required: true
+    title: {en: API key, ru: Ключ API}
+    help: {en: "https://www.perplexity.ai/account/api/keys", ru: "https://www.perplexity.ai/account/api/keys"}
+mcp:
+  command: npx
+  args: ["-y", "@perplexity-ai/mcp-server"]
+  env:
+    PERPLEXITY_API_KEY: "{api_key}"
+  risk: read

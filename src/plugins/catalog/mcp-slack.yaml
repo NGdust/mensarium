@@ -1,0 +1,25 @@
+id: mcp-slack
+name: Slack
+version: 1.0.0
+author: Community
+summary:
+  en: Read channels, threads and search Slack messages through the community slack-mcp-server.
+  ru: Чтение каналов, тредов и поиск по сообщениям Slack через community-сервер slack-mcp-server.
+description:
+  en: Runs slack-mcp-server with npx and a bot token (xoxb). Message posting is disabled on the server by default; enabling it is a separate setting on the server side, not exposed here. The token stays in the Core.
+  ru: Запускает slack-mcp-server через npx с bot-токеном (xoxb). Отправка сообщений по умолчанию отключена на стороне сервера; включение этой возможности не вынесено в настройки плагина. Токен хранится в Core.
+tags: [mcp, slack, communication]
+category: communication
+homepage: https://github.com/korotovsky/slack-mcp-server
+config:
+  bot_token:
+    secret: true
+    required: true
+    title: {en: Bot token (xoxb), ru: Bot-токен (xoxb)}
+    help: {en: "https://api.slack.com/apps", ru: "https://api.slack.com/apps"}
+mcp:
+  command: npx
+  args: ["-y", "slack-mcp-server@latest", "--transport", "stdio"]
+  env:
+    SLACK_MCP_XOXB_TOKEN: "{bot_token}"
+  risk: write

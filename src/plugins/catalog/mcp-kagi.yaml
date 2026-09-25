@@ -1,0 +1,25 @@
+id: mcp-kagi
+name: Kagi
+version: 1.0.0
+author: Kagi
+summary:
+  en: Ad-free web search through Kagi's paid search index.
+  ru: Веб-поиск без рекламы через платный поисковый индекс Kagi.
+description:
+  en: Runs kagimcp with uvx in the Core using your Kagi API key. Kagi search is a paid subscription service, so every call spends your Kagi search quota.
+  ru: Запускает kagimcp через uvx в Core по вашему ключу Kagi. Поиск Kagi — платная подписка, так что каждый вызов расходует вашу квоту запросов Kagi.
+tags: [mcp, search, web]
+category: web
+homepage: https://github.com/kagisearch/kagimcp
+config:
+  api_key:
+    secret: true
+    required: true
+    title: {en: API key, ru: Ключ API}
+    help: {en: "https://kagi.com/settings?p=api", ru: "https://kagi.com/settings?p=api"}
+mcp:
+  command: uvx
+  args: ["kagimcp"]
+  env:
+    KAGI_API_KEY: "{api_key}"
+  risk: read

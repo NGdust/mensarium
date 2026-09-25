@@ -1,0 +1,25 @@
+id: mcp-stripe
+name: Stripe
+version: 1.0.0
+author: Stripe
+summary:
+  en: Manage Stripe customers, products, invoices and payments.
+  ru: Управление клиентами, товарами, счетами и платежами Stripe.
+description:
+  en: Runs Stripe's official MCP server with npx in the Core, using your secret key with all tools enabled. The agent can create charges, refunds and other live financial actions, so such calls go through approval unless you lower the risk. Use a restricted key if you want to limit what it can touch.
+  ru: Запускает официальный MCP-сервер Stripe через npx в Core по вашему секретному ключу, со всеми инструментами. Агент может создавать платежи, возвраты и другие реальные финансовые операции, поэтому такие вызовы идут через подтверждение, если не понизить риск. Используйте restricted-ключ, чтобы ограничить доступные действия.
+tags: [mcp, stripe, cloud, payments]
+category: cloud
+homepage: https://github.com/stripe/agent-toolkit
+config:
+  api_key:
+    secret: true
+    required: true
+    title: {en: Secret key, ru: Секретный ключ}
+    help: {en: "https://dashboard.stripe.com/apikeys", ru: "https://dashboard.stripe.com/apikeys"}
+mcp:
+  command: npx
+  args: ["-y", "@stripe/mcp", "--tools=all"]
+  env:
+    STRIPE_SECRET_KEY: "{api_key}"
+  risk: write

@@ -1,0 +1,25 @@
+id: mcp-neon
+name: Neon
+version: 1.0.0
+author: Neon
+summary:
+  en: Create and manage Neon Postgres projects, branches and queries.
+  ru: Создание и управление проектами, ветками и запросами Neon Postgres.
+description:
+  en: Connects the Core to Neon's hosted MCP server with your Neon API key. The agent can create projects and branches, run migrations and query data, so such calls go through approval unless you lower the risk.
+  ru: Подключает Core к облачному MCP-серверу Neon по вашему API-ключу Neon. Агент может создавать проекты и ветки, выполнять миграции и запросы к данным, поэтому такие вызовы идут через подтверждение, если не понизить риск.
+tags: [mcp, database, postgres, neon]
+category: databases
+homepage: https://github.com/neondatabase-labs/mcp-server-neon
+config:
+  api_key:
+    secret: true
+    required: true
+    title: {en: API key, ru: Ключ API}
+    help: {en: "https://neon.tech/docs/manage/api-keys", ru: "https://neon.tech/docs/manage/api-keys"}
+mcp:
+  transport: http
+  url: https://mcp.neon.tech/mcp
+  headers:
+    Authorization: "Bearer {api_key}"
+  risk: write

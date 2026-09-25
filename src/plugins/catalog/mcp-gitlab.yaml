@@ -1,0 +1,30 @@
+id: mcp-gitlab
+name: GitLab
+version: 1.0.0
+author: Community
+summary:
+  en: Issues, merge requests, repository files and pipelines on GitLab through a community MCP server.
+  ru: Задачи, мерж-реквесты, файлы репозиториев и пайплайны GitLab через community MCP-сервер.
+description:
+  en: Runs @zereight/mcp-gitlab with npx in the Core and talks to a GitLab instance, gitlab.com or self-hosted, using your personal access token. Needs a token and the instance's API URL; scope the token to what you want the agent to touch. The server can create and modify issues, merge requests and files, so treat write calls as risky and keep them behind approval.
+  ru: Запускает @zereight/mcp-gitlab через npx в Core и работает с инстансом GitLab, gitlab.com или self-hosted, по вашему персональному токену. Нужен токен и адрес API инстанса; выдавайте токену только те права, которыми готовы поделиться с агентом. Сервер умеет создавать и менять задачи, мерж-реквесты и файлы, поэтому такие вызовы стоит держать под подтверждением.
+tags: [mcp, gitlab, git]
+category: development
+homepage: https://github.com/zereight/gitlab-mcp
+config:
+  gitlab_token:
+    secret: true
+    required: true
+    title: {en: Personal access token, ru: Персональный токен}
+    help: {en: "https://gitlab.com/-/user_settings/personal_access_tokens", ru: "https://gitlab.com/-/user_settings/personal_access_tokens"}
+  gitlab_api_url:
+    required: true
+    placeholder: https://gitlab.com/api/v4
+    title: {en: GitLab API URL, ru: Адрес API GitLab}
+mcp:
+  command: npx
+  args: ["-y", "@zereight/mcp-gitlab@latest"]
+  env:
+    GITLAB_PERSONAL_ACCESS_TOKEN: "{gitlab_token}"
+    GITLAB_API_URL: "{gitlab_api_url}"
+  risk: write

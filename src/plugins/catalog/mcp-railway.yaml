@@ -1,0 +1,25 @@
+id: mcp-railway
+name: Railway
+version: 1.0.0
+author: Community
+summary:
+  en: Manage Railway projects, services and deployments.
+  ru: Управление проектами, сервисами и деплоями Railway.
+description:
+  en: Runs the community railway-mcp server by Jason Tan with npx in the Core, using your Railway API token. The agent can create services, change variables and trigger deployments, so such calls go through approval unless you lower the risk. The token grants full account access, so scope it carefully.
+  ru: Запускает community-сервер railway-mcp от Jason Tan через npx в Core по вашему API-токену Railway. Агент может создавать сервисы, менять переменные и запускать деплои, поэтому такие вызовы идут через подтверждение, если не понизить риск. Токен даёт полный доступ к аккаунту, выдавайте его осторожно.
+tags: [mcp, railway, cloud, deploy]
+category: cloud
+homepage: https://github.com/jason-tan-swe/railway-mcp
+config:
+  token:
+    secret: true
+    required: true
+    title: {en: API token, ru: Токен API}
+    help: {en: "https://railway.com/account/tokens", ru: "https://railway.com/account/tokens"}
+mcp:
+  command: npx
+  args: ["-y", "@jasontanswe/railway-mcp"]
+  env:
+    RAILWAY_API_TOKEN: "{token}"
+  risk: write

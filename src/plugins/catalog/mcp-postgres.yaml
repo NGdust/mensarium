@@ -1,0 +1,29 @@
+id: mcp-postgres
+name: PostgreSQL
+version: 1.0.0
+author: Crystal DBA
+summary:
+  en: Query, explain and tune a Postgres database through Postgres MCP Pro.
+  ru: Запросы, explain и тюнинг базы Postgres через Postgres MCP Pro.
+description:
+  en: Runs postgres-mcp with uvx in the Core, connected to your database with a connection string. Restricted mode keeps the agent to read-only queries and query plans; unrestricted mode also lets it change data and schema, so switch to it only when you want that and expect writes to go through approval unless you lower the risk.
+  ru: Запускает postgres-mcp через uvx в Core, подключаясь к базе по строке соединения. Режим restricted ограничивает агента чтением и планами запросов; unrestricted также разрешает менять данные и схему, поэтому включайте его осознанно и учитывайте, что такие вызовы идут через подтверждение, если не понизить риск.
+tags: [mcp, database, postgres, sql]
+category: databases
+homepage: https://github.com/crystaldba/postgres-mcp
+config:
+  access_mode:
+    enum: ["restricted", "unrestricted"]
+    default: restricted
+    title: {en: Access mode, ru: Режим доступа}
+  database_uri:
+    secret: true
+    required: true
+    title: {en: Connection string, ru: Строка подключения}
+    help: {en: "https://github.com/crystaldba/postgres-mcp#readme", ru: "https://github.com/crystaldba/postgres-mcp#readme"}
+mcp:
+  command: uvx
+  args: ["postgres-mcp", "--access-mode={access_mode}"]
+  env:
+    DATABASE_URI: "{database_uri}"
+  risk: read

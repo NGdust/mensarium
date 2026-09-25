@@ -1,0 +1,17 @@
+id: mcp-duckduckgo
+name: DuckDuckGo
+version: 1.0.0
+author: Community
+summary:
+  en: Free web search and page fetching through DuckDuckGo, no key needed.
+  ru: Бесплатный веб-поиск и получение страниц через DuckDuckGo без ключа.
+description:
+  en: Runs duckduckgo-mcp-server with uvx in the Core. Works without any key or account, but DuckDuckGo's unofficial search interface throttles frequent requests, so expect rate limits under heavy use.
+  ru: Запускает duckduckgo-mcp-server через uvx в Core. Работает без ключа и аккаунта, но неофициальный поисковый интерфейс DuckDuckGo ограничивает частые запросы, так что при активном использовании возможны лимиты.
+tags: [mcp, search, web]
+category: web
+homepage: https://github.com/nickclyde/duckduckgo-mcp-server
+mcp:
+  command: uvx
+  args: ["duckduckgo-mcp-server"]
+  risk: read

@@ -1,0 +1,25 @@
+id: mcp-exa
+name: Exa
+version: 1.0.0
+author: Exa
+summary:
+  en: Neural web search built for AI agents, with optional content crawling.
+  ru: Нейросетевой веб-поиск для агентов с опциональным получением содержимого страниц.
+description:
+  en: Runs exa-mcp-server with npx in the Core using your Exa API key. Free tier includes a monthly quota of searches; beyond it Exa bills per request.
+  ru: Запускает exa-mcp-server через npx в Core по вашему ключу Exa. Бесплатный тариф включает месячную квоту запросов, сверх неё Exa берёт оплату за каждый запрос.
+tags: [mcp, search, web]
+category: web
+homepage: https://github.com/exa-labs/exa-mcp-server
+config:
+  api_key:
+    secret: true
+    required: true
+    title: {en: API key, ru: Ключ API}
+    help: {en: "https://dashboard.exa.ai/api-keys", ru: "https://dashboard.exa.ai/api-keys"}
+mcp:
+  command: npx
+  args: ["-y", "exa-mcp-server"]
+  env:
+    EXA_API_KEY: "{api_key}"
+  risk: read

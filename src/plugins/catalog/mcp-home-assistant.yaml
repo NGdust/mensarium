@@ -1,0 +1,30 @@
+id: mcp-home-assistant
+name: Home Assistant
+version: 1.0.0
+author: Community
+summary:
+  en: Query and control Home Assistant entities, automations and scenes through the hass-mcp server.
+  ru: Просмотр и управление устройствами, автоматизациями и сценами Home Assistant через сервер hass-mcp.
+description:
+  en: Runs hass-mcp with uvx and a long-lived access token from your Home Assistant profile. It can call services that turn devices on and off, so calls go through approval unless you lower the risk.
+  ru: Запускает hass-mcp через uvx с долгоживущим токеном доступа из профиля Home Assistant. Может вызывать сервисы, включающие и выключающие устройства, поэтому вызовы идут через подтверждение, если не понизить риск.
+tags: [mcp, home-assistant, automation, smart-home]
+category: automation
+homepage: https://github.com/voska/hass-mcp
+config:
+  url:
+    required: true
+    title: {en: Home Assistant URL, ru: URL Home Assistant}
+    placeholder: "http://homeassistant.local:8123"
+  token:
+    secret: true
+    required: true
+    title: {en: Long-lived access token, ru: Долгоживущий токен доступа}
+    help: {en: "https://www.home-assistant.io/docs/authentication/#your-account-profile", ru: "https://www.home-assistant.io/docs/authentication/#your-account-profile"}
+mcp:
+  command: uvx
+  args: [hass-mcp]
+  env:
+    HA_URL: "{url}"
+    HA_TOKEN: "{token}"
+  risk: execute

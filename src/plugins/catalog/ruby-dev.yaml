@@ -1,0 +1,40 @@
+id: ruby-dev
+name: {en: Ruby dev tools, ru: Инструменты Ruby-разработки}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Run RSpec tests, RuboCop and Rake tasks as dedicated tools.
+  ru: Запускает тесты RSpec, RuboCop и задачи Rake отдельными инструментами.
+description:
+  en: Adds a test runner, a read-only lint tool and a Rake task runner for Ruby projects, all through Bundler. Each one runs a single allowlisted program on the device.
+  ru: Добавляет запуск тестов, линт только на чтение и запуск задач Rake для проектов Ruby через Bundler. Каждый запускает одну разрешённую программу на устройстве.
+tags: [ruby, rspec, rubocop, rake, testing]
+category: development
+tools:
+  - name: ruby.rspec
+    description: Run RSpec tests, optionally scoped to a path.
+    risk: execute
+    argv: [bundle, exec, rspec, "{path}"]
+    cwd: "{dir}"
+    timeout_s: 600
+    parameters:
+      dir: {description: Project directory, default: "."}
+      path: {description: "Spec file or directory to run (optional)"}
+  - name: ruby.rubocop
+    description: Run RuboCop lint checks, optionally scoped to a path.
+    risk: read
+    argv: [bundle, exec, rubocop, "{path}"]
+    cwd: "{dir}"
+    timeout_s: 120
+    parameters:
+      dir: {description: Project directory, default: "."}
+      path: {description: "File or directory to check (optional)"}
+  - name: ruby.rake
+    description: Run a Rake task.
+    risk: execute
+    argv: [bundle, exec, rake, "{task}"]
+    cwd: "{dir}"
+    timeout_s: 300
+    parameters:
+      dir: {description: Project directory, default: "."}
+      task: {description: Rake task name, required: true}

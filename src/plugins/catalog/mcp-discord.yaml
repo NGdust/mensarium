@@ -1,0 +1,25 @@
+id: mcp-discord
+name: Discord
+version: 1.0.0
+author: Community
+summary:
+  en: Read and send Discord messages, manage channels and forum posts through the community mcp-discord server.
+  ru: Чтение и отправка сообщений Discord, управление каналами и темами форума через community-сервер mcp-discord.
+description:
+  en: Runs mcp-discord with npx and a bot token. Grant the bot only the servers and permissions you need; every call that writes to Discord goes through approval unless you lower the risk.
+  ru: Запускает mcp-discord через npx с токеном бота. Выдайте боту доступ только к нужным серверам и правам; каждый вызов, который пишет в Discord, идёт через подтверждение, если не понизить риск.
+tags: [mcp, discord, communication]
+category: communication
+homepage: https://github.com/barryyip0625/mcp-discord
+config:
+  token:
+    secret: true
+    required: true
+    title: {en: Bot token, ru: Токен бота}
+    help: {en: "https://discord.com/developers/applications", ru: "https://discord.com/developers/applications"}
+mcp:
+  command: npx
+  args: ["-y", "mcp-discord"]
+  env:
+    DISCORD_TOKEN: "{token}"
+  risk: write

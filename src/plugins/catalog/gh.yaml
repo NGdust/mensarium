@@ -1,0 +1,91 @@
+id: gh
+name: {en: GitHub CLI, ru: GitHub CLI}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Read issues, pull requests and workflow runs through the GitHub CLI.
+  ru: Чтение задач, пулл-реквестов и запусков workflow через GitHub CLI.
+description:
+  en: Read-only wrappers around gh for issues, pull requests and Actions runs. The device needs `gh auth login` done once, outside of Mensarium; these tools only read, they never open, close or merge anything.
+  ru: Обёртки только для чтения над gh для задач, пулл-реквестов и запусков Actions. На устройстве должен быть один раз выполнен `gh auth login` вне Mensarium; эти инструменты только читают и ничего не открывают, не закрывают и не мержат.
+tags: [github, gh, git]
+category: development
+homepage: https://cli.github.com
+tools:
+  - name: gh.issue_list
+    description: List issues in a repository.
+    risk: read
+    argv: [gh, issue, list, "--limit={limit}", "--state={state}", "--json={json}"]
+    cwd: "{dir}"
+    timeout_s: 60
+    parameters:
+      dir: {description: Repository directory, default: "."}
+      limit: {type: integer, default: 30, minimum: 1, maximum: 500, description: Maximum number of issues}
+      state: {description: "Issue state: open, closed or all", default: open}
+      json: {description: "Comma-separated fields to output as JSON", default: "number,title,state,labels,updatedAt"}
+  - name: gh.issue_view
+    description: Show one issue with its comments.
+    risk: read
+    argv: [gh, issue, view, "{number}", --comments]
+    cwd: "{dir}"
+    timeout_s: 60
+    parameters:
+      dir: {description: Repository directory, default: "."}
+      number: {type: integer, required: true, minimum: 1, description: Issue number}
+  - name: gh.pr_list
+    description: List pull requests in a repository.
+    risk: read
+    argv: [gh, pr, list, "--limit={limit}", "--state={state}", "--json={json}"]
+    cwd: "{dir}"
+    timeout_s: 60
+    parameters:
+      dir: {description: Repository directory, default: "."}
+      limit: {type: integer, default: 30, minimum: 1, maximum: 500, description: Maximum number of pull requests}
+      state: {description: "PR state: open, closed, merged or all", default: open}
+      json: {description: "Comma-separated fields to output as JSON", default: "number,title,state,headRefName,updatedAt"}
+  - name: gh.pr_view
+    description: Show one pull request.
+    risk: read
+    argv: [gh, pr, view, "{number}"]
+    cwd: "{dir}"
+    timeout_s: 60
+    parameters:
+      dir: {description: Repository directory, default: "."}
+      number: {type: integer, required: true, minimum: 1, description: Pull request number}
+  - name: gh.pr_checks
+    description: Show the status of CI checks on a pull request.
+    risk: read
+    argv: [gh, pr, checks, "{number}"]
+    cwd: "{dir}"
+    timeout_s: 60
+    parameters:
+      dir: {description: Repository directory, default: "."}
+      number: {type: integer, required: true, minimum: 1, description: Pull request number}
+  - name: gh.pr_diff
+    description: Show the diff of a pull request.
+    risk: read
+    argv: [gh, pr, diff, "{number}"]
+    cwd: "{dir}"
+    timeout_s: 120
+    parameters:
+      dir: {description: Repository directory, default: "."}
+      number: {type: integer, required: true, minimum: 1, description: Pull request number}
+  - name: gh.run_list
+    description: List recent Actions workflow runs.
+    risk: read
+    argv: [gh, run, list, "--limit={limit}", "--workflow={workflow}"]
+    cwd: "{dir}"
+    timeout_s: 60
+    parameters:
+      dir: {description: Repository directory, default: "."}
+      limit: {type: integer, default: 20, minimum: 1, maximum: 200, description: Maximum number of runs}
+      workflow: {description: "Workflow file or name to filter by (optional)"}
+  - name: gh.run_view_failed
+    description: Show the log of failed steps for a workflow run.
+    risk: read
+    argv: [gh, run, view, "{run_id}", --log-failed]
+    cwd: "{dir}"
+    timeout_s: 120
+    parameters:
+      dir: {description: Repository directory, default: "."}
+      run_id: {type: integer, required: true, minimum: 1, description: Workflow run id}

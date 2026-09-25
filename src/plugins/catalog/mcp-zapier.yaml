@@ -1,0 +1,23 @@
+id: mcp-zapier
+name: Zapier
+version: 1.0.0
+author: Zapier
+summary:
+  en: Run any of your connected Zapier actions across thousands of apps through your personal Zapier MCP server.
+  ru: Выполнение любых подключённых действий Zapier из тысяч приложений через ваш персональный MCP-сервер Zapier.
+description:
+  en: Connects to the personal MCP server URL Zapier generates for your account at mcp.zapier.com. The URL itself grants access, treat it like a credential; it stays in the Core. Every action goes through approval unless you lower the risk.
+  ru: Подключается к персональному MCP-серверу, который Zapier создаёт для вашего аккаунта на mcp.zapier.com. Сам URL даёт доступ, обращайтесь с ним как с credential; он хранится в Core. Каждое действие идёт через подтверждение, если не понизить риск.
+tags: [mcp, zapier, automation]
+category: automation
+homepage: https://mcp.zapier.com
+config:
+  server_url:
+    secret: true
+    required: true
+    title: {en: Personal MCP server URL, ru: Персональный URL MCP-сервера}
+    help: {en: "https://mcp.zapier.com", ru: "https://mcp.zapier.com"}
+mcp:
+  transport: http
+  url: "{server_url}"
+  risk: write

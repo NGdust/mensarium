@@ -1,0 +1,25 @@
+id: mcp-tavily
+name: Tavily
+version: 1.0.0
+author: Tavily
+summary:
+  en: Web search tuned for feeding results straight to an LLM, plus page extraction.
+  ru: Веб-поиск, заточенный под передачу результатов прямо в LLM, и извлечение содержимого страниц.
+description:
+  en: Runs tavily-mcp with npx in the Core using your Tavily API key. Free tier covers a limited number of searches per month; results come back as ready-to-use snippets rather than raw HTML.
+  ru: Запускает tavily-mcp через npx в Core по вашему ключу Tavily. Бесплатный тариф покрывает ограниченное число запросов в месяц; результаты приходят готовыми фрагментами, а не сырым HTML.
+tags: [mcp, search, web]
+category: web
+homepage: https://github.com/tavily-ai/tavily-mcp
+config:
+  api_key:
+    secret: true
+    required: true
+    title: {en: API key, ru: Ключ API}
+    help: {en: "https://app.tavily.com/home", ru: "https://app.tavily.com/home"}
+mcp:
+  command: npx
+  args: ["-y", "tavily-mcp@latest"]
+  env:
+    TAVILY_API_KEY: "{api_key}"
+  risk: read

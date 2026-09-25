@@ -1,0 +1,18 @@
+id: mcp-prisma
+name: Prisma
+version: 1.0.0
+author: Prisma
+summary:
+  en: Prisma schema, migrations and database workflows for the current project.
+  ru: Работа со схемой Prisma, миграциями и базой данных текущего проекта.
+description:
+  en: Runs the Prisma CLI's built-in MCP mode with npx on the device, inside the project that holds the Prisma schema. Needs Node.js and the project's own database connection already configured, and Prisma CLI 6.6.0 or newer. It can run migrations and change the schema, so treat those as risky and approve them individually.
+  ru: Запускает встроенный MCP-режим Prisma CLI через npx на устройстве, внутри проекта со схемой Prisma. Нужны Node.js и уже настроенное в проекте подключение к базе, а также Prisma CLI 6.6.0 или новее. Сервер умеет запускать миграции и менять схему, такие вызовы стоит подтверждать по одному.
+tags: [mcp, database, prisma]
+category: development
+homepage: https://github.com/prisma/mcp
+mcp:
+  command: npx
+  args: ["-y", "prisma", "mcp"]
+  placement: device
+  risk: write

@@ -1,0 +1,25 @@
+id: mcp-pagerduty
+name: PagerDuty
+version: 1.0.0
+author: PagerDuty
+summary:
+  en: Manage PagerDuty incidents, services and on-call schedules.
+  ru: Управление инцидентами, сервисами и графиками дежурств PagerDuty.
+description:
+  en: Connects the Core to PagerDuty's hosted MCP server with your API key. The agent can acknowledge and resolve incidents and change schedules, so such calls go through approval unless you lower the risk.
+  ru: Подключает Core к облачному MCP-серверу PagerDuty по вашему ключу API. Агент может подтверждать и закрывать инциденты, менять графики дежурств, поэтому такие вызовы идут через подтверждение, если не понизить риск.
+tags: [mcp, pagerduty, observability, incidents]
+category: observability
+homepage: https://support.pagerduty.com/main/docs/pagerduty-mcp-server
+config:
+  api_key:
+    secret: true
+    required: true
+    title: {en: API key, ru: Ключ API}
+    help: {en: "https://support.pagerduty.com/main/docs/api-access-keys", ru: "https://support.pagerduty.com/main/docs/api-access-keys"}
+mcp:
+  transport: http
+  url: https://mcp.pagerduty.com/mcp
+  headers:
+    Authorization: "Token token={api_key}"
+  risk: write

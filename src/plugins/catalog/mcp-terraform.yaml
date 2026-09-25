@@ -1,0 +1,18 @@
+id: mcp-terraform
+name: Terraform
+version: 1.0.0
+author: HashiCorp
+summary:
+  en: Look up Terraform Registry providers, modules and policies.
+  ru: Поиск провайдеров, модулей и политик Terraform Registry.
+description:
+  en: Runs HashiCorp's terraform-mcp-server image with Docker on the device you choose. By default it only searches the public Terraform Registry; write operations against HCP Terraform or Terraform Enterprise are disabled unless separately enabled, so this plugin stays read-only. The device needs Docker running and docker in its allowed programs.
+  ru: Запускает образ terraform-mcp-server от HashiCorp через Docker на выбранном устройстве. По умолчанию доступен только поиск по публичному Terraform Registry; операции записи в HCP Terraform или Terraform Enterprise отключены, если их не включить отдельно, поэтому плагин остаётся только для чтения. На устройстве нужен запущенный Docker и docker в разрешённых программах.
+tags: [mcp, terraform, cloud, iac]
+category: cloud
+homepage: https://github.com/hashicorp/terraform-mcp-server
+mcp:
+  command: docker
+  args: ["run", "-i", "--rm", "hashicorp/terraform-mcp-server"]
+  placement: device
+  risk: read

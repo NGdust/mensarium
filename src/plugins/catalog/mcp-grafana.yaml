@@ -1,0 +1,30 @@
+id: mcp-grafana
+name: Grafana
+version: 1.0.0
+author: Grafana Labs
+summary:
+  en: Query dashboards, datasources and alerts in Grafana.
+  ru: Запросы к дашбордам, источникам данных и алертам Grafana.
+description:
+  en: Runs Grafana's mcp/grafana image with Docker in the Core, using your instance URL and an API key. Read-only; lets the agent search dashboards, run datasource queries and look up alerts and incidents. The Core needs Docker running.
+  ru: Запускает образ mcp/grafana от Grafana через Docker в Core по адресу вашего инстанса и ключу API. Только чтение; агент может искать дашборды, выполнять запросы к источникам данных и смотреть алерты и инциденты. На Core нужен запущенный Docker.
+tags: [mcp, grafana, observability, monitoring]
+category: observability
+homepage: https://github.com/grafana/mcp-grafana
+config:
+  url:
+    required: true
+    placeholder: https://myinstance.grafana.net
+    title: {en: Grafana URL, ru: URL Grafana}
+  api_key:
+    secret: true
+    required: true
+    title: {en: API key, ru: Ключ API}
+    help: {en: "https://grafana.com/docs/grafana/latest/administration/service-accounts/", ru: "https://grafana.com/docs/grafana/latest/administration/service-accounts/"}
+mcp:
+  command: docker
+  args: ["run", "-i", "--rm", "-e", "GRAFANA_URL", "-e", "GRAFANA_API_KEY", "mcp/grafana", "-t", "stdio"]
+  env:
+    GRAFANA_URL: "{url}"
+    GRAFANA_API_KEY: "{api_key}"
+  risk: read

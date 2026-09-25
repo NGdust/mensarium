@@ -1,0 +1,25 @@
+id: mcp-netlify
+name: Netlify
+version: 1.0.0
+author: Netlify
+summary:
+  en: Manage Netlify sites, deploys and environment variables.
+  ru: Управление сайтами, деплоями и переменными окружения Netlify.
+description:
+  en: Runs Netlify's official MCP server with npx in the Core, using your personal access token. The agent can create sites, trigger deploys and change environment variables, so such calls go through approval unless you lower the risk.
+  ru: Запускает официальный MCP-сервер Netlify через npx в Core по вашему персональному токену. Агент может создавать сайты, запускать деплои и менять переменные окружения, поэтому такие вызовы идут через подтверждение, если не понизить риск.
+tags: [mcp, netlify, cloud, deploy]
+category: cloud
+homepage: https://github.com/netlify/netlify-mcp
+config:
+  token:
+    secret: true
+    required: true
+    title: {en: Personal access token, ru: Персональный токен}
+    help: {en: "https://app.netlify.com/user/applications#personal-access-tokens", ru: "https://app.netlify.com/user/applications#personal-access-tokens"}
+mcp:
+  command: npx
+  args: ["-y", "@netlify/mcp"]
+  env:
+    NETLIFY_PERSONAL_ACCESS_TOKEN: "{token}"
+  risk: write
