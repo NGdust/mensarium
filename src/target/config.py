@@ -26,6 +26,7 @@ class TargetConfig(BaseModel):
     allow_full_access: bool = True
     allow_remote_update: bool = True
     allow_remote_plugins: bool = True
+    allow_shell: bool = True
     limits: TargetLimits = Field(default_factory=TargetLimits)
 
     @property

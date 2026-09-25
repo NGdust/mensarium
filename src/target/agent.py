@@ -42,8 +42,12 @@ from mensarium.target.tools import ExecTimeout, Executor, ToolError
 
 log = logging.getLogger(__name__)
 
-TOOLS = ["files.list", "files.read", "files.search", "git.status", "git.diff", "shell.exec"]
-APPROVAL_REQUIRED = {"shell.exec"}
+TOOLS = [
+    "files.list", "files.read", "files.search", "files.stat", "files.find",
+    "files.write", "files.edit", "files.mkdir", "files.move", "files.copy", "files.delete",
+    "git.status", "git.diff", "system.info", "process.list", "process.kill", "net.ports", "net.http", "shell.exec",
+]  # fmt: skip
+APPROVAL_REQUIRED = {"files.write", "files.edit", "files.mkdir", "files.move", "files.copy", "files.delete", "process.kill", "net.http", "shell.exec", "shell.bash"}
 CLOCK_SKEW = timedelta(seconds=30)
 FATAL_CLOSE_CODES = {4401, 4403}
 
@@ -85,7 +89,7 @@ class TargetAgent:
         self.audit = AuditLog(paths)
         self.mcp = McpHost(cfg, self.executor.roots, paths.plugins)
         self.executor.mcp = self.mcp
-        self.tools = TOOLS + (["mcp.call"] if cfg.allow_remote_plugins else [])
+        self.tools = TOOLS + (["shell.bash"] if cfg.allow_shell else []) + (["mcp.call"] if cfg.allow_remote_plugins else [])
         self.policy = TargetPolicy(
             roots=[str(r) for r in self.executor.roots],
             command_allowlist=cfg.command_allowlist,

@@ -17,9 +17,23 @@ allowed_tools:
   - files.list
   - files.read
   - files.search
+  - files.stat
+  - files.find
+  - files.write
+  - files.edit
+  - files.mkdir
+  - files.move
+  - files.copy
+  - files.delete
   - git.status
   - git.diff
+  - system.info
+  - process.list
+  - process.kill
+  - net.ports
+  - net.http
   - shell.exec
+  - shell.bash
 
 allow_extensions: true
 memory: true

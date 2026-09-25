@@ -41,6 +41,7 @@ async def ensure_local_target(
         if row:
             tcfg.roots = roots
             tcfg.allow_full_access = cfg.local_target.allow_full_access
+            tcfg.allow_shell = cfg.local_target.allow_shell
             tcfg.server, tcfg.ws_url = f"http://{base}", f"ws://{base}/v1/targets/ws"
             save_target_config(tpaths, tcfg)
             return tcfg, key
@@ -70,6 +71,7 @@ async def ensure_local_target(
         core_fingerprint=fingerprint(core_public_key),
         roots=roots,
         allow_full_access=cfg.local_target.allow_full_access,
+        allow_shell=cfg.local_target.allow_shell,
     )
     save_target_config(tpaths, tcfg)
     await repo.audit(workspace_id, "core", "target.paired", {"target_id": target_id, "name": name, "local": True})

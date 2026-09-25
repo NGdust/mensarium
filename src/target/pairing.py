@@ -25,6 +25,7 @@ def pair(
     allow_full_access: bool = True,
     allow_remote_update: bool = True,
     allow_remote_plugins: bool = True,
+    allow_shell: bool = True,
 ) -> TargetConfig:
     server = server.rstrip("/")
     resolved_roots = []
@@ -66,6 +67,7 @@ def pair(
         allow_full_access=allow_full_access,
         allow_remote_update=allow_remote_update,
         allow_remote_plugins=allow_remote_plugins,
+        allow_shell=allow_shell,
     )
     save_target_config(paths, cfg)
     return cfg

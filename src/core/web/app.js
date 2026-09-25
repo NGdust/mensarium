@@ -288,7 +288,7 @@ const TEMPLATES = [
   ['folder', tr('How the project is structured'), tr('Study the project structure and explain how it\'s organized: entry points, main modules, how to run it.')],
   ['search', tr('Fix a bug'), tr('Find the cause of the error and suggest a minimal fix: ')],
 ];
-const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'git.status': 'git', 'git.diff': 'git', 'shell.exec': 'terminal', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph', 'web.search': 'globe', 'web.fetch': 'globe' };
+const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'files.stat': 'file', 'files.find': 'search', 'files.write': 'file', 'files.edit': 'file', 'files.mkdir': 'folder', 'files.move': 'folder', 'files.copy': 'folder', 'files.delete': 'trash', 'git.status': 'git', 'git.diff': 'git', 'system.info': 'cpu', 'process.list': 'cpu', 'process.kill': 'ban', 'net.ports': 'link', 'net.http': 'globe', 'shell.exec': 'terminal', 'shell.bash': 'terminal', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph', 'web.search': 'globe', 'web.fetch': 'globe' };
 // Plugin texts are either plain strings or {en, ru} maps.
 const txt = (v) => (typeof v === 'string' ? v : (v?.[lang] || v?.en || ''));
 // Plain text with bare https links turned into anchors; everything else stays text.
@@ -935,8 +935,22 @@ async function viewChat(taskId) {
       case 'files.list': return tr('Looking at {0}', base(a.path) || '.');
       case 'files.read': return tr('Reading {0}', base(a.path));
       case 'files.search': return tr('Searching for “{0}”', clip(a.query, 40));
+      case 'files.stat': return tr('Checking {0}', base(a.path));
+      case 'files.find': return tr('Finding {0}', clip(a.pattern, 40));
+      case 'files.write': return tr('Writing {0}', base(a.path));
+      case 'files.edit': return tr('Editing {0}', base(a.path));
+      case 'files.mkdir': return tr('Creating folder {0}', base(a.path));
+      case 'files.move': return tr('Moving {0}', base(a.source));
+      case 'files.copy': return tr('Copying {0}', base(a.source));
+      case 'files.delete': return tr('Deleting {0}', base(a.path));
       case 'git.status': return tr('Checking git status');
       case 'git.diff': return tr('Reading the git diff');
+      case 'system.info': return tr('Checking the system');
+      case 'process.list': return tr('Listing processes');
+      case 'process.kill': return tr('Stopping process {0}', a.pid);
+      case 'net.ports': return tr('Checking listening ports');
+      case 'net.http': return tr('Requesting {0}', (() => { try { return new URL(a.url).host; } catch { return clip(a.url, 40); } })());
+      case 'shell.bash': return tr('Running {0}', clip(a.script.split('\n')[0], 56));
       case 'skills.read': return tr('Loading skill {0}', a.path ? `${a.name} ${a.path}` : a.name);
       case 'memory.search': return tr('Searching memory for “{0}”', clip(a.query, 40));
       case 'memory.read': return tr('Reading note {0}', a.title);
@@ -1383,9 +1397,23 @@ const TOOL_INFO = {
   'files.list': [tr('List files'), tr('Looks at folder contents.')],
   'files.read': [tr('Read files'), tr('Opens text files, secrets are stripped out.')],
   'files.search': [tr('Search files'), tr('Searches for text in the project.')],
+  'files.stat': [tr('File details'), tr('Size, permissions and modification time.')],
+  'files.find': [tr('Find files'), tr('Finds files by name pattern.')],
+  'files.write': [tr('Write files'), tr('Creates or overwrites a file, with approval.')],
+  'files.edit': [tr('Edit files'), tr('Replaces an exact fragment in a file, with approval.')],
+  'files.mkdir': [tr('Create folders'), tr('Creates a folder, with approval.')],
+  'files.move': [tr('Move files'), tr('Moves or renames, with approval.')],
+  'files.copy': [tr('Copy files'), tr('Copies a file or folder, with approval.')],
+  'files.delete': [tr('Delete files'), tr('Deletes one file or an empty folder, always confirmed.')],
   'git.status': [tr('Git status'), tr('Branch and changed files.')],
   'git.diff': [tr('Git diff'), tr('Shows the diff.')],
-  'shell.exec': [tr('Run commands'), tr('Runs allowed programs, changes files via git apply.')],
+  'system.info': [tr('System info'), tr('OS, CPU, memory, disk and uptime.')],
+  'process.list': [tr('Processes'), tr('Lists running processes.')],
+  'process.kill': [tr('Stop processes'), tr('Stops a process of this user, always confirmed.')],
+  'net.ports': [tr('Listening ports'), tr('Ports and the processes behind them.')],
+  'net.http': [tr('HTTP requests'), tr('Requests from the device, including localhost, with approval.')],
+  'shell.exec': [tr('Run commands'), tr('Runs one allowed program without a shell.')],
+  'shell.bash': [tr('Bash scripts'), tr('Runs any bash script; each one is approved by you. Can be turned off on the device.')],
 };
 
 function toggleSwitch(checked, { label, onChange }) {

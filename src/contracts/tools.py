@@ -46,6 +46,84 @@ class ShellExecArgs(_Args):
     timeout_s: int = Field(120, ge=1, le=3600)
 
 
+class FilesStatArgs(_Args):
+    path: str = Field(description="File or directory path, absolute or relative to the workspace root")
+
+
+class FilesFindArgs(_Args):
+    pattern: str = Field(min_length=1, description="Glob for the file name or relative path, e.g. '*.py' or 'src/**/test_*.py'")
+    path: str = Field(".", description="Directory to search in")
+    include_hidden: bool = Field(False, description="Also look inside dot-directories")
+    max_results: int = Field(200, ge=1, le=2000)
+
+
+class FilesWriteArgs(_Args):
+    path: str = Field(description="File to create or overwrite, absolute or relative to the workspace root")
+    content: str = Field(max_length=2_000_000, description="The whole new text of the file")
+    create_dirs: bool = Field(True, description="Create missing parent directories")
+
+
+class FilesEditArgs(_Args):
+    path: str = Field(description="Text file to change")
+    old: str = Field(min_length=1, max_length=200_000, description="Exact text to replace; must appear once unless replace_all")
+    new: str = Field(max_length=200_000, description="Replacement text")
+    replace_all: bool = Field(False, description="Replace every occurrence instead of requiring exactly one")
+
+
+class FilesMkdirArgs(_Args):
+    path: str = Field(description="Directory to create, with parents")
+
+
+class FilesMoveArgs(_Args):
+    source: str = Field(description="File or directory to move or rename")
+    destination: str = Field(description="New path")
+    overwrite: bool = Field(False, description="Replace an existing file at the destination")
+
+
+class FilesCopyArgs(_Args):
+    source: str = Field(description="File or directory to copy")
+    destination: str = Field(description="Where the copy goes")
+    overwrite: bool = Field(False, description="Replace an existing file at the destination")
+
+
+class FilesDeleteArgs(_Args):
+    path: str = Field(description="File or empty directory to delete")
+
+
+class SystemInfoArgs(_Args):
+    pass
+
+
+class ProcessListArgs(_Args):
+    filter: str | None = Field(None, max_length=200, description="Only processes whose command line contains this text")
+    limit: int = Field(100, ge=1, le=500)
+
+
+class ProcessKillArgs(_Args):
+    pid: int = Field(gt=1, description="Process id from process.list")
+    force: bool = Field(False, description="SIGKILL instead of SIGTERM")
+
+
+class NetPortsArgs(_Args):
+    pass
+
+
+class NetHttpArgs(_Args):
+    url: str = Field(pattern=r"^https?://", max_length=2000, description="Address, including localhost services on the device")
+    method: Literal["GET", "HEAD", "POST"] = "GET"
+    headers: dict[str, str] = Field(default_factory=dict, max_length=20)
+    body: str | None = Field(None, max_length=200_000, description="Request body for POST")
+    timeout_s: int = Field(30, ge=1, le=120)
+    max_chars: int = Field(20000, ge=200, le=200_000, description="Longest response text to return")
+
+
+class ShellBashArgs(_Args):
+    cwd: str = Field(".", description="Working directory inside the workspace")
+    script: str = Field(min_length=1, max_length=50_000, description="Bash script: pipes, redirects, loops and && are fine")
+    stdin: str | None = Field(None, max_length=2_000_000, description="Optional data passed to stdin")
+    timeout_s: int = Field(120, ge=1, le=3600)
+
+
 class SkillsReadArgs(_Args):
     name: str = Field(min_length=1, description="Skill name from the available_skills list in the system prompt")
     path: str | None = Field(None, max_length=300, description="Optional file inside the skill folder to read instead, e.g. references/api.md")
@@ -55,9 +133,23 @@ TOOL_ARGS: dict[str, type[_Args]] = {
     "files.list": FilesListArgs,
     "files.read": FilesReadArgs,
     "files.search": FilesSearchArgs,
+    "files.stat": FilesStatArgs,
+    "files.find": FilesFindArgs,
+    "files.write": FilesWriteArgs,
+    "files.edit": FilesEditArgs,
+    "files.mkdir": FilesMkdirArgs,
+    "files.move": FilesMoveArgs,
+    "files.copy": FilesCopyArgs,
+    "files.delete": FilesDeleteArgs,
     "git.status": GitStatusArgs,
     "git.diff": GitDiffArgs,
+    "system.info": SystemInfoArgs,
+    "process.list": ProcessListArgs,
+    "process.kill": ProcessKillArgs,
+    "net.ports": NetPortsArgs,
+    "net.http": NetHttpArgs,
     "shell.exec": ShellExecArgs,
+    "shell.bash": ShellBashArgs,
 }
 
 class MemorySearchArgs(_Args):
@@ -105,7 +197,18 @@ PATH_FIELDS: dict[str, tuple[str, ...]] = {
     "files.list": ("path",),
     "files.read": ("path",),
     "files.search": ("path",),
+    "files.stat": ("path",),
+    "files.find": ("path",),
+    "files.write": ("path",),
+    "files.edit": ("path",),
+    "files.mkdir": ("path",),
+    "files.move": ("source", "destination"),
+    "files.copy": ("source", "destination"),
+    "files.delete": ("path",),
     "git.status": ("repo",),
     "git.diff": ("repo",),
     "shell.exec": ("cwd",),
+    "shell.bash": ("cwd",),
 }
+
+WRITE_PATH_TOOLS = ("files.write", "files.edit", "files.mkdir", "files.move", "files.copy", "files.delete")

@@ -35,6 +35,7 @@ class LocalTargetConfig(BaseModel):
     enabled: bool = True
     roots: list[str] = Field(default_factory=lambda: ["~"])
     allow_full_access: bool = True
+    allow_shell: bool = True
 
 
 class PluginsConfig(BaseModel):

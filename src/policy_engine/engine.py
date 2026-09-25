@@ -1,4 +1,5 @@
 import posixpath
+import re
 import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -7,7 +8,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from mensarium.contracts.protocol import TargetPolicy
-from mensarium.contracts.tools import PATH_FIELDS
+from mensarium.contracts.tools import PATH_FIELDS, WRITE_PATH_TOOLS
 from mensarium.shared.redaction import is_secret_path
 from mensarium.tool_runtime.commands import render
 from mensarium.tool_runtime.mcp import check_arguments
@@ -65,6 +66,41 @@ def _normalize_path(value: str, roots: list[str]) -> str:
     if not any(_within(full, r) for r in roots):
         raise ValueError(f"path {full!r} is outside allowed roots {roots}")
     return full
+
+
+ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+COMMAND_PREFIXES = {"env", "time", "nohup", "nice", "exec", "command", "builtin", "xargs", "timeout"}
+PRIVILEGED_TOKENS = PRIVILEGED_PROGRAMS | {"visudo", "passwd", "dscl", "csrutil", "spctl"}
+
+
+def classify_script(script: str) -> Risk:
+    """Best-effort risk of a bash script: the highest risk of its simple commands, privileged tokens anywhere.
+
+    The user reviews the script before it runs; this only decides how the approval is labelled and
+    refuses obviously privileged actions."""
+    try:
+        tokens = shlex.split(script, comments=True, posix=True)
+    except ValueError:
+        tokens = script.replace("\n", " ").split()
+    if any(posixpath.basename(t) in PRIVILEGED_TOKENS for t in tokens):
+        return "privileged"
+    risk: Risk = "execute"
+    for line in re.split(r"[\n;]|&&|\|\||\||\$\(|`", script):
+        try:
+            argv = shlex.split(line, comments=True, posix=True)
+        except ValueError:
+            argv = line.split()
+        while argv and (ENV_ASSIGNMENT.match(argv[0]) or posixpath.basename(argv[0]) in COMMAND_PREFIXES):
+            argv = argv[1:]
+        if any(a.startswith((">", "2>", "&>")) for a in argv):
+            risk = max(risk, "write", key=RISK_ORDER.index)
+        argv = [a for a in argv if a not in SHELL_OPERATORS and a not in ("(", ")", "{", "}")]
+        if not argv:
+            continue
+        if posixpath.basename(argv[0]) == "find" and ("-delete" in argv or "rm" in argv):
+            risk = max(risk, "destructive", key=RISK_ORDER.index)
+        risk = max(risk, classify_command(argv), key=RISK_ORDER.index)
+    return risk
 
 
 def classify_command(argv: list[str]) -> Risk:
@@ -162,8 +198,12 @@ def evaluate(
         return _deny(str(e))
 
     risk: Risk = spec.risk
-    if exec_tool in ("files.read", "files.list", "files.search") and is_secret_path(args["path"]):
+    if exec_tool in ("files.read", "files.list", "files.search", "files.stat", "files.find") and is_secret_path(args["path"]):
         return _deny("access to secret files is not allowed")
+    if exec_tool in WRITE_PATH_TOOLS and any(is_secret_path(args[f]) for f in PATH_FIELDS[exec_tool]):
+        return _deny("secret files and folders cannot be changed by the agent")
+    if exec_tool == "shell.bash":
+        risk = max(classify_script(args["script"]), risk, key=RISK_ORDER.index)
     if exec_tool == "shell.exec":
         try:
             argv = shlex.split(args["command"])

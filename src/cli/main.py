@@ -305,6 +305,7 @@ def target_pair(
     remote_plugins: Annotated[
         bool, typer.Option("--remote-plugins/--no-remote-plugins", help="Allow the Core to run MCP servers here")
     ] = True,
+    shell: Annotated[bool, typer.Option("--shell/--no-shell", help="Allow the agent to run bash scripts here (with approval)")] = True,
 ) -> None:
     """Pair this machine with a Core non-interactively."""
     from mensarium.target.pairing import PairingError, pair
@@ -319,6 +320,7 @@ def target_pair(
             allow_full_access=full_access,
             allow_remote_update=remote_update,
             allow_remote_plugins=remote_plugins,
+            allow_shell=shell,
         )
     except PairingError as e:
         fail(str(e))

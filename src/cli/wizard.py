@@ -367,6 +367,14 @@ def setup_target(server: str | None, code: str | None, name: str | None, start_s
         )
     )
 
+    allow_shell = ask(
+        questionary.confirm(
+            "Allow the agent to run bash scripts on this machine (each script is approved by you in the chat)?",
+            default=True,
+            style=STYLE,
+        )
+    )
+
     step(3, total, "Pairing")
     name = name or ask(questionary.text("Name for this machine:", default=socket.gethostname().split(".")[0], style=STYLE))
     while True:
@@ -389,6 +397,7 @@ def setup_target(server: str | None, code: str | None, name: str | None, start_s
                     allow_full_access=full_access,
                     allow_remote_update=remote_update,
                     allow_remote_plugins=remote_plugins,
+                    allow_shell=allow_shell,
                 )
             break
         except PairingError as e:
@@ -426,6 +435,7 @@ def _finish_target(paths: TargetPaths, start_service: bool | None) -> None:
             ("Full access", "allowed" if cfg.allow_full_access else "disabled"),
             ("Remote update", "allowed" if cfg.allow_remote_update else "disabled"),
             ("Plugins from Core", "allowed" if cfg.allow_remote_plugins else "disabled"),
+            ("Bash scripts", "allowed" if cfg.allow_shell else "disabled"),
             ("Logs", str(service.log_file("target"))),
         ],
         footer="The target appears as online in the Core web UI within a few seconds."
