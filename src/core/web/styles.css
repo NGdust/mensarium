@@ -241,7 +241,21 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .prose { word-wrap: break-word; max-width: 70ch; }
 .prose p { margin: 0 0 12px; }
 .prose p:last-child { margin-bottom: 0; }
+.prose h2 { font-size: 16px; margin: 22px 0 10px; font-weight: 650; }
 .prose h3 { font-size: 14.5px; margin: 20px 0 8px; font-weight: 650; }
+.prose > :first-child { margin-top: 0; }
+.prose a { text-decoration: underline; text-decoration-color: var(--accent-line); }
+.prose a:hover { text-decoration-color: currentColor; }
+.prose del { color: var(--muted); }
+.prose blockquote { margin: 10px 0 12px; padding: 2px 0 2px 14px; border-left: 2px solid var(--line-strong); color: var(--muted); }
+.prose hr { border: 0; border-top: 1px solid var(--line-strong); margin: 18px 0; }
+.prose .table-wrap { overflow-x: auto; margin: 10px 0 14px; border: 1px solid var(--line); border-radius: var(--r); }
+.prose table { border-collapse: collapse; min-width: 100%; font-size: 13.5px; }
+.prose th, .prose td { padding: 7px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+.prose th + th, .prose td + td { border-left: 1px solid var(--line); }
+.prose th { font-weight: 600; background: var(--surface-2); white-space: nowrap; }
+.prose tbody tr:last-child td { border-bottom: 0; }
+.prose td code { white-space: nowrap; }
 .prose ul, .prose ol { margin: 6px 0 12px; padding-left: 22px; }
 .prose li { margin: 4px 0; }
 .prose li::marker { color: var(--muted); }
@@ -723,9 +737,9 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
   .thread-inner { padding: 4px var(--gutter) 28px; }
   .composer-wrap { padding: 0 var(--gutter) 10px; }
   .welcome { padding: 0 14px 4vh; }
+  .msg { grid-template-columns: 24px 1fr; column-gap: 10px; }
   .msg-agent { margin-left: 0; grid-template-columns: 1fr; }
   .msg-agent > .orb { display: none; }
-  .msg { grid-template-columns: 24px 1fr; column-gap: 10px; }
   .msg > .orb { --s: 24px !important; }
   .bubble-user { max-width: 88%; }
   .chip-compact .chip-label { display: none; }

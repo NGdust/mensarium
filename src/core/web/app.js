@@ -122,11 +122,22 @@ function esc(s) {
 }
 
 // Model output is untrusted: everything is escaped first, then a tiny markdown subset is applied.
+// Code spans and links are stashed first so emphasis rules never reach inside them.
 function inlineMd(s) {
+  const stash = [];
+  const keep = (html) => `\u0000${stash.push(html) - 1}\u0000`;
   return esc(s)
-    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    .replace(/`([^`\n]+)`/g, (_, c) => keep(`<code>${c}</code>`))
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => keep(`<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`))
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^\w*])\*([^*\s][^*\n]*?)\*(?![\w*])/g, '$1<em>$2</em>')
+    .replace(/(^|\W)_([^_\s][^_\n]*?)_(?!\w)/g, '$1<em>$2</em>')
+    .replace(/~~([^~\n]+)~~/g, '<del>$1</del>')
+    .replace(/\u0000(\d+)\u0000/g, (_, i) => stash[i] || '');
 }
+
+const TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const tableCells = (row) => row.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
 
 function markdown(text) {
   const out = [];
@@ -147,9 +158,32 @@ function markdown(text) {
       out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
       continue;
     }
+    if (line.includes('|') && (lines[i + 1] || '').includes('|') && TABLE_SEP.test(lines[i + 1])) {
+      flushPara(); flushList();
+      const align = tableCells(lines[i + 1]).map((c) => (c.endsWith(':') ? (c.startsWith(':') ? 'center' : 'right') : ''));
+      const row = (tag, r) => tableCells(r).map((c, j) => `<${tag}${align[j] ? ` style="text-align:${align[j]}"` : ''}>${inlineMd(c)}</${tag}>`).join('');
+      const body = [];
+      for (i += 2; i < lines.length && lines[i].includes('|'); i++) body.push(`<tr>${row('td', lines[i])}</tr>`);
+      i--;
+      out.push(`<div class="table-wrap"><table><thead><tr>${row('th', line)}</tr></thead><tbody>${body.join('')}</tbody></table></div>`);
+      continue;
+    }
+    if (/^\s*>/.test(line)) {
+      flushPara(); flushList();
+      const quote = [];
+      for (; i < lines.length && /^\s*>/.test(lines[i]); i++) quote.push(lines[i].replace(/^\s*>\s?/, ''));
+      i--;
+      out.push(`<blockquote>${markdown(quote.join('\n'))}</blockquote>`);
+      continue;
+    }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      flushPara(); flushList();
+      out.push('<hr>');
+      continue;
+    }
     const bullet = line.match(/^(\s*)[-*]\s+(.*)$/);
     const numbered = line.match(/^(\s*)(\d+)[.)]\s+(.*)$/);
-    const heading = line.match(/^\s*#{1,6}\s+(.*)$/);
+    const heading = line.match(/^\s*(#{1,6})\s+(.*)$/);
     const item = bullet || numbered;
     // Indented lines and nested items continue the current list item instead of breaking the list.
     if (list && item && item[1].length >= 2) {
@@ -163,7 +197,8 @@ function markdown(text) {
       list.items.push(bullet ? bullet[2] : numbered[3]);
     } else if (heading) {
       flushPara(); flushList();
-      out.push(`<h3>${inlineMd(heading[1])}</h3>`);
+      const tag = heading[1].length <= 2 ? 'h2' : 'h3';
+      out.push(`<${tag}>${inlineMd(heading[2])}</${tag}>`);
     } else if (!line.trim()) {
       flushPara();
       if (list && !/^\s*([-*]|\d+[.)])\s+/.test(lines[i + 1] || '')) flushList();
