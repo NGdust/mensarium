@@ -799,6 +799,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 
 /* screenshots and desktop permissions */
 .tool-shot { display: block; margin: 8px 12px 4px; max-width: 420px; }
-.tool-shot img { display: block; width: 100%; border-radius: 8px; border: 1px solid var(--line); }
+.msg-shot { display: block; margin-top: 10px; max-width: 560px; }
+.tool-shot img, .msg-shot img { display: block; width: 100%; border-radius: 8px; border: 1px solid var(--line); }
 .device-desktop { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 4px; }
 .device-desktop .row-desc { flex-basis: 100%; }

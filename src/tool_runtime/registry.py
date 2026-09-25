@@ -188,7 +188,8 @@ _SPECS = [
     ),
     ToolSpec(
         "screen.capture",
-        "Take a screenshot of the device's screen; you receive it as an image. Use it to see what the user sees, "
+        "Take a screenshot of the device's screen; you receive it as an image, and the last screenshot of your turn "
+        "is attached to your reply in the user's chat. Use it when the user asks for a screenshot or to see the screen, "
         "to find coordinates before input.mouse and to verify the result after acting.",
         "execute",
         TOOL_ARGS["screen.capture"],

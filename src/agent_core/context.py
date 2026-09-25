@@ -70,8 +70,9 @@ def build_system_prompt(
 
 
 NO_VISION_NOTE = (
-    "(the screenshot could not be shown: the current model does not accept images. It is visible to the user in the chat; "
-    "ask them what it shows, or tell them to set a model for images in Settings -> Providers)"
+    "(the screenshot could not be shown to you: the current model does not accept images. The user still gets it, "
+    "attached to your reply in the chat; if you need what it shows, ask them, or tell them to set a model for images "
+    "in Settings -> Providers)"
 )
 
 

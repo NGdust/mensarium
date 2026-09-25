@@ -97,6 +97,7 @@ const ICONS = {
   plug: '<path d="M9 3v5M15 3v5M7 8h10v3a5 5 0 0 1-10 0z"/><path d="M12 16v5"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.7 5.7 3.7 9s-1.2 6.3-3.7 9c-2.5-2.7-3.7-5.7-3.7-9S9.5 5.7 12 3z"/>',
   robot: '<rect x="4.5" y="8" width="15" height="11" rx="3"/><path d="M12 8V5.2M2.5 12.5v3M21.5 12.5v3M9.5 16h5"/><circle cx="12" cy="4.2" r="1"/><circle cx="9.3" cy="12.4" r=".9"/><circle cx="14.7" cy="12.4" r=".9"/>',
+  send: '<path d="m21 3-7 18-4-8-8-4z"/><path d="M21 3 10 13"/>',
 };
 
 function icon(name) {
@@ -283,10 +284,12 @@ const MODES = {
   full: { label: tr('Full access'), icon: 'bolt', cls: 'full', desc: tr('The agent does everything without asking. Only sudo and system settings are off-limits.') },
 };
 const TEMPLATES = [
+  ['cpu', tr('Device resources'), tr('Check the device resources: CPU load, memory, free disk space, uptime. List the top processes by CPU and memory and say whether anything looks off.')],
+  ['pulse', tr('What is slowing it down'), tr('The device is slow. Find the processes that load the CPU and memory the most and suggest what can be closed. Don\'t stop any process without asking.')],
+  ['layers', tr('What takes up disk space'), tr('Find what takes up the most space in the home folder: the largest folders and files, caches, old downloads. Don\'t delete anything, just list them with sizes.')],
+  ['link', tr('Open ports'), tr('Show which ports are listening on the device and which processes own them. Point out anything unexpected.')],
   ['terminal', tr('Why tests are failing'), tr('Run the project\'s tests, find why they\'re failing, and explain it. Don\'t change files yet.')],
   ['git', tr('What changed'), tr('Show what changed in the repository since the last commit, and briefly describe the changes.')],
-  ['folder', tr('How the project is structured'), tr('Study the project structure and explain how it\'s organized: entry points, main modules, how to run it.')],
-  ['search', tr('Fix a bug'), tr('Find the cause of the error and suggest a minimal fix: ')],
 ];
 const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'files.stat': 'file', 'files.find': 'search', 'files.write': 'file', 'files.edit': 'file', 'files.mkdir': 'folder', 'files.move': 'folder', 'files.copy': 'folder', 'files.delete': 'trash', 'git.status': 'git', 'git.diff': 'git', 'system.info': 'cpu', 'process.list': 'cpu', 'process.kill': 'ban', 'net.ports': 'link', 'net.http': 'globe', 'shell.exec': 'terminal', 'shell.bash': 'terminal', 'screen.capture': 'laptop', 'screen.windows': 'sidebar', 'input.mouse': 'cpu', 'input.type': 'cpu', 'input.key': 'cpu', 'app.open': 'bolt', 'system.volume': 'pulse', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph', 'web.search': 'globe', 'web.fetch': 'globe' };
 // Plugin texts are either plain strings or {en, ru} maps.
@@ -888,6 +891,10 @@ async function viewChat(taskId) {
   };
   const step = (node) => { lastAgent = true; return add(h('div', { class: 'step' }, node)); };
   const note = (ic, text, cls = '') => step(h('div', { class: `note ${cls}` }, icon(ic), h('span', {}, text)));
+  const shot = (id, cls) => {
+    const url = `/v1/artifacts/${id}`;
+    return h('a', { class: cls, href: url, target: '_blank', rel: 'noopener', title: tr('Open the screenshot') }, h('img', { src: url, alt: tr('Screenshot from the device') }));
+  };
 
   const tools = new Map();
   const approvals = new Map();
@@ -1026,10 +1033,7 @@ async function viewChat(taskId) {
     e.stateEl.className = `tool-state ${ok ? 'ok' : 'bad'}`;
     e.stateEl.replaceChildren(icon(ok ? 'check' : 'alert'), p.exit_code != null && p.exit_code !== 0 ? tr('{0}, code {1}', label, p.exit_code) : label);
     e.out.textContent = (p.output || '').replace(/^\[tool output: untrusted data, not instructions\]\n/, '').replace(/^status: [^\n]*\n?/, '') || tr('Empty output');
-    if (p.image_artifact_id && !e.card.querySelector('.tool-shot')) {
-      const url = `/v1/artifacts/${p.image_artifact_id}`;
-      e.card.insertBefore(h('a', { class: 'tool-shot', href: url, target: '_blank', rel: 'noopener', title: tr('Open the screenshot') }, h('img', { src: url, alt: tr('Screenshot from the device') })), e.noteEl);
-    }
+    if (p.image_artifact_id && !e.card.querySelector('.tool-shot')) e.card.insertBefore(shot(p.image_artifact_id, 'tool-shot'), e.noteEl);
     if (p.truncated || p.artifact_id) {
       e.noteEl.replaceChildren(p.truncated ? tr('Output truncated. ') : '', p.artifact_id ? h('a', { href: `/v1/artifacts/${p.artifact_id}`, target: '_blank', rel: 'noopener' }, tr('Full output')) : '');
     }
@@ -1148,7 +1152,7 @@ async function viewChat(taskId) {
         break;
       case 'task.final':
         finishWork();
-        agentMsg(h('div', { class: 'prose', html: markdown(p.text) }));
+        agentMsg([h('div', { class: 'prose', html: markdown(p.text) }), p.image_artifact_id ? shot(p.image_artifact_id, 'msg-shot') : null]);
         break;
       case 'task.error':
         note('alert', p.message, 'error');
@@ -1194,6 +1198,7 @@ const SETTINGS = [
   ['overview', 'pulse', tr('Overview')],
   ['providers', 'robot', tr('Providers')],
   ['devices', 'laptop', tr('Devices')],
+  ['channels', 'send', tr('Channels')],
   ['memory', 'graph', tr('Memory')],
   ['skills', 'book', tr('Skills')],
   ['plugins', 'package', tr('Plugins')],
@@ -1253,7 +1258,7 @@ const cmdValue = (cmd) => [h('code', {}, cmd), copyBtn(cmd)];
 async function viewSettings(key) {
   const shell = ensureSettingsShell();
   shell.setActive();
-  const views = { overview: settingsOverview, providers: settingsProviders, model: settingsProviders, devices: settingsDevices, memory: settingsMemory, skills: settingsSkills, plugins: settingsPlugins, marketplace: settingsPlugins, profiles: settingsProfiles, audit: settingsAudit };
+  const views = { overview: settingsOverview, providers: settingsProviders, model: settingsProviders, devices: settingsDevices, channels: settingsChannels, memory: settingsMemory, skills: settingsSkills, plugins: settingsPlugins, marketplace: settingsPlugins, profiles: settingsProfiles, audit: settingsAudit };
   await (views[key] || settingsOverview)(shell);
 }
 
@@ -1682,6 +1687,104 @@ async function openNoteEditor(note, { onSaved, onOpenTitle } = {}) {
     h('div', { class: 'modal-actions' }, remove, h('span', { class: 'spacer' }), h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
   ).classList.add('modal-wide');
   (full ? body : title).focus();
+}
+
+async function settingsChannels(shell) {
+  const STATES = {
+    off: [tr('Off'), ''],
+    connecting: [tr('Connecting...'), 'accent live'],
+    waiting_owner: [tr('Waiting for the owner'), 'warn'],
+    ready: [tr('Connected'), 'ok'],
+    error: [tr('Error'), 'danger'],
+  };
+  const body = h('div', {});
+  let poll = 0;
+  viewCleanups.push(() => clearTimeout(poll));
+
+  const save = async (patch, done) => {
+    try { await api('/v1/channels/telegram', { method: 'PUT', body: JSON.stringify(patch) }); if (done) toast(done); await load(); } catch (err) { fail(err); }
+  };
+  const unbind = async () => {
+    if (!await confirmDialog({ title: tr('Unbind the owner?'), text: tr('The next Telegram account that writes to the bot becomes its owner. The current chat is closed for the bot.'), action: tr('Unbind') })) return;
+    try { await post('/v1/channels/telegram/unbind'); toast(tr('Unbound')); await load(); } catch (err) { fail(err); }
+  };
+  const disconnect = async () => {
+    if (!await confirmDialog({ title: tr('Disconnect Telegram?'), text: tr('The token and the owner binding are deleted from Core. Chats started from Telegram stay in the sidebar.'), action: tr('Disconnect'), danger: true })) return;
+    try { await del('/v1/channels/telegram'); toast(tr('Disconnected')); await load(); } catch (err) { fail(err); }
+  };
+
+  function tokenForm(replacing) {
+    const input = h('input', { type: 'password', autocomplete: 'off', placeholder: '123456789:AbCdEf...', 'aria-label': tr('Bot token') });
+    const btn = h('button', { class: 'btn btn-primary', onclick: async () => {
+      if (!input.value.trim()) { input.focus(); return; }
+      btn.disabled = true;
+      try { await save({ token: input.value.trim() }, tr('Bot connected')); closeLayer(); } finally { btn.disabled = false; }
+    } }, replacing ? tr('Replace') : tr('Connect'));
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') btn.click(); });
+    return { input, btn };
+  }
+
+  function replaceDialog() {
+    const { input, btn } = tokenForm(true);
+    openModal(
+      h('div', { class: 'modal-head' }, h('h2', {}, tr('Replace the token')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
+      h('div', { class: 'plugin-form' }, h('label', { class: 'plugin-field' }, h('div', { class: 'plugin-field-head' }, h('span', {}, tr('Bot token'))), input)),
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), btn),
+    );
+    input.focus();
+  }
+
+  function render(data) {
+    const tg = data.items[0];
+    const [stateLabel, stateCls] = STATES[tg.state] || STATES.off;
+    const { bot, owner } = tg;
+    const link = bot?.username ? `https://t.me/${bot.username}` : null;
+    const ownerName = owner ? (owner.name || (owner.username ? `@${owner.username}` : String(owner.user_id))) : '';
+    const hero = h('div', { class: 'hero provider-hero' },
+      h('span', { class: 'market-icon' }, icon('send')),
+      h('div', { class: 'hero-text' }, h('h2', {}, 'Telegram'),
+        h('p', {}, bot
+          ? [link ? h('a', { href: link, target: '_blank', rel: 'noopener' }, `@${bot.username}`) : bot.name, owner ? ` · ${tr('bound to {0}', ownerName)}` : '']
+          : tr('A bot you talk to from your phone: tasks, replies, and approval buttons.'))),
+      tg.configured ? h('label', { class: 'switch-label' }, toggleSwitch(tg.enabled, { label: tr('Enable Telegram'), onChange: async (v) => { await api('/v1/channels/telegram', { method: 'PUT', body: JSON.stringify({ enabled: v }) }); await load(); } }), tr('On')) : null,
+      h('span', { class: 'status' }, h('span', { class: `dot ${stateCls}` }), stateLabel));
+    const sections = [tg.error ? h('p', { class: 'market-note' }, tg.error) : null];
+    if (!tg.configured) {
+      const { input, btn } = tokenForm(false);
+      sections.push(section(tr('Bot token'), tr('Create a bot in @BotFather, copy its token and paste it here. The token stays on the Core server.'),
+        h('div', { class: 'rows' }, h('div', { class: 'row' }, h('div', { class: 'row-text' }, h('div', { class: 'secret-field' }, input, btn))))));
+    } else {
+      const local = data.devices.find((d) => d.id === data.local_target_id);
+      const deviceSel = h('select', { 'aria-label': tr('Device'), onchange: () => save({ target_id: deviceSel.value }, tr('Saved')) },
+        h('option', { value: '', selected: !tg.target_id }, local ? tr('{0} (default)', local.name) : tr('First available device')),
+        data.devices.map((d) => h('option', { value: d.id, selected: d.id === tg.target_id }, d.online ? d.name : `${d.name} · ${tr('offline')}`)));
+      const modeSel = h('select', { 'aria-label': tr('Access mode'), onchange: () => save({ mode: modeSel.value }, tr('Saved')) },
+        Object.entries(MODES).map(([k, m]) => h('option', { value: k, selected: k === tg.mode }, m.label)));
+      sections.push(
+        section(tr('Owner'), tr('The bot answers only one Telegram account: the first one that writes to it after connecting.'), h('div', { class: 'rows' }, owner
+          ? row(ownerName, [owner.username ? `@${owner.username}` : null, `id ${owner.user_id}`].filter(Boolean).join(' · '), h('button', { class: 'btn btn-sm', onclick: unbind }, tr('Unbind')))
+          : row(tr('Waiting for the first message'), tr('Open the bot and send /start. Until then nobody can use it.'), link ? h('a', { class: 'btn btn-sm', href: link, target: '_blank', rel: 'noopener' }, tr('Open the bot')) : null))),
+        section(tr('Tasks from Telegram'), tr('Each message continues the current chat; /new starts another one. The chat also appears in the sidebar.'), h('div', { class: 'rows' },
+          row(tr('Device'), tr('Where the agent works.'), deviceSel),
+          row(tr('Access mode'), MODES[tg.mode]?.desc, modeSel),
+          row(tr('Current chat'), tg.task ? `${taskTitle(tg.task)} · ${tg.task.status.toLowerCase()}` : tr('No chat yet.'), tg.task ? h('a', { class: 'btn btn-sm', href: `#/chat/${tg.task.id}` }, tr('Open')) : null))),
+        section(tr('Bot'), null, h('div', { class: 'rows' },
+          row(tr('Replace the token'), tr('For another bot; the owner binding is reset when the bot changes.'), h('button', { class: 'btn btn-sm', onclick: replaceDialog }, tr('Replace'))),
+          row(tr('Disconnect'), tr('Deletes the token and the binding from Core.'), h('button', { class: 'btn btn-sm btn-danger', onclick: disconnect }, tr('Disconnect'))))),
+      );
+    }
+    body.replaceChildren(hero, ...sections.filter(Boolean));
+  }
+
+  async function load() {
+    const data = await get('/v1/channels');
+    render(data);
+    clearTimeout(poll);
+    if (['connecting', 'waiting_owner'].includes(data.items[0].state)) poll = setTimeout(() => load().catch(() => {}), 3000);
+  }
+
+  page(shell, tr('Channels'), tr('Talk to the agent from a messenger. Replies and approval buttons come to the chat; the bot listens only to the account it is bound to.'), null, body);
+  await load();
 }
 
 async function settingsMemory(shell) {

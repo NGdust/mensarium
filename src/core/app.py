@@ -25,6 +25,7 @@ from mensarium.contracts.protocol import AccessMode, PairRequest, PairResponse
 from mensarium.contracts.skills import OS, SkillError, SkillMeta, SkillRequires
 from mensarium.core import distribution, pairing
 from mensarium.core.catalog import Catalog
+from mensarium.core.channels import ChannelError, ChannelManager
 from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secret, save_config
 from mensarium.core.db import Database
 from mensarium.core.dreaming import Dreamer, DreamError
@@ -71,10 +72,18 @@ class Core:
     skills: SkillStore
     memory: Memory
     dreamer: Dreamer
+    channels: ChannelManager
 
 
 class LoginBody(BaseModel):
     token: str
+
+
+class ChannelBody(BaseModel):
+    token: str | None = Field(None, max_length=200)
+    enabled: bool | None = None
+    target_id: str | None = Field(None, max_length=100)
+    mode: AccessMode | None = None
 
 
 class TaskCreate(BaseModel):
@@ -235,6 +244,9 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         local_agent = None
         if local:
             local_agent = asyncio.create_task(TargetAgent(local[0], local_target_paths(paths), local[1]).run_forever())
+        channels = ChannelManager(repo, paths, workspace_id, orchestrator, bus)
+        channels.default_target_id = local[0].target_id if local else None
+        await channels.start()
         app.state.core = Core(
             cfg=cfg,
             paths=paths,
@@ -255,10 +267,12 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             skills=skills,
             memory=memory,
             dreamer=dreamer,
+            channels=channels,
         )
         try:
             yield
         finally:
+            await channels.stop()
             for runner in list(orchestrator.runners.values()):
                 runner.cancel()
             await plugins.stop()
@@ -745,6 +759,31 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     @app.get("/v1/targets/{target_id}/plugin-tools")
     async def target_plugin_tools(target_id: str, c: Core = Depends(auth)) -> list[dict[str, Any]]:
         return await c.plugins.device_tools(target_id)
+
+    @app.get("/v1/channels")
+    async def list_channels(c: Core = Depends(auth)) -> dict[str, Any]:
+        devices = [
+            {"id": t["id"], "name": t["name"], "online": c.hub.is_online(t["id"]), "full_access": full_access(t) == "allowed"}
+            for t in await c.repo.list_targets()
+            if t["status"] != "revoked"
+        ]
+        return {"items": [await c.channels.view()], "devices": devices, "local_target_id": c.local_target_id}
+
+    @app.put("/v1/channels/telegram")
+    async def configure_telegram(body: ChannelBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return await c.channels.configure(body.token, body.enabled, body.target_id, body.mode)
+        except ChannelError as e:
+            raise HTTPException(422, str(e)) from e
+
+    @app.post("/v1/channels/telegram/unbind")
+    async def unbind_telegram(c: Core = Depends(auth)) -> dict[str, Any]:
+        return await c.channels.unbind()
+
+    @app.delete("/v1/channels/telegram")
+    async def remove_telegram(c: Core = Depends(auth)) -> dict[str, bool]:
+        await c.channels.remove()
+        return {"ok": True}
 
     def skill_error(e: SkillError) -> HTTPException:
         return HTTPException(404 if "not found" in str(e) else 422, str(e))

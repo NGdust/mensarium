@@ -59,6 +59,16 @@ def _rejects_images(error: str) -> bool:
     return "image" in text and any(word in text for word in ("support", "vision", "multimodal", "not accept", "invalid content"))
 
 
+def _turn_image(steps: list[dict[str, Any]]) -> str | None:
+    """The last screenshot taken since the user's latest message; it goes to the chat with the reply."""
+    for s in reversed(steps):
+        if s["kind"] == "user":
+            return None
+        if s["kind"] == "tool" and (image := (s.get("output") or {}).get("image")):
+            return str(image)
+    return None
+
+
 def missing_tools(reported: list[str]) -> list[str]:
     """Base device tools this agent version does not offer; the device needs an update to get them."""
     return [t for t in REGISTRY if t not in reported and t not in OPTIONAL_DEVICE_TOOLS]
@@ -425,7 +435,7 @@ class Orchestrator:
             if action.is_final:
                 text = action.text or "(empty answer)"
                 await self._set_status(task_id, "SUCCEEDED", "", result=text)
-                await self.bus.emit(task_id, "task.final", {"text": text})
+                await self.bus.emit(task_id, "task.final", {"text": text, "image_artifact_id": _turn_image(steps)})
                 await self.repo.audit(self.workspace_id, "core", "task.succeeded", {"task_id": task_id})
                 return
 
