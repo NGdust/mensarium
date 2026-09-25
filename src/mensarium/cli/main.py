@@ -45,7 +45,7 @@ def version(
     except UpdateError:
         return
     if is_newer(latest["version"]):
-        console.print(f"Доступна версия {latest['version']} на {source}. Обновить: mensarium update")
+        console.print(f"Version {latest['version']} is available on {source}. Update: mensarium update")
 
 
 @app.command()
@@ -59,27 +59,27 @@ def update(
 
     base = (source or update_source()).rstrip("/")
     try:
-        with console.status(f"Проверяю {base}..."):
+        with console.status(f"Checking {base}..."):
             latest = fetch_latest(base)
     except UpdateError as e:
         fail(str(e))
         raise typer.Exit(1) from e
     new = latest["version"]
     if not is_newer(new) and not force:
-        ok(f"Установлена последняя версия {__version__} ({base})")
+        ok(f"The latest version {__version__} is installed ({base})")
         return
     if check:
-        console.print(f"Доступна версия {new} (установлена {__version__}). Обновить: mensarium update")
+        console.print(f"Version {new} is available (installed {__version__}). Update: mensarium update")
         return
     try:
-        with console.status(f"Устанавливаю {new}..."):
+        with console.status(f"Installing {new}..."):
             restarted = install(base, latest)
     except UpdateError as e:
         fail(str(e))
         raise typer.Exit(1) from e
-    ok(f"Mensarium обновлён: {__version__} -> {new}")
+    ok(f"Mensarium updated: {__version__} -> {new}")
     for role in restarted:
-        ok(f"Сервис {role} перезапущен")
+        ok(f"Service {role} restarted")
 
 
 @app.command()

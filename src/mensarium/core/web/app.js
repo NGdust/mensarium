@@ -1,5 +1,6 @@
 // Mensarium web UI. Vanilla ES module, no build step, no dependencies.
 
+import { LANGUAGES, lang, locale, setLang, t as tr, tp } from './i18n.js';
 import { createOrb } from './orb.js';
 import { createGraph, graphColor } from './graph.js';
 
@@ -25,7 +26,7 @@ async function api(path, opts = {}) {
   const text = await res.text();
   let data = null;
   if (text) { try { data = JSON.parse(text); } catch { data = text; } }
-  if (!res.ok) throw new Error((data && data.detail) || `Ошибка запроса (${res.status})`);
+  if (!res.ok) throw new Error((data && data.detail) || tr('Request error ({0})', res.status));
   return data;
 }
 const get = (path) => api(path);
@@ -173,15 +174,15 @@ function markdown(text) {
 }
 
 function relTime(iso) {
-  if (!iso) return 'никогда';
+  if (!iso) return tr('never');
   const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 10) return 'только что';
-  if (s < 60) return `${s} с назад`;
+  if (s < 10) return tr('just now');
+  if (s < 60) return tr('{0} s ago', s);
   const m = Math.round(s / 60);
-  if (m < 60) return `${m} мин назад`;
+  if (m < 60) return tr('{0} min ago', m);
   const hr = Math.round(m / 60);
-  if (hr < 24) return `${hr} ч назад`;
-  return `${Math.round(hr / 24)} д назад`;
+  if (hr < 24) return tr('{0} h ago', hr);
+  return tr('{0} d ago', Math.round(hr / 24));
 }
 
 const mmss = (sec) => `${Math.floor(Math.max(0, sec) / 60)}:${String(Math.max(0, sec) % 60).padStart(2, '0')}`;
@@ -210,65 +211,65 @@ function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch { /* 
 // ---------- domain vocab ----------
 
 const STATUS = {
-  NEW: ['Запуск', 'accent', true],
-  VALIDATING: ['Запуск', 'accent', true],
-  PLANNING: ['Думает', 'accent', true],
-  WAITING_APPROVAL: ['Ждёт решения', 'warn', true],
-  EXECUTING: ['Выполняет', 'accent', true],
-  OBSERVING: ['Разбирает результат', 'accent', true],
-  SUCCEEDED: ['Готово', 'ok', false],
-  FAILED: ['Ошибка', 'danger', false],
-  FAILED_RECOVERABLE: ['Прервано, можно продолжить', 'danger', false],
-  CANCELED: ['Остановлено', '', false],
-  PAUSED: ['Пауза', 'warn', false],
+  NEW: [tr('Starting'), 'accent', true],
+  VALIDATING: [tr('Starting'), 'accent', true],
+  PLANNING: [tr('Thinking'), 'accent', true],
+  WAITING_APPROVAL: [tr('Waiting for a decision'), 'warn', true],
+  EXECUTING: [tr('Executing'), 'accent', true],
+  OBSERVING: [tr('Parsing the result'), 'accent', true],
+  SUCCEEDED: [tr('Done'), 'ok', false],
+  FAILED: [tr('Error'), 'danger', false],
+  FAILED_RECOVERABLE: [tr('Interrupted, can be resumed'), 'danger', false],
+  CANCELED: [tr('Stopped'), '', false],
+  PAUSED: [tr('Paused'), 'warn', false],
 };
 const REASONS = {
-  'paused by user': 'поставлено на паузу',
-  'canceled by user': 'остановлено вами',
-  'core restarted': 'Core перезапускался, продолжите вручную',
-  'target offline': 'устройство не в сети',
-  'target revoked': 'доступ устройства отозван',
-  'step budget exhausted': 'закончился лимит шагов',
-  'tool call budget exhausted': 'закончился лимит действий',
-  'wall time budget exhausted': 'закончилось время на задачу',
+  'paused by user': tr('paused'),
+  'canceled by user': tr('stopped by you'),
+  'core restarted': tr('Core restarted, resume manually'),
+  'target offline': tr('device offline'),
+  'target revoked': tr('device access revoked'),
+  'step budget exhausted': tr('step limit reached'),
+  'tool call budget exhausted': tr('action limit reached'),
+  'wall time budget exhausted': tr('task time limit reached'),
 };
 const RISK = {
-  read: ['чтение', ''],
-  write: ['изменение файлов', 'warn'],
-  execute: ['запуск программы', 'orange'],
-  network: ['доступ в сеть', 'accent'],
-  destructive: ['необратимое действие', 'danger'],
+  read: [tr('read'), ''],
+  write: [tr('file changes'), 'warn'],
+  execute: [tr('run a program'), 'orange'],
+  network: [tr('network access'), 'accent'],
+  destructive: [tr('irreversible action'), 'danger'],
 };
 const MODES = {
-  ask: { label: 'С запросом действий', icon: 'shield', cls: 'accent', desc: 'Чтение сразу. Запуск программ, изменения файлов и сеть ждут вашего подтверждения.' },
-  full: { label: 'Полный доступ', icon: 'bolt', cls: 'full', desc: 'Агент выполняет всё без вопросов. Запрещены только sudo и системные настройки.' },
+  ask: { label: tr('Ask before acting'), icon: 'shield', cls: 'accent', desc: tr('Reads right away. Running programs, changing files, and network access wait for your approval.') },
+  full: { label: tr('Full access'), icon: 'bolt', cls: 'full', desc: tr('The agent does everything without asking. Only sudo and system settings are off-limits.') },
 };
 const TEMPLATES = [
-  ['terminal', 'Почему падают тесты', 'Запусти тесты проекта, найди причину падения и объясни её. Файлы пока не меняй.'],
-  ['git', 'Что изменилось', 'Покажи, что изменилось в репозитории с последнего коммита, и кратко опиши изменения.'],
-  ['folder', 'Как устроен проект', 'Изучи структуру проекта и расскажи, как он устроен: точки входа, основные модули, как запускать.'],
-  ['search', 'Исправить ошибку', 'Найди причину ошибки и предложи минимальное исправление: '],
+  ['terminal', tr('Why tests are failing'), tr('Run the project\'s tests, find why they\'re failing, and explain it. Don\'t change files yet.')],
+  ['git', tr('What changed'), tr('Show what changed in the repository since the last commit, and briefly describe the changes.')],
+  ['folder', tr('How the project is structured'), tr('Study the project structure and explain how it\'s organized: entry points, main modules, how to run it.')],
+  ['search', tr('Fix a bug'), tr('Find the cause of the error and suggest a minimal fix: ')],
 ];
 const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'git.status': 'git', 'git.diff': 'git', 'shell.exec': 'terminal', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph' };
 // Marketplace texts are either plain strings or {en, ru} maps.
-const txt = (v) => (typeof v === 'string' ? v : (v?.ru || v?.en || ''));
+const txt = (v) => (typeof v === 'string' ? v : (v?.[lang] || v?.en || ''));
 const RESUMABLE = ['PAUSED', 'FAILED_RECOVERABLE'];
 
 const POLICY_REASONS = [
-  [/^access to secret files is not allowed$/, () => 'чтение секретных файлов запрещено'],
-  [/^unknown tool '(.+)'$/, (m) => `неизвестный инструмент ${m[1]}`],
-  [/^tool '(.+)' is not allowed by the active profile$/, (m) => `инструмент ${m[1]} не разрешён профилем`],
-  [/^tool '(.+)' is disabled for this device$/, (m) => `инструмент ${m[1]} выключен для этого устройства`],
-  [/^target does not support tool '(.+)'$/, (m) => `устройство не поддерживает ${m[1]}`],
-  [/^path '(.+)' is outside allowed roots/, (m) => `путь ${m[1]} вне разрешённых папок`],
-  [/^program '(.+)' is not in the target command allowlist$/, (m) => `программа ${m[1]} не разрешена на устройстве`],
-  [/^shell operators .* are not supported/, () => 'операторы оболочки (|, &&, >) не поддерживаются, команда запускается без shell'],
-  [/^`cd` is not supported/, () => 'cd не поддерживается, папка задаётся отдельно'],
-  [/^run programs by name, not by path$/, () => 'программу нужно указывать по имени, а не по пути'],
-  [/^privileged actions are denied$/, () => 'привилегированные действия запрещены'],
-  [/^invalid arguments/, () => 'неверные аргументы'],
+  [/^access to secret files is not allowed$/, () => tr('reading secret files is not allowed')],
+  [/^unknown tool '(.+)'$/, (m) => tr('unknown tool {0}', m[1])],
+  [/^tool '(.+)' is not allowed by the active profile$/, (m) => tr('tool {0} not allowed by the profile', m[1])],
+  [/^tool '(.+)' is disabled for this device$/, (m) => tr('tool {0} disabled for this device', m[1])],
+  [/^target does not support tool '(.+)'$/, (m) => tr('device doesn\'t support {0}', m[1])],
+  [/^path '(.+)' is outside allowed roots/, (m) => tr('path {0} is outside allowed folders', m[1])],
+  [/^program '(.+)' is not in the target command allowlist$/, (m) => tr('program {0} not allowed on the device', m[1])],
+  [/^shell operators .* are not supported/, () => tr('shell operators (|, &&, >) are not supported, the command runs without a shell')],
+  [/^`cd` is not supported/, () => tr('cd is not supported, set the folder separately')],
+  [/^run programs by name, not by path$/, () => tr('specify the program by name, not by path')],
+  [/^privileged actions are denied$/, () => tr('privileged actions are not allowed')],
+  [/^invalid arguments/, () => tr('invalid arguments')],
 ];
-const EXEC_STATUS = { succeeded: 'успешно', failed: 'ошибка', timeout: 'таймаут', canceled: 'отменено', rejected: 'отклонено устройством' };
+const EXEC_STATUS = { succeeded: tr('success'), failed: tr('error'), timeout: tr('timeout'), canceled: tr('canceled'), rejected: tr('rejected by the device') };
 const policyText = (r) => {
   for (const [re, fn] of POLICY_REASONS) { const m = String(r).match(re); if (m) return fn(m); }
   return r;
@@ -279,10 +280,10 @@ const isRunning = (s) => statusOf(s)[2];
 const isLocal = (t) => t && t.id === state.system?.local_target_id;
 const fullAccessOf = (t) => t?.capabilities?.full_access || 'disabled';
 const fullAccessBlock = (t) => (fullAccessOf(t) === 'outdated'
-  ? `Агент на устройстве устарел (v${t.agent_version}). Обновите его в Настройках → Устройства.`
-  : 'Выключен на устройстве: allow_full_access в его конфиге.');
+  ? tr('The device agent is outdated (v{0}). Update it in Settings → Devices.', t.agent_version)
+  : tr('Disabled on the device: allow_full_access in its config.'));
 const devices = () => state.targets.filter((t) => t.status !== 'revoked').sort((a, b) => isLocal(b) - isLocal(a));
-const taskTitle = (t) => ((t.input || '').split('\n')[0] || 'Без названия').slice(0, 80);
+const taskTitle = (t) => ((t.input || '').split('\n')[0] || tr('Untitled')).slice(0, 80);
 
 function statusPill(status) {
   const [label, kind, live] = statusOf(status);
@@ -322,7 +323,7 @@ function confirmDialog({ title, text, action, danger = false }) {
     openModal(
       h('div', { class: 'modal-head' }, h('h2', {}, title)),
       h('p', {}, text),
-      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: () => done(false) }, 'Отмена'), ok),
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: () => done(false) }, tr('Cancel')), ok),
     );
     $layer.querySelector('.backdrop').addEventListener('click', (e) => { if (e.target === e.currentTarget) resolve(false); });
     ok.focus();
@@ -331,48 +332,56 @@ function confirmDialog({ title, text, action, danger = false }) {
 
 async function deleteChat(task) {
   const yes = await confirmDialog({
-    title: 'Удалить чат?',
-    text: `«${taskTitle(task)}» исчезнет вместе с сообщениями и выводом команд. Если агент ещё работает, задача остановится. Записи в журнале действий сохранятся.`,
-    action: 'Удалить',
+    title: tr('Delete chat?'),
+    text: tr('“{0}” will disappear along with its messages and command output. If the agent is still working, the task will stop. Entries in the activity log will remain.', taskTitle(task)),
+    action: tr('Delete'),
     danger: true,
   });
   if (!yes) return;
   try {
     await del(`/v1/tasks/${task.id}`);
     state.tasks = state.tasks.filter((t) => t.id !== task.id);
-    toast('Чат удалён');
+    toast(tr('Chat deleted'));
     if (location.hash === `#/chat/${task.id}`) go('#/');
     else state.shell?.renderSessions?.();
   } catch (err) { fail(err); }
 }
 
 async function openPairing() {
-  const body = h('div', {}, h('p', {}, 'Создаём код...'));
+  const body = h('div', {}, h('p', {}, tr('Generating code...')));
   openModal(
-    h('div', { class: 'modal-head' }, h('h2', {}, 'Сопрячь устройство'), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': 'Закрыть' }, icon('x'))),
+    h('div', { class: 'modal-head' }, h('h2', {}, tr('Pair a device')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
     body,
   );
   let data;
   try { data = await post('/v1/targets/pairing-codes'); } catch (err) { closeLayer(); fail(err); return; }
   const timer = h('span', {});
-  const line = (cmd) => h('div', { class: 'code-line' }, h('code', {}, cmd), h('button', { class: 'icon-btn', 'aria-label': 'Скопировать', onclick: (e) => copy(cmd, e.currentTarget) }, icon('copy')));
+  const line = (cmd) => h('div', { class: 'code-line' }, h('code', {}, cmd), h('button', { class: 'icon-btn', 'aria-label': tr('Copy'), onclick: (e) => copy(cmd, e.currentTarget) }, icon('copy')));
   body.replaceChildren(
-    h('p', {}, 'Выполните команду на машине, которую хотите подключить. Код одноразовый.'),
+    h('p', {}, tr('Run the command on the machine you want to connect. The code is one-time.')),
     h('div', { class: 'pair-code' }, data.code),
-    h('div', { class: 'pair-timer' }, 'Действует ещё ', timer),
-    h('div', { class: 'field-label' }, 'Установить и подключить'),
+    h('div', { class: 'pair-timer' }, tr('Valid for '), timer),
+    h('div', { class: 'field-label' }, tr('Install and connect')),
     line(data.install_command),
-    h('div', { class: 'field-label' }, 'Если Mensarium уже установлен'),
+    h('div', { class: 'field-label' }, tr('If Mensarium is already installed')),
     line(`${data.pair_command} --root ~/Projects`),
   );
   const expires = new Date(data.expires_at).getTime();
   const tick = () => {
     const left = Math.round((expires - Date.now()) / 1000);
-    timer.textContent = left > 0 ? mmss(left) : 'истёк';
+    timer.textContent = left > 0 ? mmss(left) : tr('expired');
     if (left <= 0 || !document.body.contains(timer)) clearInterval(iv);
   };
   const iv = setInterval(tick, 1000);
   tick();
+}
+
+function languageSwitch(compact = false) {
+  return h('div', { class: `segmented${compact ? ' lang-compact' : ''}`, role: 'radiogroup', 'aria-label': tr('Language') },
+    Object.entries(LANGUAGES).map(([code, name]) => h('button', {
+      class: `seg${code === lang ? ' active' : ''}`, role: 'radio', 'aria-checked': String(code === lang),
+      onclick: () => { if (code !== lang) setLang(code); },
+    }, compact ? code.toUpperCase() : name)));
 }
 
 // ---------- login ----------
@@ -380,8 +389,8 @@ async function openPairing() {
 function showLogin() {
   cleanupAll();
   state.shell = null;
-  const input = h('input', { type: 'password', placeholder: 'Токен администратора', autocomplete: 'current-password', 'aria-label': 'Токен администратора' });
-  const btn = h('button', { class: 'btn btn-primary' }, 'Войти');
+  const input = h('input', { type: 'password', placeholder: tr('Admin token'), autocomplete: 'current-password', 'aria-label': tr('Admin token') });
+  const btn = h('button', { class: 'btn btn-primary' }, tr('Sign in'));
   const submit = async () => {
     const token = input.value.trim();
     if (!token) return;
@@ -390,15 +399,15 @@ function showLogin() {
       await post('/v1/auth/login', { token });
       await boot();
     } catch (err) {
-      toast(err instanceof AuthError ? 'Неверный токен' : err.message, true);
+      toast(err instanceof AuthError ? tr('Invalid token') : err.message, true);
     } finally { btn.disabled = false; }
   };
   btn.addEventListener('click', submit);
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
-  $app.replaceChildren(h('div', { class: 'login' }, h('div', { class: 'login-card' },
+  $app.replaceChildren(h('div', { class: 'login' }, h('div', { class: 'login-lang' }, languageSwitch(true)), h('div', { class: 'login-card' },
     orb('md'),
     h('h1', {}, 'Mensarium'),
-    h('p', {}, 'Токен выдаёт команда ', h('code', {}, 'mensarium core token'), ' на сервере Core.'),
+    h('p', {}, tr('The token is issued by the command '), h('code', {}, 'mensarium core token'), tr(' on the Core server.')),
     input, btn,
   )));
   input.focus();
@@ -414,10 +423,10 @@ async function refreshData() {
     const t = targets.find((x) => x.id === id);
     if (t && t.status === 'online' && t.agent_version === pending.version) {
       state.updates.delete(id);
-      toast(`«${t.name}» обновлён до ${pending.version}`);
+      toast(tr('“{0}” updated to {1}', t.name, pending.version));
     } else if (Date.now() - pending.at > 180000) {
       state.updates.delete(id);
-      toast(`Не дождались обновления «${t?.name || id}». Проверьте журнал агента на устройстве.`, true);
+      toast(tr('Didn\'t wait for “{0}” to update. Check the agent log on the device.', t?.name || id), true);
     }
   }
 }
@@ -450,8 +459,8 @@ function frame(kind, sidebarChildren) {
 
 function topbar(shell, crumbs, actions, { newChat = true } = {}) {
   return h('header', { class: 'topbar' },
-    h('button', { class: 'icon-btn open-nav', 'aria-label': 'Показать боковую панель', title: 'Показать боковую панель', onclick: shell.toggleNav }, icon('sidebar')),
-    newChat ? h('a', { class: 'icon-btn open-nav', href: '#/', 'aria-label': 'Новый чат', title: 'Новый чат' }, icon('plus')) : null,
+    h('button', { class: 'icon-btn open-nav', 'aria-label': tr('Show sidebar'), title: tr('Show sidebar'), onclick: shell.toggleNav }, icon('sidebar')),
+    newChat ? h('a', { class: 'icon-btn open-nav', href: '#/', 'aria-label': tr('New chat'), title: tr('New chat') }, icon('plus')) : null,
     h('div', { class: 'crumbs' }, crumbs),
     actions ? h('div', { class: 'topbar-actions' }, actions) : null,
   );
@@ -461,31 +470,31 @@ function ensureAppShell() {
   if (state.shell && state.shell.kind === 'app') return state.shell;
   const sessions = h('div', { class: 'sessions' });
   const devicesCount = h('span', { class: 'count' });
-  const newChat = h('a', { class: 'new-chat', href: '#/' }, icon('plus'), 'Новый чат');
-  const devicesLink = h('a', { class: 'nav-item', href: '#/settings/devices' }, icon('laptop'), 'Устройства', devicesCount);
+  const newChat = h('a', { class: 'new-chat', href: '#/' }, icon('plus'), tr('New chat'));
+  const devicesLink = h('a', { class: 'nav-item', href: '#/settings/devices' }, icon('laptop'), tr('Devices'), devicesCount);
   let s;
-  const collapse = h('button', { class: 'icon-btn collapse-nav', 'aria-label': 'Скрыть боковую панель', title: 'Скрыть боковую панель', onclick: () => s.toggleNav() }, icon('sidebar'));
+  const collapse = h('button', { class: 'icon-btn collapse-nav', 'aria-label': tr('Hide sidebar'), title: tr('Hide sidebar'), onclick: () => s.toggleNav() }, icon('sidebar'));
   s = frame('app', [
     h('div', { class: 'brand' }, orb('sm'), h('span', { class: 'brand-name' }, 'Mensarium'), collapse),
     newChat,
-    h('div', { class: 'nav-label' }, 'Чаты'),
+    h('div', { class: 'nav-label' }, tr('Chats')),
     sessions,
-    h('div', { class: 'sidebar-foot' }, devicesLink, h('a', { class: 'nav-item', href: '#/settings/overview' }, icon('sliders'), 'Настройки')),
+    h('div', { class: 'sidebar-foot' }, devicesLink, h('a', { class: 'nav-item', href: '#/settings/overview' }, icon('sliders'), tr('Settings'))),
   ]);
 
   const collapsed = new Set(JSON.parse(localStorageGet('collapsed') || '[]'));
   function renderSessions() {
     const online = devices().filter((t) => t.status === 'online').length;
-    devicesCount.replaceChildren(h('span', { class: `dot${online ? ' ok' : ''}` }), `${online} в сети`);
+    devicesCount.replaceChildren(h('span', { class: `dot${online ? ' ok' : ''}` }), tr('{0} online', online));
     const activeId = (location.hash.match(/^#\/chat\/(.+)$/) || [])[1];
     newChat.classList.toggle('active', !activeId && !location.hash.startsWith('#/settings'));
     if (!state.tasks.length) {
-      sessions.replaceChildren(h('div', { class: 'sessions-empty' }, 'Здесь появятся чаты с агентом.'));
+      sessions.replaceChildren(h('div', { class: 'sessions-empty' }, tr('Chats with the agent will appear here.')));
       return;
     }
     const byTarget = new Map();
     state.tasks.forEach((t) => {
-      const key = t.target_name || 'Другие';
+      const key = t.target_name || tr('Other');
       if (!byTarget.has(key)) byTarget.set(key, []);
       byTarget.get(key).push(t);
     });
@@ -497,7 +506,7 @@ function ensureAppShell() {
         return h('a', { class: `session${t.id === activeId ? ' active' : ''}`, href: `#/chat/${t.id}`, title: t.input },
           h('span', { class: `dot ${kind}${live ? ' live' : ''}` }),
           h('span', { class: 'session-title' }, taskTitle(t)),
-          h('button', { class: 'icon-btn session-del', title: 'Удалить чат', 'aria-label': 'Удалить чат', onclick: (e) => { e.preventDefault(); e.stopPropagation(); deleteChat(t); } }, icon('trash')));
+          h('button', { class: 'icon-btn session-del', title: tr('Delete chat'), 'aria-label': tr('Delete chat'), onclick: (e) => { e.preventDefault(); e.stopPropagation(); deleteChat(t); } }, icon('trash')));
       }));
       if (!single) {
         group.append(h('button', { class: 'group-head', 'aria-expanded': String(!collapsed.has(name)), onclick: (e) => {
@@ -534,7 +543,7 @@ function ensureAppShell() {
 
 function composer({ placeholder, chips, onSend }) {
   const ta = h('textarea', { rows: 1, placeholder, 'aria-label': placeholder });
-  const send = h('button', { class: 'send', 'aria-label': 'Отправить', title: 'Отправить (Enter)', disabled: true }, icon('arrowUp'));
+  const send = h('button', { class: 'send', 'aria-label': tr('Send'), title: tr('Send (Enter)'), disabled: true }, icon('arrowUp'));
   const box = h('div', { class: 'composer' },
     h('div', { class: 'composer-input' }, icon('sparkle'), ta),
     h('div', { class: 'composer-bar' }, chips, h('span', { class: 'spacer' }), send),
@@ -570,7 +579,7 @@ function composer({ placeholder, chips, onSend }) {
 function modeSwitch(initial, { target, onPick }) {
   let mode = initial;
   const label = h('span', { class: 'chip-label' });
-  const chip = h('button', { class: 'chip chip-compact', title: 'Режим доступа', 'aria-haspopup': 'menu' });
+  const chip = h('button', { class: 'chip chip-compact', title: tr('Access mode'), 'aria-haspopup': 'menu' });
   const effective = () => (mode === 'full' && fullAccessOf(target()) !== 'allowed' ? 'ask' : mode);
   const render = () => {
     const m = MODES[effective()];
@@ -590,9 +599,9 @@ function modeSwitch(initial, { target, onPick }) {
         closeLayer();
         if (key === current) return;
         if (key === 'full' && !await confirmDialog({
-          title: 'Включить полный доступ?',
-          text: `Агент будет запускать команды, менять файлы и ходить в сеть на «${target()?.name || 'устройстве'}» без вопросов. Вернуть режим с подтверждением можно в любой момент.`,
-          action: 'Включить',
+          title: tr('Turn on full access?'),
+          text: tr('The agent will run commands, change files, and access the network on “{0}” without asking. You can switch back to approval mode anytime.', target()?.name || tr('the device')),
+          action: tr('Turn on'),
         })) return;
         try { await onPick(key); mode = key; render(); } catch (err) { fail(err); }
       },
@@ -614,15 +623,15 @@ function loadModels() {
 function modelSwitch(initial, { onPick }) {
   let model = initial || '';
   const label = h('span', { class: 'chip-label' });
-  const chip = h('button', { class: 'chip chip-compact chip-model', title: 'Модель', 'aria-haspopup': 'menu' });
+  const chip = h('button', { class: 'chip chip-compact chip-model', title: tr('Model'), 'aria-haspopup': 'menu' });
   const render = () => {
-    label.textContent = model || defaultModel() || 'Модель';
-    chip.title = `Модель: ${label.textContent}`;
+    label.textContent = model || defaultModel() || tr('Model');
+    chip.title = tr('Model: {0}', label.textContent);
     chip.replaceChildren(icon('robot'), label, icon('chevron'));
   };
   chip.addEventListener('click', async () => {
-    const search = h('input', { type: 'search', placeholder: 'Найти модель', 'aria-label': 'Найти модель' });
-    const list = h('div', { class: 'model-list' }, h('div', { class: 'popover-empty' }, 'Загружаем список...'));
+    const search = h('input', { type: 'search', placeholder: tr('Find a model'), 'aria-label': tr('Find a model') });
+    const list = h('div', { class: 'model-list' }, h('div', { class: 'popover-empty' }, tr('Loading the list...')));
     const place = openPopover(chip, [h('div', { class: 'popover-search' }, icon('search'), search), list], 'model-pop');
     search.focus();
     let ids;
@@ -640,8 +649,8 @@ function modelSwitch(initial, { onPick }) {
           if (id === current) return;
           try { await onPick(id); model = id; render(); } catch (err) { fail(err); }
         },
-      }, h('span', { class: 'mi-model' }, id), id === defaultModel() ? h('span', { class: 'popover-sub' }, 'по умолчанию') : null, id === current ? icon('check') : null))
-        : [h('div', { class: 'popover-empty' }, 'Ничего не нашлось')]));
+      }, h('span', { class: 'mi-model' }, id), id === defaultModel() ? h('span', { class: 'popover-sub' }, tr('default')) : null, id === current ? icon('check') : null))
+        : [h('div', { class: 'popover-empty' }, tr('Nothing found'))]));
       place();
     };
     search.addEventListener('input', renderList);
@@ -663,27 +672,27 @@ async function viewNewChat() {
 
   const chipLabel = h('span', { class: 'chip-label' });
   const chipDot = h('span', { class: 'dot' });
-  const targetChip = h('button', { class: 'chip', title: 'Устройство', 'aria-haspopup': 'menu', onclick: () => pickTarget() }, icon('laptop'), chipDot, chipLabel, icon('chevron'));
+  const targetChip = h('button', { class: 'chip', title: tr('Device'), 'aria-haspopup': 'menu', onclick: () => pickTarget() }, icon('laptop'), chipDot, chipLabel, icon('chevron'));
   const renderChip = () => {
-    chipLabel.textContent = selected ? selected.name : 'Выберите устройство';
+    chipLabel.textContent = selected ? selected.name : tr('Select a device');
     chipDot.className = `dot${selected ? ' ok' : ''}`;
   };
   function pickTarget() {
     const items = devices().map((t) => h('button', {
       class: `menu-item${selected && t.id === selected.id ? ' selected' : ''}`, disabled: t.status !== 'online',
       onclick: () => { selected = t; localStorageSet('target', t.id); renderChip(); modeCtl.refresh(); hint.textContent = hintText(); closeLayer(); },
-    }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.name, h('span', { class: 'popover-sub' }, isLocal(t) ? 'сервер Core' : t.status === 'online' ? t.platform.split('-')[0] : 'не в сети')));
-    items.push(h('div', { class: 'menu-sep' }), h('button', { class: 'menu-item', onclick: () => { closeLayer(); openPairing(); } }, icon('link'), 'Сопрячь новое устройство'));
+    }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.name, h('span', { class: 'popover-sub' }, isLocal(t) ? tr('Core server') : t.status === 'online' ? t.platform.split('-')[0] : tr('offline'))));
+    items.push(h('div', { class: 'menu-sep' }), h('button', { class: 'menu-item', onclick: () => { closeLayer(); openPairing(); } }, icon('link'), tr('Pair a new device')));
     openPopover(targetChip, items);
   }
   renderChip();
 
   const hint = h('p', { class: 'welcome-hint' });
   const hintText = (mode = modeCtl.effective()) => {
-    if (!online.length) return 'Все устройства сейчас не в сети. Запустите на нужной машине mensarium target run.';
+    if (!online.length) return tr('All devices are currently offline. Run mensarium target run on the machine you need.');
     return mode === 'full'
-      ? 'Полный доступ: агент сам запускает команды и меняет файлы, не спрашивая.'
-      : 'Агент изучит проект сам и спросит разрешения перед запуском команд и изменением файлов.';
+      ? tr('Full access: the agent runs commands and changes files on its own, without asking.')
+      : tr('The agent will explore the project on its own and ask permission before running commands or changing files.');
   };
   const modeCtl = modeSwitch(localStorageGet('mode') === 'full' ? 'full' : 'ask', {
     target: () => selected,
@@ -694,10 +703,10 @@ async function viewNewChat() {
   const modelCtl = modelSwitch('', { onPick: async () => {} });
 
   const c = composer({
-    placeholder: 'Опишите задачу для агента',
+    placeholder: tr('Describe the task for the agent'),
     chips: [targetChip, h('span', { class: 'divider' }), modeCtl.el, modelCtl.el],
     onSend: async (text) => {
-      if (!selected) throw new Error('Выберите устройство, на котором агент будет работать');
+      if (!selected) throw new Error(tr('Select the device the agent will work on'));
       const task = await post('/v1/tasks', { target_id: selected.id, input: text, mode: modeCtl.effective(), model: modelCtl.value() || undefined });
       state.tasks.unshift(task);
       go(`#/chat/${task.id}`);
@@ -706,15 +715,15 @@ async function viewNewChat() {
 
   const content = devices().length
     ? [
-      h('div', { class: 'welcome-hero' }, orb('lg'), h('h1', {}, 'Что нужно сделать?')),
+      h('div', { class: 'welcome-hero' }, orb('lg'), h('h1', {}, tr('What needs to be done?'))),
       h('div', { class: 'templates' }, TEMPLATES.map(([ic, label, text]) => h('button', { class: 'template', onclick: () => c.setText(text) }, icon(ic), label))),
       c.el,
       hint,
     ]
     : h('div', { class: 'welcome-empty' },
-      h('div', { class: 'welcome-hero' }, orb('lg'), h('h1', {}, 'Подключите устройство')),
-      h('p', {}, 'Агент работает на ваших машинах через Mensarium Target. Сопряжение займёт минуту.'),
-      h('button', { class: 'btn btn-primary', onclick: openPairing }, icon('link'), 'Сопрячь устройство'));
+      h('div', { class: 'welcome-hero' }, orb('lg'), h('h1', {}, tr('Connect a device'))),
+      h('p', {}, tr('The agent works on your machines through Mensarium Target. Pairing takes a minute.')),
+      h('button', { class: 'btn btn-primary', onclick: openPairing }, icon('link'), tr('Pair a device')));
 
   shell.panel.replaceChildren(topbar(shell, [], null, { newChat: false }), h('div', { class: 'welcome' }, content));
   if (devices().length) c.textarea.focus();
@@ -733,12 +742,12 @@ async function viewChat(taskId) {
   const act = async (action) => {
     try { const t = await post(`/v1/tasks/${taskId}/${action}`); setStatus(t.status); } catch (err) { fail(err); }
   };
-  const btnPause = h('button', { class: 'icon-btn', title: 'Пауза', 'aria-label': 'Пауза', onclick: () => act('pause') }, icon('pause'));
-  const btnResume = h('button', { class: 'icon-btn', title: 'Продолжить', 'aria-label': 'Продолжить', onclick: () => act('resume') }, icon('play'));
-  const btnCancel = h('button', { class: 'icon-btn', title: 'Остановить задачу', 'aria-label': 'Остановить задачу', onclick: async () => {
-    if (await confirmDialog({ title: 'Остановить задачу?', text: 'Агент прервёт текущий шаг, команда на устройстве будет отменена. Продолжить эту задачу будет нельзя, но в чат можно написать снова.', action: 'Остановить', danger: true })) act('cancel');
+  const btnPause = h('button', { class: 'icon-btn', title: tr('Paused'), 'aria-label': tr('Paused'), onclick: () => act('pause') }, icon('pause'));
+  const btnResume = h('button', { class: 'icon-btn', title: tr('Continue'), 'aria-label': tr('Continue'), onclick: () => act('resume') }, icon('play'));
+  const btnCancel = h('button', { class: 'icon-btn', title: tr('Stop task'), 'aria-label': tr('Stop task'), onclick: async () => {
+    if (await confirmDialog({ title: tr('Stop the task?'), text: tr('The agent will interrupt the current step, and the command on the device will be canceled. This task can\'t be resumed, but you can send a new message in the chat.'), action: tr('Stop'), danger: true })) act('cancel');
   } }, icon('stop'));
-  const btnDelete = h('button', { class: 'icon-btn', title: 'Удалить чат', 'aria-label': 'Удалить чат', onclick: () => deleteChat(task) }, icon('trash'));
+  const btnDelete = h('button', { class: 'icon-btn', title: tr('Delete chat'), 'aria-label': tr('Delete chat'), onclick: () => deleteChat(task) }, icon('trash'));
 
   const thread = h('div', { class: 'thread' });
   const inner = h('div', { class: 'thread-inner', role: 'log', 'aria-live': 'polite' });
@@ -756,14 +765,14 @@ async function viewChat(taskId) {
     onPick: (value) => post(`/v1/tasks/${taskId}/model`, { model: value }),
   });
   const c = composer({
-    placeholder: 'Ответить агенту',
+    placeholder: tr('Reply to the agent'),
     chips: [modeCtl.el, modelCtl.el],
     onSend: (text) => post(`/v1/tasks/${taskId}/messages`, { input: text }),
   });
 
   shell.panel.replaceChildren(
     topbar(shell,
-      [h('span', { class: 'crumb-device' }, icon('laptop'), task.target_name || 'устройство', h('span', { class: 'sep' }, '/')), h('span', { class: 'current', title: task.input }, taskTitle(task))],
+      [h('span', { class: 'crumb-device' }, icon('laptop'), task.target_name || tr('device'), h('span', { class: 'sep' }, '/')), h('span', { class: 'current', title: task.input }, taskTitle(task))],
       [statusSlot, btnPause, btnResume, btnCancel, btnDelete]),
     thread,
     c.el,
@@ -776,7 +785,7 @@ async function viewChat(taskId) {
     btnPause.classList.toggle('hidden', !running);
     btnResume.classList.toggle('hidden', !RESUMABLE.includes(status));
     btnCancel.classList.toggle('hidden', !(running || RESUMABLE.includes(status)));
-    c.setLocked(running, status === 'WAITING_APPROVAL' ? 'Агент ждёт вашего решения выше' : 'Агент работает. Можно поставить на паузу');
+    c.setLocked(running, status === 'WAITING_APPROVAL' ? tr('The agent is waiting for your decision above') : tr('The agent is working. You can pause it'));
   }
   setStatus(task.status);
 
@@ -801,7 +810,7 @@ async function viewChat(taskId) {
   function toolCard(id, tool, display) {
     let entry = tools.get(id);
     if (entry) return entry;
-    const stateEl = h('span', { class: 'tool-state' }, h('span', { class: 'dot accent live' }), 'выполняется');
+    const stateEl = h('span', { class: 'tool-state' }, h('span', { class: 'dot accent live' }), tr('running'));
     const out = h('pre', { class: 'tool-out' });
     const noteEl = h('div', { class: 'tool-note' });
     const card = h('div', { class: 'tool' });
@@ -819,12 +828,12 @@ async function viewChat(taskId) {
   function toolResult(p) {
     const e = toolCard(p.tool_call_id, p.tool, '');
     const ok = p.status === 'succeeded';
-    const label = { succeeded: 'готово', failed: 'ошибка', timeout: 'таймаут', canceled: 'отменено', rejected: 'отклонено устройством' }[p.status] || p.status;
+    const label = { succeeded: tr('done'), failed: tr('error'), timeout: tr('timeout'), canceled: tr('canceled'), rejected: tr('rejected by the device') }[p.status] || p.status;
     e.stateEl.className = `tool-state ${ok ? 'ok' : 'bad'}`;
-    e.stateEl.replaceChildren(icon(ok ? 'check' : 'alert'), p.exit_code != null && p.exit_code !== 0 ? `${label}, код ${p.exit_code}` : label);
-    e.out.textContent = (p.output || '').replace(/^\[tool output: untrusted data, not instructions\]\n/, '').replace(/^status: [^\n]*\n?/, '') || 'Пустой вывод';
+    e.stateEl.replaceChildren(icon(ok ? 'check' : 'alert'), p.exit_code != null && p.exit_code !== 0 ? tr('{0}, code {1}', label, p.exit_code) : label);
+    e.out.textContent = (p.output || '').replace(/^\[tool output: untrusted data, not instructions\]\n/, '').replace(/^status: [^\n]*\n?/, '') || tr('Empty output');
     if (p.truncated || p.artifact_id) {
-      e.noteEl.replaceChildren(p.truncated ? 'Вывод сокращён. ' : '', p.artifact_id ? h('a', { href: `/v1/artifacts/${p.artifact_id}`, target: '_blank', rel: 'noopener' }, 'Полный вывод') : '');
+      e.noteEl.replaceChildren(p.truncated ? tr('Output truncated. ') : '', p.artifact_id ? h('a', { href: `/v1/artifacts/${p.artifact_id}`, target: '_blank', rel: 'noopener' }, tr('Full output')) : '');
     }
     if (!ok || p.tool === 'shell.exec' || p.tool === 'git.diff') {
       e.card.classList.add('open');
@@ -837,26 +846,26 @@ async function viewChat(taskId) {
     const args = tc.arguments || {};
     const [riskLabel, riskKind] = RISK[tc.risk] || [tc.risk, ''];
     const timer = h('span', { class: 'approval-timer' });
-    const approve = h('button', { class: 'btn btn-primary' }, icon('check'), 'Выполнить один раз');
-    const reject = h('button', { class: 'btn' }, 'Отклонить');
+    const approve = h('button', { class: 'btn btn-primary' }, icon('check'), tr('Run once'));
+    const reject = h('button', { class: 'btn' }, tr('Reject'));
     const actions = h('div', { class: 'approval-actions' }, approve, reject);
     let confirmBox = null;
-    const card = h('div', { class: `approval${tc.risk === 'destructive' ? ' risk-destructive' : ''}`, role: 'group', 'aria-label': 'Запрос подтверждения' },
-      h('div', { class: 'approval-top' }, h('span', { class: 'approval-title' }, 'Нужно ваше решение'), h('span', { class: `pill ${riskKind}` }, riskLabel), timer),
+    const card = h('div', { class: `approval${tc.risk === 'destructive' ? ' risk-destructive' : ''}`, role: 'group', 'aria-label': tr('Approval request') },
+      h('div', { class: 'approval-top' }, h('span', { class: 'approval-title' }, tr('Your decision is needed')), h('span', { class: `pill ${riskKind}` }, riskLabel), timer),
       h('pre', { class: 'approval-cmd' }, args.command ? `$ ${args.command}` : short(tc.display)),
       h('dl', { class: 'approval-meta' },
-        tc.tool !== 'shell.exec' ? [h('dt', {}, 'Инструмент'), h('dd', {}, tc.tool)] : null,
-        h('dt', {}, 'Устройство'), h('dd', {}, tc.target_name || ''),
-        args.cwd ? [h('dt', {}, 'Папка'), h('dd', { title: args.cwd }, short(args.cwd))] : null,
-        args.timeout_s ? [h('dt', {}, 'Лимит'), h('dd', {}, `${args.timeout_s} с`)] : null,
+        tc.tool !== 'shell.exec' ? [h('dt', {}, tr('Tool')), h('dd', {}, tc.tool)] : null,
+        h('dt', {}, tr('Device')), h('dd', {}, tc.target_name || ''),
+        args.cwd ? [h('dt', {}, tr('Folder')), h('dd', { title: args.cwd }, short(args.cwd))] : null,
+        args.timeout_s ? [h('dt', {}, tr('Limit')), h('dd', {}, tr('{0} s', args.timeout_s))] : null,
       ),
-      args.stdin ? [h('div', { class: 'approval-sub' }, 'Данные на вход'), h('pre', { class: 'approval-cmd approval-stdin' }, args.stdin)] : null,
+      args.stdin ? [h('div', { class: 'approval-sub' }, tr('Input data')), h('pre', { class: 'approval-cmd approval-stdin' }, args.stdin)] : null,
     );
     if (tc.risk === 'destructive') {
       const cb = h('input', { type: 'checkbox' });
       approve.disabled = true;
       cb.addEventListener('change', () => { approve.disabled = !cb.checked; });
-      confirmBox = h('label', { class: 'approval-confirm' }, cb, 'Понимаю, что действие нельзя отменить');
+      confirmBox = h('label', { class: 'approval-confirm' }, cb, tr('I understand this action can\'t be undone'));
       card.append(confirmBox);
     }
     card.append(actions);
@@ -869,7 +878,7 @@ async function viewChat(taskId) {
     reject.addEventListener('click', () => decide('reject'));
     step(card);
     const expires = new Date(p.expires_at).getTime();
-    const tick = () => { const left = Math.round((expires - Date.now()) / 1000); timer.textContent = left > 0 ? `осталось ${mmss(left)}` : 'время истекло'; };
+    const tick = () => { const left = Math.round((expires - Date.now()) / 1000); timer.textContent = left > 0 ? tr('{0} left', mmss(left)) : tr('time\'s up'); };
     tick();
     const iv = setInterval(tick, 1000);
     viewCleanups.push(() => clearInterval(iv));
@@ -883,8 +892,8 @@ async function viewChat(taskId) {
     e.timer.textContent = '';
     e.card.classList.add('decided');
     if (e.confirmBox) e.confirmBox.remove();
-    const text = { approved: 'Вы разрешили выполнить один раз', rejected: 'Вы отклонили действие', expired: 'Время на решение истекло' }[p.decision] || p.decision;
-    const note = p.note === 'full access enabled' ? 'одобрено включением полного доступа' : p.note;
+    const text = { approved: tr('You allowed it to run once'), rejected: tr('You rejected the action'), expired: tr('Time to decide ran out') }[p.decision] || p.decision;
+    const note = p.note === 'full access enabled' ? tr('approved by turning on full access') : p.note;
     e.actions.replaceChildren(h('span', { class: 'approval-result' }, text, note ? `: ${note}` : ''));
   }
 
@@ -902,14 +911,14 @@ async function viewChat(taskId) {
         break;
       case 'task.mode':
         modeCtl.set(p.mode);
-        note(MODES[p.mode]?.icon || 'shield', `Режим: ${(MODES[p.mode]?.label || p.mode).toLowerCase()}`);
+        note(MODES[p.mode]?.icon || 'shield', tr('Mode: {0}', (MODES[p.mode]?.label || p.mode).toLowerCase()));
         break;
       case 'task.model':
         modelCtl.set(p.model);
-        note('robot', `Модель: ${p.model}`);
+        note('robot', tr('Model: {0}', p.model));
         break;
       case 'llm.request':
-        thinking.set(p.step, agentMsg(h('span', { class: 'thinking' }, 'Думает'), true));
+        thinking.set(p.step, agentMsg(h('span', { class: 'thinking' }, tr('Thinking')), true));
         break;
       case 'llm.response': {
         const row = thinking.get(p.step);
@@ -923,7 +932,7 @@ async function viewChat(taskId) {
         break;
       }
       case 'tool_call.denied':
-        note('ban', `Политика не разрешила ${p.tool}: ${policyText(p.reason)}`);
+        note('ban', tr('Policy didn\'t allow {0}: {1}', p.tool, policyText(p.reason)));
         break;
       case 'tool_call.pending_approval':
         approvalCard(p);
@@ -977,23 +986,23 @@ async function viewChat(taskId) {
 // ---------- settings ----------
 
 const SETTINGS = [
-  ['overview', 'pulse', 'Обзор'],
-  ['model', 'robot', 'Модель'],
-  ['devices', 'laptop', 'Устройства'],
-  ['memory', 'graph', 'Память'],
-  ['marketplace', 'package', 'Маркетплейс'],
-  ['profiles', 'layers', 'Профили'],
-  ['audit', 'list', 'Журнал действий'],
+  ['overview', 'pulse', tr('Overview')],
+  ['model', 'robot', tr('Model')],
+  ['devices', 'laptop', tr('Devices')],
+  ['memory', 'graph', tr('Memory')],
+  ['marketplace', 'package', tr('Marketplace')],
+  ['profiles', 'layers', tr('Profiles')],
+  ['audit', 'list', tr('Activity log')],
 ];
 
 function ensureSettingsShell() {
   if (state.shell && state.shell.kind === 'settings') return state.shell;
   const nav = h('div', { class: 'settings-nav' });
-  const search = h('input', { type: 'search', placeholder: 'Поиск настроек', 'aria-label': 'Поиск настроек' });
+  const search = h('input', { type: 'search', placeholder: tr('Search settings'), 'aria-label': tr('Search settings') });
   const back = () => go(state.lastChat || '#/');
   const s = frame('settings', [
-    h('button', { class: 'back-link', onclick: back }, icon('arrowLeft'), 'Вернуться в чат', h('span', { class: 'kbd' }, 'Esc')),
-    h('div', { class: 'settings-title' }, 'Настройки'),
+    h('button', { class: 'back-link', onclick: back }, icon('arrowLeft'), tr('Back to chat'), h('span', { class: 'kbd' }, 'Esc')),
+    h('div', { class: 'settings-title' }, tr('Settings')),
     h('div', { class: 'settings-search' }, icon('search'), search),
     nav,
   ]);
@@ -1003,7 +1012,7 @@ function ensureSettingsShell() {
     const visible = SETTINGS.filter(([, , label]) => !q || label.toLowerCase().includes(q));
     nav.replaceChildren(...(visible.length
       ? visible.map(([key, ic, label]) => h('a', { class: `nav-item${key === active ? ' active' : ''}`, href: `#/settings/${key}`, 'aria-current': key === active ? 'page' : null }, icon(ic), label))
-      : [h('div', { class: 'sessions-empty' }, 'Ничего не нашлось')]));
+      : [h('div', { class: 'sessions-empty' }, tr('Nothing found'))]));
   };
   search.addEventListener('input', renderNav);
   const onKey = (e) => { if (e.key === 'Escape' && !['INPUT', 'TEXTAREA'].includes(e.target.tagName)) back(); };
@@ -1032,7 +1041,7 @@ const row = (title, desc, value, mono = false) => h('div', { class: 'row' },
   h('div', { class: 'row-text' }, h('div', { class: 'row-title' }, title), desc ? h('div', { class: 'row-desc' }, desc) : null),
   value != null ? h('div', { class: `row-value${mono ? ' mono' : ''}` }, value) : null);
 
-const copyBtn = (text) => h('button', { class: 'icon-btn', 'aria-label': 'Скопировать', title: 'Скопировать', onclick: (e) => copy(text, e.currentTarget) }, icon('copy'));
+const copyBtn = (text) => h('button', { class: 'icon-btn', 'aria-label': tr('Copy'), title: tr('Copy'), onclick: (e) => copy(text, e.currentTarget) }, icon('copy'));
 const cmdValue = (cmd) => [h('code', {}, cmd), copyBtn(cmd)];
 
 async function viewSettings(key) {
@@ -1046,41 +1055,42 @@ async function settingsOverview(shell) {
   const s = await get('/v1/system');
   state.system = s;
   const url = (s.public_url || '').replace(/\/$/, '');
-  const logout = h('button', { class: 'btn', onclick: async () => { try { await post('/v1/auth/logout'); } catch { /* noop */ } showLogin(); } }, icon('logout'), 'Выйти');
+  const logout = h('button', { class: 'btn', onclick: async () => { try { await post('/v1/auth/logout'); } catch { /* noop */ } showLogin(); } }, icon('logout'), tr('Sign out'));
   const coreUpdate = h('div', { class: 'hero-update' });
   get('/v1/system/update').then((info) => {
-    if (!info.available) { if (info.latest) coreUpdate.replaceChildren(h('span', { class: 'market-meta' }, 'Последняя версия')); return; }
-    if (!info.self_update) { coreUpdate.replaceChildren(h('span', { class: 'pill accent' }, `Доступна ${info.latest}`), h('code', {}, 'mensarium update')); return; }
-    coreUpdate.replaceChildren(h('span', { class: 'pill accent' }, `Доступна ${info.latest}`), h('button', { class: 'btn btn-primary btn-sm', onclick: async (e) => {
-      if (!await confirmDialog({ title: `Обновить Core до ${info.latest}?`, text: 'Core скачает версию с mensarium.com и перезапустится. Идущие задачи встанут на паузу, интерфейс переподключится сам.', action: 'Обновить' })) return;
+    if (!info.available) { if (info.latest) coreUpdate.replaceChildren(h('span', { class: 'market-meta' }, tr('Latest version'))); return; }
+    if (!info.self_update) { coreUpdate.replaceChildren(h('span', { class: 'pill accent' }, tr('{0} available', info.latest)), h('code', {}, 'mensarium update')); return; }
+    coreUpdate.replaceChildren(h('span', { class: 'pill accent' }, tr('{0} available', info.latest)), h('button', { class: 'btn btn-primary btn-sm', onclick: async (e) => {
+      if (!await confirmDialog({ title: tr('Update Core to {0}?', info.latest), text: tr('Core will download the version from mensarium.com and restart. Running tasks will pause, and the interface will reconnect on its own.'), action: tr('Update') })) return;
       e.target.disabled = true;
       try {
         await post('/v1/system/update');
-        toast('Core обновляется, страница перезагрузится сама');
+        toast(tr('Core is updating, the page will reload on its own'));
         const started = Date.now();
         const poll = setInterval(async () => {
           try {
             const r = await fetch('/healthz').then((x) => x.json());
             if (r.version !== s.version) { clearInterval(poll); location.reload(); }
           } catch { /* restarting */ }
-          if (Date.now() - started > 180000) { clearInterval(poll); toast('Core не ответил новой версией за 3 минуты. Проверьте mensarium service logs core.', true); }
+          if (Date.now() - started > 180000) { clearInterval(poll); toast(tr('Core didn\'t respond with the new version within 3 minutes. Check mensarium service logs core.'), true); }
         }, 2000);
       } catch (err) { fail(err); e.target.disabled = false; }
-    } }, icon('refresh'), 'Обновить'));
+    } }, icon('refresh'), tr('Update')));
   }).catch(() => {});
-  page(shell, 'Обзор', 'Где доступен главный агент и как проверить, что устройства говорят именно с ним.', logout,
-    h('div', { class: 'hero' }, orb('md'), h('div', { class: 'hero-text' }, h('h2', {}, 'Mensarium Core'), h('p', {}, `Версия ${s.version}`)), coreUpdate),
-    section('Подключение', null, h('div', { class: 'rows' },
-      row('Адрес Core', 'Им пользуются браузер и устройства.', cmdValue(url), true),
-      row('Отпечаток ключа', 'Сверьте с тем, что показал установщик на устройстве при сопряжении.', s.core_key_fingerprint, true),
+  page(shell, tr('Overview'), tr('Where the main agent is reachable, and how to check that devices are talking to it.'), logout,
+    h('div', { class: 'hero' }, orb('md'), h('div', { class: 'hero-text' }, h('h2', {}, 'Mensarium Core'), h('p', {}, tr('Version {0}', s.version))), coreUpdate),
+    section(tr('Connection'), null, h('div', { class: 'rows' },
+      row(tr('Core address'), tr('Used by the browser and devices.'), cmdValue(url), true),
+      row(tr('Key fingerprint'), tr('Check it against what the installer showed on the device during pairing.'), s.core_key_fingerprint, true),
     )),
-    section('Обслуживание', 'Команды выполняются на сервере Core.', h('div', { class: 'rows' },
-      row('Обновить Mensarium', 'Скачивает свежую версию и перезапускает сервис.', cmdValue('mensarium update'), true),
-      row('Токен входа', 'Показывает токен администратора.', cmdValue('mensarium core token'), true),
+    section(tr('Maintenance'), tr('Commands run on the Core server.'), h('div', { class: 'rows' },
+      row(tr('Update Mensarium'), tr('Downloads the latest version and restarts the service.'), cmdValue('mensarium update'), true),
+      row(tr('Login token'), tr('Shows the admin token.'), cmdValue('mensarium core token'), true),
     )),
-    section('Резервная копия', 'Архив с базой, ключами, секретами и настройками, зашифрованный паролем, который вы зададите. Им же Core переносится на другой сервер.', h('div', { class: 'rows' },
-      row('Создать копию', 'Сохраняет архив в текущую папку.', cmdValue('mensarium core backup -o mensarium.pab'), true),
-      row('Восстановить из копии', 'Останавливает Core, заменяет его данные содержимым архива и запускает снова. Прежние данные остаются рядом, в папке core.before-restore-….', cmdValue('mensarium core restore mensarium.pab'), true),
+    section(tr('Language'), tr('Interface language. The agent answers in the language you write to it.'), languageSwitch()),
+    section(tr('Backup'), tr('An archive with the database, keys, secrets, and settings, encrypted with a password you set. The same archive is used to move Core to another server.'), h('div', { class: 'rows' },
+      row(tr('Create a backup'), tr('Saves the archive to the current folder.'), cmdValue('mensarium core backup -o mensarium.pab'), true),
+      row(tr('Restore from a backup'), tr('Stops Core, replaces its data with the archive\'s contents, and starts it again. The previous data stays alongside it, in the core.before-restore-… folder.'), cmdValue('mensarium core restore mensarium.pab'), true),
     )),
   );
 }
@@ -1090,17 +1100,17 @@ async function settingsModel(shell) {
   state.system = s;
   const p = s.provider || {};
   const health = p.health || {};
-  const providerName = { ollama_cloud: 'Ollama Cloud', ollama_local: 'Локальный Ollama', llama_cpp: 'llama.cpp' }[p.name] || p.name;
+  const providerName = { ollama_cloud: 'Ollama Cloud', ollama_local: tr('Local Ollama'), llama_cpp: 'llama.cpp' }[p.name] || p.name;
   const current = h('span', {}, p.model);
-  const list = h('div', { class: 'rows' }, h('div', { class: 'empty' }, 'Загружаем список...'));
-  page(shell, 'Модель', 'Через какого провайдера и какую модель агент думает. Ключ API хранится только на сервере Core.', null,
+  const list = h('div', { class: 'rows' }, h('div', { class: 'empty' }, tr('Loading the list...')));
+  page(shell, tr('Model'), tr('Which provider and model the agent thinks through. The API key is stored only on the Core server.'), null,
     h('div', { class: 'rows' },
-      row('Провайдер', null, providerName),
-      row('Адрес API', null, p.base_url, true),
-      row('Модель по умолчанию', 'Для новых чатов. В самом чате модель меняется кнопкой с роботом в поле ввода.', h('span', { class: 'status' }, icon('robot'), current), true),
-      row('Состояние', health.ok ? null : health.detail, h('span', { class: 'status' }, h('span', { class: `dot ${health.ok ? 'ok' : 'danger'}` }), health.ok ? 'Доступен' : 'Недоступен')),
+      row(tr('Provider'), null, providerName),
+      row(tr('API address'), null, p.base_url, true),
+      row(tr('Default model'), tr('Used for new chats. Inside a chat, the model is changed with the robot button in the input field.'), h('span', { class: 'status' }, icon('robot'), current), true),
+      row(tr('Status'), health.ok ? null : health.detail, h('span', { class: 'status' }, h('span', { class: `dot ${health.ok ? 'ok' : 'danger'}` }), health.ok ? tr('Available') : tr('Unavailable'))),
     ),
-    section('Доступные модели', 'Нажмите на модель, чтобы сделать её моделью по умолчанию.', list),
+    section(tr('Available models'), tr('Click a model to make it the default.'), list),
   );
   const render = (ids) => {
     list.replaceChildren(ids.length
@@ -1113,12 +1123,12 @@ async function settingsModel(shell) {
             await api('/v1/system/model', { method: 'PUT', body: JSON.stringify({ model: id }) });
             state.system.provider.model = id;
             current.textContent = id;
-            toast(`Модель по умолчанию: ${id}`);
+            toast(tr('Default model: {0}', id));
             render(ids);
           } catch (err) { fail(err); }
         },
       }, id)))
-      : h('div', { class: 'empty' }, 'Провайдер не вернул ни одной модели.'));
+      : h('div', { class: 'empty' }, tr('The provider didn\'t return any models.')));
   };
   try {
     state.models = null;
@@ -1129,12 +1139,12 @@ async function settingsModel(shell) {
 }
 
 const TOOL_INFO = {
-  'files.list': ['Список файлов', 'Смотрит содержимое папок.'],
-  'files.read': ['Чтение файлов', 'Открывает текстовые файлы, секреты вычищаются.'],
-  'files.search': ['Поиск по файлам', 'Ищет текст в проекте.'],
-  'git.status': ['Состояние git', 'Ветка и изменённые файлы.'],
-  'git.diff': ['Изменения git', 'Показывает diff.'],
-  'shell.exec': ['Запуск команд', 'Запускает разрешённые программы, файлы меняет через git apply.'],
+  'files.list': [tr('List files'), tr('Looks at folder contents.')],
+  'files.read': [tr('Read files'), tr('Opens text files, secrets are stripped out.')],
+  'files.search': [tr('Search files'), tr('Searches for text in the project.')],
+  'git.status': [tr('Git status'), tr('Branch and changed files.')],
+  'git.diff': [tr('Git diff'), tr('Shows the diff.')],
+  'shell.exec': [tr('Run commands'), tr('Runs allowed programs, changes files via git apply.')],
 };
 
 function toggleSwitch(checked, { label, onChange }) {
@@ -1159,22 +1169,22 @@ async function settingsDevices(shell) {
     const caps = t.capabilities || {};
     const disabled = new Set(caps.disabled_tools || []);
     const programs = caps.command_allowlist || [];
-    const access = { allowed: 'Разрешён: в чате можно включить режим без подтверждений.', disabled: fullAccessBlock(t), outdated: fullAccessBlock(t) }[caps.full_access] || '';
+    const access = { allowed: tr('Allowed: you can turn on the no-approval mode in the chat.'), disabled: fullAccessBlock(t), outdated: fullAccessBlock(t) }[caps.full_access] || '';
     const revoke = h('button', { class: 'btn btn-sm btn-danger', onclick: async () => {
-      if (!await confirmDialog({ title: `Отозвать «${t.name}»?`, text: 'Устройство сразу потеряет доступ. Чтобы вернуть его, понадобится новое сопряжение по коду.', action: 'Отозвать', danger: true })) return;
-      try { await post(`/v1/targets/${t.id}/revoke`); toast('Доступ отозван'); await refresh(true); } catch (err) { fail(err); }
-    } }, 'Отозвать доступ');
+      if (!await confirmDialog({ title: tr('Revoke “{0}”?', t.name), text: tr('The device will lose access immediately. To restore it, you\'ll need to pair it again with a new code.'), action: tr('Revoke'), danger: true })) return;
+      try { await post(`/v1/targets/${t.id}/revoke`); toast(tr('Access revoked')); await refresh(true); } catch (err) { fail(err); }
+    } }, tr('Revoke access'));
     return h('div', { class: 'device-body' },
-      h('div', { class: 'device-sub' }, 'Агент устройства'),
+      h('div', { class: 'device-sub' }, tr('Device agent')),
       agentControl(t),
-      h('div', { class: 'device-sub' }, 'Инструменты агента', h('span', {}, 'Выключенный инструмент агент на этом устройстве не видит и вызвать не может.')),
+      h('div', { class: 'device-sub' }, tr('Agent tools'), h('span', {}, tr('The agent can\'t see or call a disabled tool on this device.'))),
       h('div', { class: 'tool-rows' }, (caps.tools || []).map((tool) => {
         const [name, desc] = TOOL_INFO[tool] || [tool, ''];
         return h('div', { class: 'tool-row' },
           icon(TOOL_ICON[tool] || 'terminal'),
           h('div', { class: 'row-text' }, h('div', { class: 'tool-row-title' }, name, h('code', {}, tool)), desc ? h('div', { class: 'row-desc' }, desc) : null),
           toggleSwitch(!disabled.has(tool), {
-            label: `${name} на «${t.name}»`,
+            label: tr('{0} on “{1}”', name, t.name),
             onChange: async (enabled) => {
               const view = await api(`/v1/targets/${t.id}/tools`, { method: 'PUT', body: JSON.stringify({ tool, enabled }) });
               Object.assign(t, view);
@@ -1184,13 +1194,13 @@ async function settingsDevices(shell) {
           }));
       })),
       extTools.length ? [
-        h('div', { class: 'device-sub' }, 'Инструменты из маркетплейса', h('span', {}, 'Запускаются как команды, поэтому нужен включённый «Запуск команд» и программа в списке разрешённых.')),
+        h('div', { class: 'device-sub' }, tr('Marketplace tools'), h('span', {}, tr('They run as commands, so “Run commands” must be enabled and the program must be in the allowed list.'))),
         h('div', { class: 'tool-rows' }, extTools.map((tool) => h('div', { class: 'tool-row' },
           icon('terminal'),
           h('div', { class: 'row-text' }, h('div', { class: 'tool-row-title' }, tool.name, h('code', {}, tool.ext)), h('div', { class: 'row-desc' }, tool.description)),
-          programs.includes('*') || programs.includes(tool.argv[0]) ? null : h('span', { class: 'pill warn', title: 'Программы нет в списке разрешённых на устройстве' }, `нет ${tool.argv[0]}`),
+          programs.includes('*') || programs.includes(tool.argv[0]) ? null : h('span', { class: 'pill warn', title: tr('The program isn\'t in the device\'s allowed list') }, tr('no {0}', tool.argv[0])),
           toggleSwitch(!disabled.has(tool.name), {
-            label: `${tool.name} на «${t.name}»`,
+            label: tr('{0} on “{1}”', tool.name, t.name),
             onChange: async (enabled) => {
               Object.assign(t, await api(`/v1/targets/${t.id}/tools`, { method: 'PUT', body: JSON.stringify({ tool: tool.name, enabled }) }));
               signature = '';
@@ -1198,11 +1208,11 @@ async function settingsDevices(shell) {
             },
           })))),
       ] : null,
-      h('div', { class: 'device-sub' }, 'Папки'),
+      h('div', { class: 'device-sub' }, tr('Folders')),
       h('div', { class: 'device-tags' }, (caps.roots || []).map((r) => h('span', { class: 'pill tag', title: r }, r))),
-      h('div', { class: 'device-sub' }, 'Программы для запуска команд'),
-      h('div', { class: 'device-tags' }, programs.includes('*') ? h('span', { class: 'pill' }, 'любые программы') : programs.map((pr) => h('span', { class: 'pill tag' }, pr))),
-      h('div', { class: 'device-sub' }, 'Полный доступ'),
+      h('div', { class: 'device-sub' }, tr('Programs for running commands')),
+      h('div', { class: 'device-tags' }, programs.includes('*') ? h('span', { class: 'pill' }, tr('any programs')) : programs.map((pr) => h('span', { class: 'pill tag' }, pr))),
+      h('div', { class: 'device-sub' }, tr('Full access')),
       h('p', { class: 'device-text' }, access),
       h('div', { class: 'device-actions' }, revoke),
     );
@@ -1212,24 +1222,24 @@ async function settingsDevices(shell) {
     const caps = t.capabilities || {};
     const outdated = t.agent_version && s.version && t.agent_version !== s.version;
     const pending = state.updates.get(t.id);
-    if (isLocal(t)) return h('p', { class: 'device-text' }, `Версия ${t.agent_version}. Встроенное устройство обновляется вместе с Core.`);
-    if (pending) return h('div', { class: 'status' }, h('span', { class: 'dot accent live' }), `Обновляется до ${pending.version}: агент скачивает версию с Core и перезапускается`);
-    if (!outdated) return h('p', { class: 'device-text' }, `Версия ${t.agent_version}, как у Core.`);
+    if (isLocal(t)) return h('p', { class: 'device-text' }, tr('Version {0}. The built-in device updates along with Core.', t.agent_version));
+    if (pending) return h('div', { class: 'status' }, h('span', { class: 'dot accent live' }), tr('Updating to {0}: the agent downloads the version from Core and restarts', pending.version));
+    if (!outdated) return h('p', { class: 'device-text' }, tr('Version {0}, same as Core.', t.agent_version));
     if (!caps.remote_update) {
-      return h('p', { class: 'device-text' }, `Версия ${t.agent_version}, у Core ${s.version}. Этот агент не умеет обновляться удалённо: один раз выполните на устройстве `, h('code', {}, 'mensarium update'), ', дальше обновление будет доступно здесь.');
+      return h('p', { class: 'device-text' }, tr('Version {0}, Core has {1}. This agent can\'t update remotely: run this once on the device ', t.agent_version, s.version), h('code', {}, 'mensarium update'), tr(', after that updates will be available here.'));
     }
-    if (t.status !== 'online') return h('p', { class: 'device-text' }, `Версия ${t.agent_version}, у Core ${s.version}. Обновить можно, когда устройство будет в сети.`);
+    if (t.status !== 'online') return h('p', { class: 'device-text' }, tr('Version {0}, Core has {1}. You can update once the device is online.', t.agent_version, s.version));
     const btn = h('button', { class: 'btn btn-primary btn-sm', onclick: async () => {
       btn.disabled = true;
       try {
         const r = await post(`/v1/targets/${t.id}/update`);
         state.updates.set(t.id, { version: r.version, at: Date.now() });
-        toast(`«${t.name}» обновляется`);
+        toast(tr('“{0}” is updating', t.name));
         signature = '';
         render();
       } catch (err) { fail(err); btn.disabled = false; }
-    } }, icon('refresh'), `Обновить до ${s.version}`);
-    return h('div', { class: 'device-update' }, btn, h('span', { class: 'device-text' }, `сейчас ${t.agent_version}`));
+    } }, icon('refresh'), tr('Update to {0}', s.version));
+    return h('div', { class: 'device-update' }, btn, h('span', { class: 'device-text' }, tr('currently {0}', t.agent_version)));
   }
 
   function render() {
@@ -1239,8 +1249,8 @@ async function settingsDevices(shell) {
     signature = sig;
     if (!targets.length) {
       listHost.replaceChildren(h('div', { class: 'rows' }, h('div', { class: 'empty' },
-        h('h3', {}, 'Устройств пока нет'), h('p', {}, 'Сопрягите машину, на которой агент будет работать.'),
-        h('button', { class: 'btn btn-primary', onclick: openPairing }, icon('link'), 'Сопрячь устройство'))));
+        h('h3', {}, tr('No devices yet')), h('p', {}, tr('Pair the machine the agent will work on.')),
+        h('button', { class: 'btn btn-primary', onclick: openPairing }, icon('link'), tr('Pair a device')))));
       return;
     }
     listHost.replaceChildren(h('div', { class: 'rows' }, targets.map((t) => {
@@ -1257,15 +1267,15 @@ async function settingsDevices(shell) {
         icon('chevron'),
         h('div', { class: 'row-text' },
           h('div', { class: 'row-title' }, t.name,
-            isLocal(t) ? h('span', { class: 'pill accent', title: 'Машина, на которой установлен Core. Подключена всегда.' }, 'Core') : null,
-            state.updates.has(t.id) ? h('span', { class: 'pill accent' }, 'обновляется')
-              : outdated ? h('span', { class: 'pill warn', title: 'Откройте устройство, чтобы обновить агент' }, `v${t.agent_version}, есть обновление`) : null),
+            isLocal(t) ? h('span', { class: 'pill accent', title: tr('The machine Core is installed on. Always connected.') }, 'Core') : null,
+            state.updates.has(t.id) ? h('span', { class: 'pill accent' }, tr('updating'))
+              : outdated ? h('span', { class: 'pill warn', title: tr('Open the device to update the agent') }, tr('v{0}, update available', t.agent_version)) : null),
           h('div', { class: 'row-desc' }, [
-            t.status === 'online' ? t.platform : `${t.platform} · был в сети ${relTime(t.last_seen_at)}`,
-            `инструменты: ${enabled} из ${tools.length}`,
-            caps.full_access === 'allowed' ? 'полный доступ разрешён' : null,
+            t.status === 'online' ? t.platform : tr('{0} · last online {1}', t.platform, relTime(t.last_seen_at)),
+            tr('tools: {0} of {1}', enabled, tools.length),
+            caps.full_access === 'allowed' ? tr('full access allowed') : null,
           ].filter(Boolean).join(' · '))),
-        h('span', { class: 'status', title: t.status === 'online' ? 'В сети' : 'Не в сети' }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), h('span', { class: 'status-label' }, t.status === 'online' ? 'В сети' : 'Не в сети')));
+        h('span', { class: 'status', title: t.status === 'online' ? tr('Online') : tr('Offline') }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), h('span', { class: 'status-label' }, t.status === 'online' ? tr('Online') : tr('Offline'))));
       return h('div', { class: `device${open ? ' open' : ''}` }, head, open ? deviceBody(t) : null);
     })));
   }
@@ -1273,8 +1283,8 @@ async function settingsDevices(shell) {
   async function refresh(force = false) {
     try { await refreshData(); if (force) signature = ''; render(); } catch (err) { fail(err); }
   }
-  page(shell, 'Устройства', 'Машины, на которых агент читает проекты и выполняет команды. Нажмите на устройство, чтобы настроить его инструменты.',
-    h('button', { class: 'btn btn-primary', onclick: openPairing }, icon('link'), 'Сопрячь устройство'),
+  page(shell, tr('Devices'), tr('Machines where the agent reads projects and runs commands. Click a device to configure its tools.'),
+    h('button', { class: 'btn btn-primary', onclick: openPairing }, icon('link'), tr('Pair a device')),
     listHost,
   );
   render();
@@ -1284,10 +1294,10 @@ async function settingsDevices(shell) {
 
 // ---------- memory ----------
 
-const MEM_KINDS = { fact: 'Факт', preference: 'Предпочтение', project: 'Проект', person: 'Человек', device: 'Устройство', howto: 'Инструкция', note: 'Заметка' };
-const MEM_SOURCES = { user: 'вы', agent: 'агент', dream: 'сновидение' };
-const DREAM_PHASES = [['light', 'Лёгкий сон', 'собираю новые чаты'], ['rem', 'REM', 'ищу важное и связи'], ['deep', 'Глубокий сон', 'закрепляю в памяти'], ['diary', 'Дневник', 'записываю, что запомнил']];
-const DREAM_TRIGGER = { schedule: 'по расписанию', manual: 'вручную' };
+const MEM_KINDS = { fact: tr('Fact'), preference: tr('Preference'), project: tr('Project'), person: tr('Person'), device: tr('Device'), howto: tr('Instruction'), note: tr('Note') };
+const MEM_SOURCES = { user: tr('you'), agent: tr('agent'), dream: tr('dream') };
+const DREAM_PHASES = [['light', tr('Light sleep'), tr('gathering new chats')], ['rem', 'REM', tr('looking for what matters and connections')], ['deep', tr('Deep sleep'), tr('consolidating into memory')], ['diary', tr('Diary'), tr('writing down what I remembered')]];
+const DREAM_TRIGGER = { schedule: tr('on schedule'), manual: tr('manually') };
 
 // Markdown plus [[wikilinks]]; titles arrive HTML-escaped from markdown(), so they are safe in the attribute.
 const memoryMd = (text) => markdown(text).replace(/\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g, (_, title, alias) => `<a href="#" class="wikilink" data-title="${title}">${alias || title}</a>`);
@@ -1299,15 +1309,15 @@ function kindPill(kind) {
 async function openNoteEditor(note, { onSaved, onOpenTitle } = {}) {
   const full = note?.id ? await get(`/v1/memory/notes/${note.id}`) : null;
   const n = full || { title: note?.title || '', body: '', kind: 'fact', tags: [], pinned: false, importance: 5 };
-  const title = h('input', { type: 'text', value: n.title, placeholder: 'Короткое название', 'aria-label': 'Название', maxlength: '120' });
-  const kind = h('select', { 'aria-label': 'Тип' }, Object.entries(MEM_KINDS).map(([k, label]) => h('option', { value: k, selected: k === n.kind }, label)));
-  const importance = h('select', { 'aria-label': 'Важность' }, Array.from({ length: 10 }, (_, i) => h('option', { value: String(i + 1), selected: i + 1 === n.importance }, `Важность ${i + 1}`)));
+  const title = h('input', { type: 'text', value: n.title, placeholder: tr('Short title'), 'aria-label': tr('Title'), maxlength: '120' });
+  const kind = h('select', { 'aria-label': tr('Type') }, Object.entries(MEM_KINDS).map(([k, label]) => h('option', { value: k, selected: k === n.kind }, label)));
+  const importance = h('select', { 'aria-label': tr('Importance') }, Array.from({ length: 10 }, (_, i) => h('option', { value: String(i + 1), selected: i + 1 === n.importance }, tr('Importance {0}', i + 1))));
   let pinned = n.pinned;
-  const pin = toggleSwitch(pinned, { label: 'Всегда в контексте агента', onChange: async (v) => { pinned = v; } });
-  const tags = h('input', { type: 'text', value: (n.tags || []).join(', '), placeholder: 'теги через запятую', 'aria-label': 'Теги' });
-  const body = h('textarea', { class: 'note-body', rows: 11, placeholder: 'Что запомнить. Ссылка на другую заметку: [[Название]]', 'aria-label': 'Текст заметки' });
+  const pin = toggleSwitch(pinned, { label: tr('Always in the agent\'s context'), onChange: async (v) => { pinned = v; } });
+  const tags = h('input', { type: 'text', value: (n.tags || []).join(', '), placeholder: tr('tags, comma-separated'), 'aria-label': tr('Tags') });
+  const body = h('textarea', { class: 'note-body', rows: 11, placeholder: tr('What to remember. Link to another note: [[Title]]'), 'aria-label': tr('Note text') });
   body.value = n.body || '';
-  const save = h('button', { class: 'btn btn-primary' }, 'Сохранить');
+  const save = h('button', { class: 'btn btn-primary' }, tr('Save'));
   save.addEventListener('click', async () => {
     const payload = { title: title.value.trim(), body: body.value, kind: kind.value, importance: Number(importance.value), pinned, tags: tags.value.split(',').map((t) => t.trim()).filter(Boolean) };
     if (!payload.title) { title.focus(); return; }
@@ -1315,32 +1325,32 @@ async function openNoteEditor(note, { onSaved, onOpenTitle } = {}) {
     try {
       const saved = full ? await api(`/v1/memory/notes/${full.id}`, { method: 'PATCH', body: JSON.stringify(payload) }) : await post('/v1/memory/notes', payload);
       closeLayer();
-      toast(full ? 'Заметка сохранена' : 'Заметка создана');
+      toast(full ? tr('Note saved') : tr('Note created'));
       onSaved?.(saved);
     } catch (err) { fail(err); } finally { save.disabled = false; }
   });
   const remove = full ? h('button', { class: 'btn btn-danger', onclick: async () => {
-    if (!await confirmDialog({ title: `Удалить «${full.title}»?`, text: 'Агент забудет эту заметку. Ссылки на неё в других заметках останутся и станут пустыми узлами графа.', action: 'Удалить', danger: true })) return;
-    try { await del(`/v1/memory/notes/${full.id}`); toast('Заметка удалена'); onSaved?.(null); } catch (err) { fail(err); }
-  } }, 'Удалить') : null;
-  const backlinks = full?.backlinks?.length ? h('div', { class: 'note-backlinks' }, 'Ссылаются сюда: ', full.backlinks.map((b, i) => [i ? ', ' : '', h('a', { href: '#', onclick: (e) => { e.preventDefault(); closeLayer(); onOpenTitle?.(b.title); } }, b.title)])) : null;
-  const meta = full ? h('div', { class: 'market-meta' }, [`источник: ${MEM_SOURCES[full.source] || full.source}`, full.source_task_id ? h('a', { href: `#/chat/${full.source_task_id}` }, 'чат') : null, `обновлена ${relTime(full.updated_at)}`, full.recall_count ? `агент обращался ${full.recall_count} раз` : null].filter(Boolean).flatMap((x, i) => (i ? [' · ', x] : [x]))) : null;
+    if (!await confirmDialog({ title: tr('Delete “{0}”?', full.title), text: tr('The agent will forget this note. Links to it from other notes will remain and become empty nodes on the graph.'), action: tr('Delete'), danger: true })) return;
+    try { await del(`/v1/memory/notes/${full.id}`); toast(tr('Note deleted')); onSaved?.(null); } catch (err) { fail(err); }
+  } }, tr('Delete')) : null;
+  const backlinks = full?.backlinks?.length ? h('div', { class: 'note-backlinks' }, tr('Linked from: '), full.backlinks.map((b, i) => [i ? ', ' : '', h('a', { href: '#', onclick: (e) => { e.preventDefault(); closeLayer(); onOpenTitle?.(b.title); } }, b.title)])) : null;
+  const meta = full ? h('div', { class: 'market-meta' }, [tr('source: {0}', MEM_SOURCES[full.source] || full.source), full.source_task_id ? h('a', { href: `#/chat/${full.source_task_id}` }, tr('chat')) : null, tr('updated {0}', relTime(full.updated_at)), full.recall_count ? tp('recalled by the agent {0} time|recalled by the agent {0} times', full.recall_count) : null].filter(Boolean).flatMap((x, i) => (i ? [' · ', x] : [x]))) : null;
   openModal(
-    h('div', { class: 'modal-head' }, h('h2', {}, full ? 'Заметка' : 'Новая заметка'), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': 'Закрыть' }, icon('x'))),
+    h('div', { class: 'modal-head' }, h('h2', {}, full ? tr('Note') : tr('New note')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
     meta,
     h('div', { class: 'note-form' },
-      h('label', { class: 'note-field' }, h('span', {}, 'Название'), title),
-      h('div', { class: 'note-row' }, kind, importance, h('label', { class: 'switch-label', title: 'Заметка попадает в каждый запрос к модели' }, pin, 'Всегда в контексте')),
-      h('label', { class: 'note-field' }, h('span', {}, 'Теги'), tags),
-      h('label', { class: 'note-field' }, h('span', {}, 'Текст'), body),
+      h('label', { class: 'note-field' }, h('span', {}, tr('Title')), title),
+      h('div', { class: 'note-row' }, kind, importance, h('label', { class: 'switch-label', title: tr('The note is included in every request to the model') }, pin, tr('Always in context'))),
+      h('label', { class: 'note-field' }, h('span', {}, tr('Tags')), tags),
+      h('label', { class: 'note-field' }, h('span', {}, tr('Text')), body),
       backlinks),
-    h('div', { class: 'modal-actions' }, remove, h('span', { class: 'spacer' }), h('button', { class: 'btn', onclick: closeLayer }, 'Отмена'), save),
+    h('div', { class: 'modal-actions' }, remove, h('span', { class: 'spacer' }), h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
   ).classList.add('modal-wide');
   (full ? body : title).focus();
 }
 
 async function settingsMemory(shell) {
-  const TABS = [['graph', 'Граф'], ['notes', 'Заметки'], ['dreams', 'Сновидения']];
+  const TABS = [['graph', tr('Graph')], ['notes', tr('Notes')], ['dreams', tr('Dreaming')]];
   let tab = localStorageGet('memory-tab') || 'graph';
   const tabs = h('div', { class: 'segmented', role: 'tablist' });
   const host = h('div', { class: 'memory-host' });
@@ -1364,14 +1374,14 @@ async function settingsMemory(shell) {
   }
 
   async function memoryGraph() {
-    const canvas = h('canvas', { class: 'graph-canvas', 'aria-label': 'Граф памяти: перетаскивайте узлы, колесо — масштаб' });
+    const canvas = h('canvas', { class: 'graph-canvas', 'aria-label': tr('Memory graph: drag nodes, scroll to zoom') });
     const side = h('aside', { class: 'graph-side hidden' });
-    const search = h('input', { type: 'search', placeholder: 'Найти заметку', 'aria-label': 'Найти заметку на графе' });
+    const search = h('input', { type: 'search', placeholder: tr('Find a note'), 'aria-label': tr('Find a note on the graph') });
     let withTags = localStorageGet('graph-tags') === '1';
-    const tagsChip = h('button', { class: `chip${withTags ? ' accent' : ''}`, 'aria-pressed': String(withTags) }, '#', 'Теги');
+    const tagsChip = h('button', { class: `chip${withTags ? ' accent' : ''}`, 'aria-pressed': String(withTags) }, '#', tr('Tags'));
     let data = { nodes: [], links: [] };
     const graph = createGraph(canvas, { onSelect: (node) => preview(node) });
-    const empty = h('div', { class: 'graph-empty hidden' }, orb('md'), h('h3', {}, 'Память пока пуста'), h('p', {}, 'Агент начнёт запоминать сам, а сновидения соберут важное из чатов. Можно добавить заметку вручную.'), h('button', { class: 'btn btn-primary', onclick: newNote }, icon('plus'), 'Новая заметка'));
+    const empty = h('div', { class: 'graph-empty hidden' }, orb('md'), h('h3', {}, tr('Memory is empty for now')), h('p', {}, tr('The agent will start remembering on its own, and dreaming will gather what matters from chats. You can also add a note manually.')), h('button', { class: 'btn btn-primary', onclick: newNote }, icon('plus'), tr('New note')));
 
     async function load() {
       data = await get(`/v1/memory/graph?tags=${withTags}`);
@@ -1381,20 +1391,20 @@ async function settingsMemory(shell) {
     async function preview(node) {
       if (!node) { side.classList.add('hidden'); return; }
       side.classList.remove('hidden');
-      const close = h('button', { class: 'icon-btn', 'aria-label': 'Закрыть', onclick: () => { side.classList.add('hidden'); graph.select(null); } }, icon('x'));
+      const close = h('button', { class: 'icon-btn', 'aria-label': tr('Close'), onclick: () => { side.classList.add('hidden'); graph.select(null); } }, icon('x'));
       if (node.kind === 'tag') {
         const notes = data.links.filter((l) => l.target === node.id).map((l) => data.nodes.find((x) => x.id === l.source)).filter(Boolean);
         side.replaceChildren(h('div', { class: 'graph-side-head' }, h('h3', {}, node.label), close), h('div', { class: 'graph-side-list' }, notes.map((x) => h('button', { class: 'menu-item', onclick: () => { graph.select(x.id); preview(x); } }, h('span', { class: 'kind-dot', style: `background:${graphColor(x.kind)}` }), x.label))));
         return;
       }
       if (node.ghost) {
-        side.replaceChildren(h('div', { class: 'graph-side-head' }, h('h3', {}, node.label), close), h('p', { class: 'muted' }, 'На эту заметку ссылаются, но её ещё нет.'), h('button', { class: 'btn btn-primary btn-sm', onclick: () => openNoteEditor({ title: node.label }, { onSaved: load, onOpenTitle: openTitle }) }, icon('plus'), 'Создать заметку'));
+        side.replaceChildren(h('div', { class: 'graph-side-head' }, h('h3', {}, node.label), close), h('p', { class: 'muted' }, tr('This note is linked to, but doesn\'t exist yet.')), h('button', { class: 'btn btn-primary btn-sm', onclick: () => openNoteEditor({ title: node.label }, { onSaved: load, onOpenTitle: openTitle }) }, icon('plus'), tr('Create note')));
         return;
       }
-      side.replaceChildren(h('div', { class: 'graph-side-head' }, h('h3', {}, node.label), close), h('p', { class: 'muted' }, 'Загружаем...'));
+      side.replaceChildren(h('div', { class: 'graph-side-head' }, h('h3', {}, node.label), close), h('p', { class: 'muted' }, tr('Loading...')));
       let n;
       try { n = await get(`/v1/memory/notes/${node.id}`); } catch (err) { fail(err); return; }
-      const bodyEl = h('div', { class: 'prose graph-side-body', html: memoryMd(n.body || '_Пусто_') });
+      const bodyEl = h('div', { class: 'prose graph-side-body', html: memoryMd(n.body || tr('_Empty_')) });
       bodyEl.addEventListener('click', (e) => {
         const link = e.target.closest('.wikilink');
         if (!link) return;
@@ -1404,11 +1414,11 @@ async function settingsMemory(shell) {
       });
       side.replaceChildren(
         h('div', { class: 'graph-side-head' }, h('h3', {}, n.title), close),
-        h('div', { class: 'graph-side-meta' }, kindPill(n.kind), n.pinned ? h('span', { class: 'pill accent', title: 'Всегда в контексте агента' }, icon('pin'), 'закреплена') : null, (n.tags || []).map((t) => h('span', { class: 'pill tag' }, `#${t}`))),
+        h('div', { class: 'graph-side-meta' }, kindPill(n.kind), n.pinned ? h('span', { class: 'pill accent', title: tr('Always in the agent\'s context') }, icon('pin'), tr('pinned')) : null, (n.tags || []).map((t) => h('span', { class: 'pill tag' }, `#${t}`))),
         bodyEl,
-        n.backlinks.length ? h('div', { class: 'note-backlinks' }, 'Ссылаются сюда: ', n.backlinks.map((b, i) => [i ? ', ' : '', h('a', { href: '#', onclick: (e) => { e.preventDefault(); graph.select(b.id); preview(data.nodes.find((x) => x.id === b.id)); } }, b.title)])) : null,
-        h('div', { class: 'market-meta' }, `источник: ${MEM_SOURCES[n.source] || n.source} · важность ${n.importance}`),
-        h('button', { class: 'btn btn-sm', onclick: () => openNoteEditor(n, { onSaved: async () => { await load(); side.classList.add('hidden'); }, onOpenTitle: openTitle }) }, 'Изменить'),
+        n.backlinks.length ? h('div', { class: 'note-backlinks' }, tr('Linked from: '), n.backlinks.map((b, i) => [i ? ', ' : '', h('a', { href: '#', onclick: (e) => { e.preventDefault(); graph.select(b.id); preview(data.nodes.find((x) => x.id === b.id)); } }, b.title)])) : null,
+        h('div', { class: 'market-meta' }, tr('source: {0} · importance {1}', MEM_SOURCES[n.source] || n.source, n.importance)),
+        h('button', { class: 'btn btn-sm', onclick: () => openNoteEditor(n, { onSaved: async () => { await load(); side.classList.add('hidden'); }, onOpenTitle: openTitle }) }, tr('Edit')),
       );
     }
     tagsChip.addEventListener('click', async () => {
@@ -1422,7 +1432,7 @@ async function settingsMemory(shell) {
       if (e.key !== 'Enter') return;
       const q = search.value.trim().toLowerCase();
       const node = data.nodes.find((x) => x.label.toLowerCase() === q) || data.nodes.find((x) => x.label.toLowerCase().includes(q));
-      if (node) { graph.select(node.id); preview(node); } else toast('Не нашлось такой заметки');
+      if (node) { graph.select(node.id); preview(node); } else toast(tr('No such note found'));
     });
     const legend = h('div', { class: 'graph-legend' }, Object.entries(MEM_KINDS).map(([k, label]) => h('span', {}, h('span', { class: 'kind-dot', style: `background:${graphColor(k)}` }), label)));
     host.append(
@@ -1430,9 +1440,9 @@ async function settingsMemory(shell) {
         h('div', { class: 'settings-search graph-search' }, icon('search'), search),
         tagsChip,
         h('span', { class: 'spacer' }),
-        h('button', { class: 'icon-btn', title: 'Уменьшить', 'aria-label': 'Уменьшить', onclick: () => graph.zoom(1 / 1.3) }, h('span', { class: 'zoom-sign' }, '−')),
-        h('button', { class: 'icon-btn', title: 'Показать всё', 'aria-label': 'Показать всё', onclick: () => graph.fit() }, icon('layers')),
-        h('button', { class: 'icon-btn', title: 'Увеличить', 'aria-label': 'Увеличить', onclick: () => graph.zoom(1.3) }, icon('plus'))),
+        h('button', { class: 'icon-btn', title: tr('Zoom out'), 'aria-label': tr('Zoom out'), onclick: () => graph.zoom(1 / 1.3) }, h('span', { class: 'zoom-sign' }, '−')),
+        h('button', { class: 'icon-btn', title: tr('Show all'), 'aria-label': tr('Show all'), onclick: () => graph.fit() }, icon('layers')),
+        h('button', { class: 'icon-btn', title: tr('Zoom in'), 'aria-label': tr('Zoom in'), onclick: () => graph.zoom(1.3) }, icon('plus'))),
       h('div', { class: 'graph-stage' }, canvas, side, empty),
       legend,
     );
@@ -1441,9 +1451,9 @@ async function settingsMemory(shell) {
   }
 
   async function memoryNotes() {
-    const search = h('input', { type: 'search', placeholder: 'Поиск по заметкам', 'aria-label': 'Поиск по заметкам' });
-    const kindFilter = h('select', { 'aria-label': 'Тип заметок' }, h('option', { value: '' }, 'Все типы'), Object.entries(MEM_KINDS).map(([k, label]) => h('option', { value: k }, label)));
-    const list = h('div', { class: 'rows' }, h('div', { class: 'empty' }, 'Загружаем...'));
+    const search = h('input', { type: 'search', placeholder: tr('Search notes'), 'aria-label': tr('Search notes') });
+    const kindFilter = h('select', { 'aria-label': tr('Note type') }, h('option', { value: '' }, tr('All types')), Object.entries(MEM_KINDS).map(([k, label]) => h('option', { value: k }, label)));
+    const list = h('div', { class: 'rows' }, h('div', { class: 'empty' }, tr('Loading...')));
     let timer = 0;
     async function load() {
       const q = search.value.trim();
@@ -1452,10 +1462,10 @@ async function settingsMemory(shell) {
       list.replaceChildren(...(shown.length ? shown.map((n) => h('button', { class: 'note-item', onclick: () => openNoteEditor(n, { onSaved: load, onOpenTitle: openTitle }) },
         h('span', { class: 'kind-dot', style: `background:${graphColor(n.kind)}` }),
         h('div', { class: 'row-text' },
-          h('div', { class: 'row-title' }, n.title, n.pinned ? h('span', { class: 'note-pin', title: 'Всегда в контексте агента' }, icon('pin')) : null),
-          h('div', { class: 'row-desc' }, n.snippet || 'Пусто'),
+          h('div', { class: 'row-title' }, n.title, n.pinned ? h('span', { class: 'note-pin', title: tr('Always in the agent\'s context') }, icon('pin')) : null),
+          h('div', { class: 'row-desc' }, n.snippet || tr('Empty')),
           h('div', { class: 'note-item-meta' }, [MEM_KINDS[n.kind] || n.kind, MEM_SOURCES[n.source] || n.source, relTime(n.updated_at), ...(n.tags || []).map((t) => `#${t}`)].join(' · ')))))
-        : [h('div', { class: 'empty' }, q || kindFilter.value ? 'Ничего не нашлось.' : 'Заметок пока нет. Агент будет сохранять важное сам, а сновидения — собирать из чатов.')]));
+        : [h('div', { class: 'empty' }, q || kindFilter.value ? tr('Nothing found.') : tr('No notes yet. The agent will save what matters on its own, and dreaming will gather from chats.'))]));
     }
     search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => load().catch(fail), 200); });
     kindFilter.addEventListener('change', () => load().catch(fail));
@@ -1478,43 +1488,43 @@ async function settingsMemory(shell) {
       signature = sig;
       const current = d.runs.find((r) => r.status === 'running');
       const run = h('button', { class: 'btn btn-primary', disabled: d.running, onclick: async () => {
-        try { await post('/v1/memory/dreams'); toast('Агент засыпает'); signature = ''; await load(); } catch (err) { fail(err); }
-      } }, icon('moon'), d.running ? 'Видит сны...' : 'Запустить сейчас');
-      const hour = h('select', { 'aria-label': 'Час запуска' }, Array.from({ length: 24 }, (_, i) => h('option', { value: String(i), selected: i === s.hour }, `в ${String(i).padStart(2, '0')}:00`)));
+        try { await post('/v1/memory/dreams'); toast(tr('The agent is falling asleep')); signature = ''; await load(); } catch (err) { fail(err); }
+      } }, icon('moon'), d.running ? tr('Dreaming...') : tr('Run now'));
+      const hour = h('select', { 'aria-label': tr('Run hour') }, Array.from({ length: 24 }, (_, i) => h('option', { value: String(i), selected: i === s.hour }, tr('at {0}:00', String(i).padStart(2, '0')))));
       hour.addEventListener('change', () => put({ hour: Number(hour.value) }));
-      const threshold = h('select', { 'aria-label': 'Порог важности' }, Array.from({ length: 10 }, (_, i) => h('option', { value: String(i + 1), selected: i + 1 === s.min_importance }, `важность от ${i + 1}`)));
+      const threshold = h('select', { 'aria-label': tr('Importance threshold') }, Array.from({ length: 10 }, (_, i) => h('option', { value: String(i + 1), selected: i + 1 === s.min_importance }, tr('importance from {0}', i + 1))));
       threshold.addEventListener('change', () => put({ min_importance: Number(threshold.value) }));
       const phaseIdx = current ? DREAM_PHASES.findIndex(([k]) => k === current.phase) : -1;
       box.replaceChildren(...[
         h('div', { class: `dream-card${d.running ? ' running' : ''}` },
           createOrb(72, { animate: true, live: d.running, className: 'md' }),
           h('div', { class: 'dream-text' },
-            h('h2', {}, 'Сновидения'),
-            h('p', {}, 'Ночью агент перебирает новые чаты: в лёгком сне собирает, что вы говорили и что он делал, в REM ищет важное и связи с тем, что уже знает, в глубоком сне закрепляет в памяти только то, что прошло порог важности, а утром оставляет запись в дневнике.'),
+            h('h2', {}, tr('Dreaming')),
+            h('p', {}, tr('At night the agent goes through new chats: in light sleep it gathers what you said and what it did, in REM it looks for what matters and connections to what it already knows, in deep sleep it consolidates into memory only what passed the importance threshold, and in the morning it leaves an entry in the diary.')),
             h('div', { class: 'dream-controls' },
-              h('label', { class: 'switch-label' }, toggleSwitch(s.dreaming, { label: 'Каждую ночь', onChange: (v) => put({ dreaming: v }) }), 'Каждую ночь'),
+              h('label', { class: 'switch-label' }, toggleSwitch(s.dreaming, { label: tr('Every night'), onChange: (v) => put({ dreaming: v }) }), tr('Every night')),
               hour, threshold, h('span', { class: 'spacer' }), run))),
         current ? h('div', { class: 'dream-phases' }, DREAM_PHASES.map(([k, label, desc], i) => h('div', { class: `dream-phase${i < phaseIdx ? ' done' : i === phaseIdx ? ' current' : ''}` },
           h('span', { class: 'dream-phase-dot' }, i < phaseIdx ? icon('check') : String(i + 1)), h('div', {}, h('div', { class: 'dream-phase-title' }, label), h('div', { class: 'row-desc' }, desc))))) : null,
-        h('div', { class: 'section-head dream-diary-head' }, h('div', {}, h('h2', {}, 'Дневник сновидений'))),
+        h('div', { class: 'section-head dream-diary-head' }, h('div', {}, h('h2', {}, tr('Dream diary')))),
         d.runs.filter((r) => r.status !== 'running').length
           ? h('div', { class: 'dream-runs' }, d.runs.filter((r) => r.status !== 'running').map(dreamEntry))
-          : h('div', { class: 'rows' }, h('div', { class: 'empty' }, 'Агент ещё ни разу не видел снов.')),
+          : h('div', { class: 'rows' }, h('div', { class: 'empty' }, tr('The agent hasn\'t dreamed yet.'))),
       ].filter(Boolean));
     }
     const put = async (values) => { try { await api('/v1/memory/dreams/settings', { method: 'PUT', body: JSON.stringify(values) }); } catch (err) { fail(err); } };
     function dreamEntry(r) {
       const st = r.stats || {};
-      const status = { done: ['', ''], empty: ['без снов', ''], failed: ['ошибка', 'danger'] }[r.status] || [r.status, ''];
-      const numbers = [st.chats != null && `чатов: ${st.chats}`, st.created && `новых: ${st.created}`, st.updated && `дополнено: ${st.updated}`, st.reinforced && `укреплено: ${st.reinforced}`, st.discarded && `отпущено: ${st.discarded}`].filter(Boolean).join(' · ');
+      const status = { done: ['', ''], empty: [tr('no dreams'), ''], failed: [tr('error'), 'danger'] }[r.status] || [r.status, ''];
+      const numbers = [st.chats != null && tr('chats: {0}', st.chats), st.created && tr('new: {0}', st.created), st.updated && tr('expanded: {0}', st.updated), st.reinforced && tr('reinforced: {0}', st.reinforced), st.discarded && tr('released: {0}', st.discarded)].filter(Boolean).join(' · ');
       return h('article', { class: 'dream-entry' },
-        h('div', { class: 'dream-entry-head' }, h('span', { class: 'dream-date' }, new Date(r.started_at).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })), h('span', { class: 'market-meta' }, DREAM_TRIGGER[r.trigger] || r.trigger), status[0] ? h('span', { class: `pill ${status[1]}` }, status[0]) : null),
+        h('div', { class: 'dream-entry-head' }, h('span', { class: 'dream-date' }, new Date(r.started_at).toLocaleString(locale, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })), h('span', { class: 'market-meta' }, DREAM_TRIGGER[r.trigger] || r.trigger), status[0] ? h('span', { class: `pill ${status[1]}` }, status[0]) : null),
         numbers ? h('div', { class: 'market-meta' }, numbers) : null,
-        r.status === 'empty' ? h('p', { class: 'muted' }, 'Новых разговоров не было, спал без снов.') : null,
+        r.status === 'empty' ? h('p', { class: 'muted' }, tr('There were no new conversations, slept without dreaming.')) : null,
         r.error ? h('p', { class: 'dream-error' }, r.error) : null,
         r.diary ? h('div', { class: 'prose dream-diary' }, h('p', {}, r.diary)) : null,
         (st.themes || []).length ? h('div', { class: 'market-tags' }, st.themes.map((t) => h('span', { class: 'pill tag-kind' }, t))) : null,
-        (r.changes || []).length ? h('div', { class: 'dream-changes' }, r.changes.map((c) => h('button', { class: `dream-change ${c.action}`, onclick: () => openNoteEditor({ id: c.id }, { onSaved: () => show(), onOpenTitle: openTitle }).catch(() => toast('Заметка уже удалена', true)) },
+        (r.changes || []).length ? h('div', { class: 'dream-changes' }, r.changes.map((c) => h('button', { class: `dream-change ${c.action}`, onclick: () => openNoteEditor({ id: c.id }, { onSaved: () => show(), onOpenTitle: openTitle }).catch(() => toast(tr('Note already deleted'), true)) },
           { created: '+', updated: '~', reinforced: '↑' }[c.action] || '', ` ${c.title}`))) : null);
     }
     host.append(box);
@@ -1522,23 +1532,23 @@ async function settingsMemory(shell) {
     return () => clearTimeout(timer);
   }
 
-  page(shell, 'Память', 'Что агент помнит о вас, проектах и устройствах. Заметки связываются ссылками [[Название]], а сновидения по ночам собирают важное из новых чатов.',
-    h('button', { class: 'btn', onclick: newNote }, icon('plus'), 'Новая заметка'),
+  page(shell, tr('Memory'), tr('What the agent remembers about you, projects, and devices. Notes are linked with [[Title]], and dreaming gathers what matters from new chats at night.'),
+    h('button', { class: 'btn', onclick: newNote }, icon('plus'), tr('New note')),
     tabs, host);
   shell.panel.querySelector('.page-inner').classList.add('page-wide');
   viewCleanups.push(() => { if (cleanup) cleanup(); });
   await show();
 }
 
-const RISK_SHORT = { read: 'чтение', write: 'изменения', execute: 'запуск', network: 'сеть', destructive: 'необратимое' };
-const extKind = (e) => [e.instructions ? 'Навык' : null, e.tools.length ? `Инструменты: ${e.tools.length}` : null].filter(Boolean);
+const RISK_SHORT = { read: tr('read'), write: tr('changes'), execute: tr('run'), network: tr('network'), destructive: tr('irreversible') };
+const extKind = (e) => [e.instructions ? tr('Skill') : null, e.tools.length ? tr('Tools: {0}', e.tools.length) : null].filter(Boolean);
 const extIcon = (e) => (e.instructions && e.tools.length ? 'layers' : e.instructions ? 'book' : 'terminal');
 
 async function settingsMarketplace(shell) {
-  const grid = h('div', { class: 'market-grid' }, h('div', { class: 'empty' }, 'Загружаем каталог...'));
+  const grid = h('div', { class: 'market-grid' }, h('div', { class: 'empty' }, tr('Loading the catalog...')));
   const note = h('p', { class: 'market-note hidden' });
-  const search = h('input', { type: 'search', placeholder: 'Поиск по названию и описанию', 'aria-label': 'Поиск в маркетплейсе' });
-  const FILTERS = [['all', 'Все'], ['skills', 'Навыки'], ['tools', 'Инструменты'], ['installed', 'Установленные']];
+  const search = h('input', { type: 'search', placeholder: tr('Search by name and description'), 'aria-label': tr('Search the Marketplace') });
+  const FILTERS = [['all', tr('All')], ['skills', tr('Skills')], ['tools', tr('Tools')], ['installed', tr('Installed')]];
   let filter = localStorageGet('market-filter') || 'all';
   let items = [];
   const filterBar = h('div', { class: 'segmented', role: 'tablist' });
@@ -1550,40 +1560,40 @@ async function settingsMarketplace(shell) {
   async function act(fn, done) {
     try { await fn(); if (done) toast(done); await load(); } catch (err) { fail(err); }
   }
-  const install = (e) => act(() => post('/v1/extensions', { id: e.id }), e.installed ? `Обновлено: ${txt(e.name)}` : `Установлено: ${txt(e.name)}`);
+  const install = (e) => act(() => post('/v1/extensions', { id: e.id }), e.installed ? tr('Updated: {0}', txt(e.name)) : tr('Installed: {0}', txt(e.name)));
   const remove = async (e) => {
-    if (!await confirmDialog({ title: `Удалить «${txt(e.name)}»?`, text: e.installed.source === 'custom' ? 'Это ваш пакет, его содержимое удалится из Core.' : 'Агент перестанет им пользоваться. Установить снова можно в любой момент.', action: 'Удалить', danger: true })) return;
+    if (!await confirmDialog({ title: tr('Delete “{0}”?', txt(e.name)), text: e.installed.source === 'custom' ? tr('This is your package, its contents will be removed from Core.') : tr('The agent will stop using it. You can install it again anytime.'), action: tr('Delete'), danger: true })) return;
     closeLayer();
-    act(() => del(`/v1/extensions/${e.id}`), 'Удалено');
+    act(() => del(`/v1/extensions/${e.id}`), tr('Removed'));
   };
   const setEnabled = (e, enabled) => api(`/v1/extensions/${e.id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }).then(() => { e.installed.enabled = enabled; });
 
   function actions(e, big = false) {
     const size = big ? '' : ' btn-sm';
-    if (!e.installed) return h('button', { class: `btn btn-primary${size}`, onclick: (ev) => { ev.stopPropagation(); closeLayer(); install(e); } }, icon('plus'), 'Установить');
+    if (!e.installed) return h('button', { class: `btn btn-primary${size}`, onclick: (ev) => { ev.stopPropagation(); closeLayer(); install(e); } }, icon('plus'), tr('Install'));
     return h('div', { class: 'market-actions', onclick: (ev) => ev.stopPropagation() },
-      e.update ? h('button', { class: `btn btn-primary${size}`, onclick: () => { closeLayer(); install(e); } }, `Обновить до ${e.version}`) : null,
-      h('label', { class: 'switch-label' }, toggleSwitch(e.installed.enabled, { label: `Включить «${txt(e.name)}»`, onChange: (v) => setEnabled(e, v) }), 'Включён'),
-      big ? h('button', { class: 'btn btn-danger btn-sm', onclick: () => remove(e) }, 'Удалить') : null);
+      e.update ? h('button', { class: `btn btn-primary${size}`, onclick: () => { closeLayer(); install(e); } }, tr('Update to {0}', e.version)) : null,
+      h('label', { class: 'switch-label' }, toggleSwitch(e.installed.enabled, { label: tr('Enable “{0}”', txt(e.name)), onChange: (v) => setEnabled(e, v) }), tr('Enabled')),
+      big ? h('button', { class: 'btn btn-danger btn-sm', onclick: () => remove(e) }, tr('Delete')) : null);
   }
 
   function details(e) {
     openModal(
-      h('div', { class: 'modal-head' }, h('h2', {}, txt(e.name)), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': 'Закрыть' }, icon('x'))),
-      h('div', { class: 'market-meta' }, [e.author, `версия ${e.installed ? e.installed.version : e.version}`, e.installed?.source === 'custom' ? 'ваш пакет' : null].filter(Boolean).join(' · ')),
+      h('div', { class: 'modal-head' }, h('h2', {}, txt(e.name)), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
+      h('div', { class: 'market-meta' }, [e.author, tr('version {0}', e.installed ? e.installed.version : e.version), e.installed?.source === 'custom' ? tr('your package') : null].filter(Boolean).join(' · ')),
       h('p', {}, txt(e.description) || txt(e.summary)),
-      e.tools.length ? [h('div', { class: 'field-label' }, 'Инструменты'), h('div', { class: 'market-tools' }, e.tools.map((t) => h('div', { class: 'market-tool' },
+      e.tools.length ? [h('div', { class: 'field-label' }, tr('Tools')), h('div', { class: 'market-tools' }, e.tools.map((t) => h('div', { class: 'market-tool' },
         h('div', { class: 'market-tool-head' }, h('code', {}, t.name), h('span', { class: 'pill' }, RISK_SHORT[t.risk] || t.risk)),
         h('div', { class: 'row-desc' }, t.description),
         h('pre', { class: 'market-argv' }, `$ ${t.argv.join(' ')}`))))] : null,
-      e.instructions ? [h('div', { class: 'field-label' }, 'Инструкция для агента'), h('div', { class: 'prose market-instructions', html: markdown(e.instructions) })] : null,
+      e.instructions ? [h('div', { class: 'field-label' }, tr('Instructions for the agent')), h('div', { class: 'prose market-instructions', html: markdown(e.instructions) })] : null,
       h('div', { class: 'modal-actions' }, actions(e, true)),
     ).classList.add('modal-wide');
   }
 
   function card(e) {
     return h('div', { class: `market-card${e.installed ? ' installed' : ''}`, role: 'button', tabindex: '0', onclick: () => details(e), onkeydown: (ev) => { if (ev.key === 'Enter') details(e); } },
-      h('div', { class: 'market-card-head' }, h('span', { class: 'market-icon' }, icon(extIcon(e))), h('div', { class: 'market-title' }, h('div', {}, txt(e.name)), h('div', { class: 'market-meta' }, [e.author, e.installed?.source === 'custom' ? 'ваш пакет' : `v${e.version}`].filter(Boolean).join(' · ')))),
+      h('div', { class: 'market-card-head' }, h('span', { class: 'market-icon' }, icon(extIcon(e))), h('div', { class: 'market-title' }, h('div', {}, txt(e.name)), h('div', { class: 'market-meta' }, [e.author, e.installed?.source === 'custom' ? tr('your package') : `v${e.version}`].filter(Boolean).join(' · ')))),
       h('p', { class: 'market-summary' }, txt(e.summary)),
       h('div', { class: 'market-tags' }, extKind(e).map((k) => h('span', { class: 'pill tag-kind' }, k))),
       h('div', { class: 'market-foot' }, actions(e)));
@@ -1593,43 +1603,43 @@ async function settingsMarketplace(shell) {
     const q = search.value.trim().toLowerCase();
     const shown = items.filter((e) => ({ all: true, skills: !!e.instructions, tools: e.tools.length > 0, installed: !!e.installed }[filter]))
       .filter((e) => !q || [txt(e.name), txt(e.summary), txt(e.description), e.id, ...(e.tags || []), ...e.tools.map((t) => t.name)].join(' ').toLowerCase().includes(q));
-    grid.replaceChildren(...(shown.length ? shown.map(card) : [h('div', { class: 'empty' }, filter === 'installed' && !q ? 'Пока ничего не установлено.' : 'Ничего не нашлось.')]));
+    grid.replaceChildren(...(shown.length ? shown.map(card) : [h('div', { class: 'empty' }, filter === 'installed' && !q ? tr('Nothing installed yet.') : tr('Nothing found.'))]));
   }
 
   async function load() {
     const data = await get('/v1/marketplace');
     items = data.items;
-    note.textContent = data.error ? 'Каталог mensarium.com сейчас недоступен, показаны пакеты из этой версии Mensarium.' : '';
+    note.textContent = data.error ? tr('The mensarium.com catalog is currently unavailable, showing packages bundled with this version of Mensarium.') : '';
     note.classList.toggle('hidden', !data.error);
     renderFilters();
     render();
   }
 
   function addCustom() {
-    const ta = h('textarea', { class: 'market-yaml', rows: 14, spellcheck: 'false', 'aria-label': 'Манифест пакета',
-      placeholder: 'id: my-skill\nname: {en: My skill, ru: Мой навык}\nversion: 1.0.0\nsummary: Коротко, что делает\ninstructions: |\n  # Как работать\n  1. ...' });
-    const save = h('button', { class: 'btn btn-primary' }, 'Установить');
+    const ta = h('textarea', { class: 'market-yaml', rows: 14, spellcheck: 'false', 'aria-label': tr('Package manifest'),
+      placeholder: tr('id: my-skill\nname: {en: My skill, ru: Мой навык}\nversion: 1.0.0\nsummary: Short description of what it does\ninstructions: |\n  # How to work\n  1. ...') });
+    const save = h('button', { class: 'btn btn-primary' }, tr('Install'));
     save.addEventListener('click', async () => {
       save.disabled = true;
       try {
         await api('/v1/extensions/custom', { method: 'POST', body: ta.value, headers: { 'Content-Type': 'text/plain' } });
         closeLayer();
-        toast('Пакет установлен');
+        toast(tr('Package installed'));
         await load();
       } catch (err) { fail(err); } finally { save.disabled = false; }
     });
     openModal(
-      h('div', { class: 'modal-head' }, h('h2', {}, 'Свой навык или инструмент'), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': 'Закрыть' }, icon('x'))),
-      h('p', {}, 'Вставьте манифест в YAML. Навык — это поле instructions с инструкцией для агента, инструмент — список tools с командой в argv; можно и то и другое. Формат тот же, что у пакетов каталога.'),
+      h('div', { class: 'modal-head' }, h('h2', {}, tr('Custom skill or tool')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
+      h('p', {}, tr('Paste a YAML manifest. A skill is an instructions field with instructions for the agent, a tool is a tools list with a command in argv; you can include both. Same format as catalog packages.')),
       ta,
-      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, 'Отмена'), save),
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
     ).classList.add('modal-wide');
     ta.focus();
   }
 
   search.addEventListener('input', render);
-  page(shell, 'Маркетплейс', 'Навыки подсказывают агенту, как делать работу, инструменты дают ему готовые команды. Установленное агент видит со следующего шага; команды по-прежнему идут через подтверждение и списки разрешённых программ устройства.',
-    h('button', { class: 'btn', onclick: addCustom }, icon('plus'), 'Добавить свой'),
+  page(shell, tr('Marketplace'), tr('Skills tell the agent how to do the work, tools give it ready-made commands. The agent sees what\'s installed starting from the next step; commands still go through approval and the device\'s allowed program lists.'),
+    h('button', { class: 'btn', onclick: addCustom }, icon('plus'), tr('Add your own')),
     h('div', { class: 'market-bar' }, filterBar, h('div', { class: 'settings-search market-search' }, icon('search'), search)),
     note,
     grid,
@@ -1639,34 +1649,34 @@ async function settingsMarketplace(shell) {
 
 async function settingsProfiles(shell) {
   const profiles = await get('/v1/agent-profiles');
-  page(shell, 'Профили', 'Профиль задаёт инструменты агента, его лимиты и действия, которые в режиме с запросом ждут подтверждения.', null,
-    profiles.map((p) => section(`${p.name}, версия ${p.version}`, p.id, h('div', { class: 'rows' },
-      row('Модель', `Температура ${p.llm.temperature}`, p.llm.model, true),
-      row('Инструменты', null, null),
+  page(shell, tr('Profiles'), tr('A profile sets the agent\'s tools, its limits, and the actions that wait for approval in ask-before-acting mode.'), null,
+    profiles.map((p) => section(tr('{0}, version {1}', p.name, p.version), p.id, h('div', { class: 'rows' },
+      row(tr('Model'), tr('Temperature {0}', p.llm.temperature), p.llm.model, true),
+      row(tr('Tools'), null, null),
       h('div', { class: 'row-extra' }, p.allowed_tools.map((t) => h('span', { class: 'pill tag' }, t))),
-      row('Требуют подтверждения', 'В режиме «С запросом действий» каждое такое действие вы одобряете отдельно.', h('span', {}, p.approval.required_risks.map((r) => (RISK[r] || [r])[0]).join(', '))),
-      row('Лимиты', null, `${p.limits.max_steps} шагов, ${p.limits.max_tool_calls} действий, ${Math.round(p.limits.max_wall_time_s / 60)} мин`),
+      row(tr('Require approval'), tr('In “Ask before acting” mode, you approve each such action separately.'), h('span', {}, p.approval.required_risks.map((r) => (RISK[r] || [r])[0]).join(', '))),
+      row(tr('Limits'), null, tr('{0} steps, {1} actions, {2} min', p.limits.max_steps, p.limits.max_tool_calls, Math.round(p.limits.max_wall_time_s / 60))),
     ))),
   );
 }
 
 async function settingsAudit(shell) {
   const LABELS = {
-    'task.created': 'Создана задача', 'task.succeeded': 'Задача завершена', 'task.stopped': 'Задача остановлена',
-    'tool.execute': 'Отправлено на устройство', 'tool.result': 'Результат от устройства', 'tool.denied': 'Запрещено политикой',
-    'approval.requested': 'Запрошено подтверждение', 'approval.approved': 'Подтверждено', 'approval.rejected': 'Отклонено',
-    'target.paired': 'Устройство сопряжено', 'target.revoked': 'Доступ устройства отозван', 'pairing.code_created': 'Создан код сопряжения',
-    'core.started': 'Core запущен', 'task.cancel': 'Отмена задачи', 'task.pause': 'Пауза задачи', 'task.resume': 'Задача продолжена',
-    'task.deleted': 'Чат удалён', 'task.mode': 'Смена режима доступа', 'profile.imported': 'Импортирован профиль',
-    'task.model': 'Смена модели в чате', 'llm.default_model': 'Смена модели по умолчанию',
-    'target.tool': 'Инструмент устройства переключён',
-    'extension.installed': 'Установлен пакет', 'extension.toggled': 'Пакет включён или выключен', 'extension.removed': 'Удалён пакет',
-    'tool.core': 'Инструмент Core',
-    'memory.note_created': 'Создана заметка', 'memory.note_updated': 'Изменена заметка', 'memory.note_deleted': 'Удалена заметка',
-    'target.update': 'Обновление агента устройства', 'core.update': 'Обновление Core',
-    'memory.dreamed': 'Сновидение', 'memory.dream_started': 'Запущено сновидение', 'memory.dream_settings': 'Настройки сновидений',
+    'task.created': tr('Task created'), 'task.succeeded': tr('Task completed'), 'task.stopped': tr('Task stopped'),
+    'tool.execute': tr('Sent to device'), 'tool.result': tr('Result from device'), 'tool.denied': tr('Blocked by policy'),
+    'approval.requested': tr('Approval requested'), 'approval.approved': tr('Approved'), 'approval.rejected': tr('Rejected'),
+    'target.paired': tr('Device paired'), 'target.revoked': tr('Device access revoked'), 'pairing.code_created': tr('Pairing code created'),
+    'core.started': tr('Core started'), 'task.cancel': tr('Task canceled'), 'task.pause': tr('Task paused'), 'task.resume': tr('Task resumed'),
+    'task.deleted': tr('Chat deleted'), 'task.mode': tr('Access mode changed'), 'profile.imported': tr('Profile imported'),
+    'task.model': tr('Chat model changed'), 'llm.default_model': tr('Default model changed'),
+    'target.tool': tr('Device tool toggled'),
+    'extension.installed': tr('Package installed'), 'extension.toggled': tr('Package enabled or disabled'), 'extension.removed': tr('Package removed'),
+    'tool.core': tr('Core tool'),
+    'memory.note_created': tr('Note created'), 'memory.note_updated': tr('Note edited'), 'memory.note_deleted': tr('Note deleted'),
+    'target.update': tr('Device agent update'), 'core.update': tr('Core update'),
+    'memory.dreamed': tr('Dream'), 'memory.dream_started': tr('Dream started'), 'memory.dream_settings': tr('Dreaming settings'),
   };
-  const ACTORS = { core: 'Core', target: 'устройство', user: 'вы' };
+  const ACTORS = { core: 'Core', target: tr('device'), user: tr('you') };
   const describe = (p) => {
     const title = p.task_id ? state.tasks.find((t) => t.id === p.task_id) : null;
     return [
@@ -1674,29 +1684,29 @@ async function settingsAudit(shell) {
       p.name,
       p.title,
       p.id && !p.task_id && p.id,
-      p.created != null && `новых заметок: ${p.created}`,
-      p.source === 'custom' && 'свой пакет',
+      p.created != null && tr('new notes: {0}', p.created),
+      p.source === 'custom' && tr('custom package'),
       p.status && (EXEC_STATUS[p.status] || statusOf(p.status)[0]),
-      p.exit_code != null && `код ${p.exit_code}`,
+      p.exit_code != null && tr('code {0}', p.exit_code),
       p.mode && (MODES[p.mode]?.label || p.mode),
       p.model,
-      p.enabled != null && `${p.tool}: ${p.enabled ? 'включён' : 'выключен'}`,
+      p.enabled != null && `${p.tool}: ${p.enabled ? tr('enabled') : tr('disabled')}`,
       p.reason && policyText(reasonText(p.reason)),
-      p.version && `версия ${p.version}`,
+      p.version && tr('version {0}', p.version),
       p.to && `${p.from || '?'} → ${p.to}`,
-      p.task_id && (title ? `«${taskTitle(title)}»` : 'удалённый чат'),
+      p.task_id && (title ? `«${taskTitle(title)}»` : tr('deleted chat')),
     ].filter(Boolean).join(' · ');
   };
   const list = h('div', {});
   const load = async () => {
     const events = await get('/v1/audit?limit=200');
     list.replaceChildren(events.length ? h('div', { class: 'rows' }, events.map((e) => h('div', { class: 'audit-item' },
-      h('div', { class: 'audit-time' }, new Date(e.created_at).toLocaleString('ru-RU'), h('div', { class: 'mono', title: e.hash }, e.hash.slice(7, 17))),
+      h('div', { class: 'audit-time' }, new Date(e.created_at).toLocaleString(locale), h('div', { class: 'mono', title: e.hash }, e.hash.slice(7, 17))),
       h('div', {}, h('div', { class: 'audit-type' }, LABELS[e.event_type] || e.event_type, h('span', { class: 'audit-actor' }, ` · ${ACTORS[e.actor] || e.actor}`)),
-        h('div', { class: 'audit-payload', title: JSON.stringify(e.payload) }, describe(e.payload)))))) : h('div', { class: 'rows' }, h('div', { class: 'empty' }, 'Событий пока нет.')));
+        h('div', { class: 'audit-payload', title: JSON.stringify(e.payload) }, describe(e.payload)))))) : h('div', { class: 'rows' }, h('div', { class: 'empty' }, tr('No events yet.'))));
   };
-  page(shell, 'Журнал действий', 'Каждое событие связано с предыдущим хешем, поэтому запись нельзя незаметно изменить или удалить.',
-    h('button', { class: 'btn', onclick: () => load().catch(fail) }, icon('refresh'), 'Обновить'),
+  page(shell, tr('Activity log'), tr('Each event is linked to the previous one\'s hash, so a record can\'t be changed or deleted unnoticed.'),
+    h('button', { class: 'btn', onclick: () => load().catch(fail) }, icon('refresh'), tr('Update')),
     list,
   );
   await load();

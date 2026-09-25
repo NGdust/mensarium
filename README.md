@@ -1,67 +1,70 @@
+English · [Русский](README.ru.md)
+
 # Mensarium
 
-Переносимый agent harness. **Core** (главный агент) вызывает LLM, строит контекст, проверяет предложенные моделью действия политиками, ждёт подтверждения пользователя и пишет аудит. **Target Agent** — тонкий демон без LLM на управляемой машине: держит исходящее WebSocket-соединение к Core и исполняет только подписанные ED25519 запросы.
+A portable agent harness. **Core** (the main agent) calls the LLM, builds context, checks model-proposed actions against policies, waits for user approval, and writes an audit trail. **Target Agent** is a thin, LLM-free daemon on the managed machine: it holds an outgoing WebSocket connection to Core and executes only signed ED25519 requests.
 
-Модель никогда не получает прямого доступа к shell, файлам, сети или секретам: она только предлагает `tool_call`, а Core решает, можно ли его выполнить.
+The model never gets direct access to shell, files, network, or secrets: it only proposes a `tool_call`, and Core decides whether it can be executed.
 
-## Установка
+## Installation
 
-Core (один раз, на сервере или ноутбуке):
+Core (once, on a server or laptop):
 
 ```sh
 curl -fsSL https://mensarium.com/install.sh | sh -s -- --role core
 ```
 
-Target (на каждой машине, где агент будет работать). Код пары создаётся в UI Core (Targets → Pair new target) или командой `mensarium core pair-code`:
+Target (on every machine the agent will work on). The pairing code is created in the Core UI (Targets → Pair new target) or with `mensarium core pair-code`:
 
 ```sh
 curl -fsSL https://mensarium.com/install.sh | sh -s -- --server http://<core-host>:8787 --code WOLF-SKY-4821
 ```
 
-UI Core показывает готовую команду для target — она берёт установщик прямо с вашего Core и `--server` не требует.
+The Core UI shows a ready-made command for the target — it fetches the installer straight from your Core, so `--server` is not required.
 
-Установщик сам ставит [uv](https://docs.astral.sh/uv/) и Python 3.12 в `~/.mensarium`, кладёт команду `mensarium` в `~/.local/bin`, спрашивает настройки и регистрирует фоновый сервис (launchd на macOS, systemd на Linux). Docker не нужен.
+The installer sets up [uv](https://docs.astral.sh/uv/) and Python 3.12 in `~/.mensarium`, puts the `mensarium` command in `~/.local/bin`, asks for settings, and registers a background service (launchd on macOS, systemd on Linux). Docker is not needed.
 
-## Команды
+## Commands
 
-| Команда | Что делает |
+| Command | What it does |
 |---|---|
-| `mensarium setup` | Интерактивная настройка Core или Target |
-| `mensarium status` | Что установлено и запущено |
-| `mensarium version` | Версия, роли на этой машине и доступное обновление |
-| `mensarium update` | Обновиться: Core с mensarium.com, устройство со своего Core (`--check` только проверить). Из web UI: Обзор → «Обновить» для Core, Устройства → «Обновить до …» для агентов |
-| `mensarium core serve` | Запуск Core в foreground |
-| `mensarium core token` | Токен для входа в web UI |
-| `mensarium core pair-code` | Одноразовый код пары (10 минут) |
-| `mensarium core backup -o file.pab` / `restore file.pab` | Зашифрованный перенос Core на другой хост |
-| `mensarium target pair --server URL --code CODE --root DIR` | Пара без мастера (`--no-full-access`, `--no-remote-update` — запреты на устройстве) |
-| `mensarium target run` | Запуск Target Agent в foreground |
-| `mensarium service install\|restart\|logs core\|target` | Управление сервисом |
-| `mensarium uninstall --purge` | Удалить сервисы и данные |
+| `mensarium setup` | Interactive setup for Core or Target |
+| `mensarium status` | What is installed and running |
+| `mensarium version` | Version, roles on this machine, and available update |
+| `mensarium update` | Update: Core from mensarium.com, a device from its own Core (`--check` only checks). From the web UI: Overview → "Update" for Core, Devices → "Update to …" for agents |
+| `mensarium core serve` | Run Core in the foreground |
+| `mensarium core token` | Token for logging into the web UI |
+| `mensarium core pair-code` | One-time pairing code (10 minutes) |
+| `mensarium core backup -o file.pab` / `restore file.pab` | Encrypted transfer of Core to another host |
+| `mensarium target pair --server URL --code CODE --root DIR` | Pairing without the wizard (`--no-full-access`, `--no-remote-update` — restrictions on the device) |
+| `mensarium target run` | Run Target Agent in the foreground |
+| `mensarium service install\|restart\|logs core\|target` | Manage the service |
+| `mensarium uninstall --purge` | Remove services and data |
 
-## Как устроено
+## How it works
 
 ```
 LLM proposal → schema validation → target capability check → policy evaluation
-→ risk classification → approval (если нужен) → signed request → target execution
-→ signed result → artifact → observation в контекст → следующий шаг
+→ risk classification → approval (if required) → signed request → target execution
+→ signed result → artifact → observation added to context → next step
 ```
 
-- LLM-провайдеры: Ollama Cloud, локальный Ollama, llama.cpp — все через OpenAI-совместимый API; смена провайдера меняет только конфиг.
-- Режимы доступа в каждом чате: «С запросом действий» (по умолчанию) и «Полный доступ». Машина с Core всегда доступна агенту как устройство.
-- Tools v0.1: `files.list`, `files.read`, `files.search`, `git.status`, `git.diff` (read, без подтверждения) и `shell.exec` (всегда с подтверждением «Approve once»). Правки файлов — через `git apply` с патчем в stdin.
-- Память (Настройки → Память): заметки со ссылками `[[Название]]`, интерактивный граф связей и сновидения — ночная консолидация новых чатов в долговременную память с дневником. Агент ищет, читает и дополняет память инструментами `memory.*`, закреплённые и важные заметки попадают в системный промпт.
-- Маркетплейс (Настройки → Маркетплейс): навыки — инструкции, которые агент загружает через `skills.read`, и инструменты — шаблоны команд, которые уходят на устройство как `shell.exec` и проходят те же проверки и подтверждения. Каталог встроен в релиз и обновляется с mensarium.com; свой пакет добавляется манифестом в YAML.
-- Target проверяет подпись, nonce, срок жизни запроса, хеш политики и наличие approval; пути ограничены выбранными папками, программы — allowlist-ом; `.env`, ключи и токены не читаются и вычищаются из вывода.
-- Хранилище Core — SQLite в `~/.mensarium/core`; секреты — файлы с правами 0600, в UI, промпты и на target не попадают.
-- После рестарта Core незавершённые задачи переходят в `PAUSED` и сами не продолжаются.
+- LLM providers: Ollama Cloud, local Ollama, llama.cpp — all through an OpenAI-compatible API; switching providers only changes config.
+- Access modes per chat: "Ask before acting" (default) and "Full access". The machine running Core is always available to the agent as a device.
+- Tools v0.1: `files.list`, `files.read`, `files.search`, `git.status`, `git.diff` (read, no confirmation needed) and `shell.exec` (always requires "Approve once" confirmation). File edits go through `git apply` with the patch on stdin.
+- Memory (Settings → Memory): notes with `[[Title]]` links, an interactive relationship graph, and dreaming — nightly consolidation of new chats into long-term memory with a diary. The agent searches, reads, and adds to memory via `memory.*` tools; pinned and important notes are included in the system prompt.
+- Marketplace (Settings → Marketplace): skills — instructions the agent loads via `skills.read` — and tools — command templates that are sent to the device as `shell.exec` and go through the same checks and approvals. The catalog ships with the release and updates from mensarium.com; a custom package is added via a YAML manifest.
+- The web UI is available in English (default) and Russian, switchable in Settings → Overview.
+- Target verifies the signature, nonce, request TTL, policy hash, and presence of approval; paths are restricted to selected folders, programs to an allowlist; `.env` files, keys, and tokens are never read and are stripped from output.
+- Core storage is SQLite in `~/.mensarium/core`; secrets are files with 0600 permissions and never reach the UI, prompts, or the target.
+- After a Core restart, unfinished tasks move to `PAUSED` and do not resume on their own.
 
-## Разработка
+## Development
 
 ```sh
-make dev     # .venv с пакетом в editable-режиме
+make dev     # .venv with the package in editable mode
 make lint    # ruff + mypy
-make dist    # dist/: install.sh, архив и latest.json для раздачи (нужен чистый git)
-make release # dist + тег vX.Y.Z
-make core    # Core в foreground (нужен ~/.mensarium/core/config.yaml, см. mensarium setup)
+make dist    # dist/: install.sh, archive, and latest.json for distribution (requires clean git)
+make release # dist + tag vX.Y.Z
+make core    # Core in the foreground (needs ~/.mensarium/core/config.yaml, see mensarium setup)
 ```
