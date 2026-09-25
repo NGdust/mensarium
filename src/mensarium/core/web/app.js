@@ -94,6 +94,8 @@ const ICONS = {
   graph: '<circle cx="6" cy="7" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.2 8.4 10.9 15.8M16.9 8.2l-3.8 7.6M8.5 6.8l7-.6"/>',
   pin: '<path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z"/><path d="M12 14v6"/>',
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
+  plug: '<path d="M9 3v5M15 3v5M7 8h10v3a5 5 0 0 1-10 0z"/><path d="M12 16v5"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.7 5.7 3.7 9s-1.2 6.3-3.7 9c-2.5-2.7-3.7-5.7-3.7-9S9.5 5.7 12 3z"/>',
   robot: '<rect x="4.5" y="8" width="15" height="11" rx="3"/><path d="M12 8V5.2M2.5 12.5v3M21.5 12.5v3M9.5 16h5"/><circle cx="12" cy="4.2" r="1"/><circle cx="9.3" cy="12.4" r=".9"/><circle cx="14.7" cy="12.4" r=".9"/>',
 };
 
@@ -251,9 +253,11 @@ const TEMPLATES = [
   ['folder', tr('How the project is structured'), tr('Study the project structure and explain how it\'s organized: entry points, main modules, how to run it.')],
   ['search', tr('Fix a bug'), tr('Find the cause of the error and suggest a minimal fix: ')],
 ];
-const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'git.status': 'git', 'git.diff': 'git', 'shell.exec': 'terminal', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph' };
+const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'git.status': 'git', 'git.diff': 'git', 'shell.exec': 'terminal', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph', 'web.search': 'globe', 'web.fetch': 'globe' };
 // Plugin texts are either plain strings or {en, ru} maps.
 const txt = (v) => (typeof v === 'string' ? v : (v?.[lang] || v?.en || ''));
+// Plain text with bare https links turned into anchors; everything else stays text.
+const linkify = (text) => String(text).split(/(https?:\/\/[^\s]+)/g).map((part, i) => (i % 2 ? h('a', { href: part, target: '_blank', rel: 'noopener' }, part) : part));
 const RESUMABLE = ['PAUSED', 'FAILED_RECOVERABLE'];
 
 const POLICY_REASONS = [
@@ -902,7 +906,11 @@ async function viewChat(taskId) {
       case 'memory.search': return tr('Searching memory for “{0}”', clip(a.query, 40));
       case 'memory.read': return tr('Reading note {0}', a.title);
       case 'memory.save': return tr('Remembering {0}', a.title);
-      default: return a.command ? tr('Running {0}', clip(a.command, 56)) : tool;
+      case 'web.search': return tr('Searching the web for “{0}”', clip(a.query, 40));
+      case 'web.fetch': return tr('Reading {0}', (() => { try { return new URL(a.url).host; } catch { return clip(a.url, 40); } })());
+      default:
+        if (tool.startsWith('mcp.')) { const [, server, name] = tool.split('.'); return tr('Calling {0}: {1}', server, name); }
+        return a.command ? tr('Running {0}', clip(a.command, 56)) : tool;
     }
   }
 
@@ -1264,7 +1272,7 @@ function toggleSwitch(checked, { label, onChange }) {
 async function settingsDevices(shell) {
   const s = state.system || await get('/v1/system');
   const listHost = h('div', {});
-  const extTools = (await get('/v1/extensions').catch(() => [])).filter((e) => e.enabled).flatMap((e) => e.tools.map((t) => ({ ...t, ext: txt(e.name) })));
+  const pluginTools = Object.fromEntries(await Promise.all(devices().map(async (t) => [t.id, await get(`/v1/targets/${t.id}/plugin-tools`).catch(() => [])])));
   const expanded = new Set(JSON.parse(localStorageGet('devices-open') || '[]'));
   let signature = '';
 
@@ -1296,12 +1304,12 @@ async function settingsDevices(shell) {
             },
           }));
       })),
-      extTools.length ? [
-        h('div', { class: 'device-sub' }, tr('Plugin tools'), h('span', {}, tr('They run as commands, so “Run commands” must be enabled and the program must be in the allowed list.'))),
-        h('div', { class: 'tool-rows' }, extTools.map((tool) => h('div', { class: 'tool-row' },
-          icon('terminal'),
-          h('div', { class: 'row-text' }, h('div', { class: 'tool-row-title' }, tool.name, h('code', {}, tool.ext)), h('div', { class: 'row-desc' }, tool.description)),
-          programs.includes('*') || programs.includes(tool.argv[0]) ? null : h('span', { class: 'pill warn', title: tr('The program isn\'t in the device\'s allowed list') }, tr('no {0}', tool.argv[0])),
+      (pluginTools[t.id] || []).length ? [
+        h('div', { class: 'device-sub' }, tr('Plugin tools'), h('span', {}, tr('Commands need “Run commands” and the program in the allowed list; MCP tools run on the device’s MCP servers.'))),
+        h('div', { class: 'tool-rows' }, pluginTools[t.id].map((tool) => h('div', { class: 'tool-row' },
+          icon(tool.program ? 'terminal' : 'plug'),
+          h('div', { class: 'row-text' }, h('div', { class: 'tool-row-title' }, tool.name, h('code', {}, txt(tool.plugin))), h('div', { class: 'row-desc' }, tool.description)),
+          !tool.program || programs.includes('*') || programs.includes(tool.program) ? null : h('span', { class: 'pill warn', title: tr('The program isn\'t in the device\'s allowed list') }, tr('no {0}', tool.program)),
           toggleSwitch(!disabled.has(tool.name), {
             label: tr('{0} on “{1}”', tool.name, t.name),
             onChange: async (enabled) => {
@@ -1646,16 +1654,44 @@ async function settingsMemory(shell) {
 }
 
 const RISK_SHORT = { read: tr('read'), write: tr('changes'), execute: tr('run'), network: tr('network'), destructive: tr('irreversible') };
-const extKind = (e) => [e.instructions ? tr('Skill') : null, e.tools.length ? tr('Tools: {0}', e.tools.length) : null].filter(Boolean);
-const extIcon = (e) => (e.instructions && e.tools.length ? 'layers' : e.instructions ? 'book' : 'terminal');
+const RISK_CHOICES = [
+  ['read', tr('Read: no approval')],
+  ['network', tr('Network: with approval')],
+  ['execute', tr('Run: with approval')],
+  ['write', tr('Changes: with approval')],
+  ['destructive', tr('Irreversible: always confirm')],
+];
+const pluginKinds = (p) => [
+  p.provides.skill ? tr('Skill') : null,
+  p.provides.device_tools.length ? tr('Device tools: {0}', p.provides.device_tools.length) : null,
+  p.provides.core_tools.length ? tr('In Core: {0}', p.provides.core_tools.join(', ')) : null,
+  p.provides.mcp ? 'MCP' : null,
+].filter(Boolean);
+const pluginIcon = (p) => (p.provides.mcp ? 'plug' : p.provides.core_tools.length ? 'globe' : p.provides.skill && p.provides.device_tools.length ? 'layers' : p.provides.skill ? 'book' : 'terminal');
+const settingTitle = (key, spec) => txt(spec.title) || key;
+
+function pluginState(p, devices) {
+  if (!p.installed) return null;
+  if (!p.installed.enabled) return [tr('Off'), ''];
+  if (p.missing.length) return [tr('Needs setup'), 'warn'];
+  if (!p.provides.mcp) return null;
+  const where = p.placement === 'core' ? 'Core' : devices[p.placement]?.name || tr('device');
+  const st = p.status || {};
+  if (st.state === 'ok') return [tr('{0} · {1} tools', where, (st.tools || []).length), 'ok'];
+  if (st.state === 'error') return [tr('{0} · error', where), 'danger'];
+  return [tr('{0} · connecting', where), 'accent'];
+}
 
 async function settingsPlugins(shell) {
   const grid = h('div', { class: 'market-grid' }, h('div', { class: 'empty' }, tr('Loading the catalog...')));
   const note = h('p', { class: 'market-note hidden' });
   const search = h('input', { type: 'search', placeholder: tr('Search by name and description'), 'aria-label': tr('Search plugins') });
-  const FILTERS = [['all', tr('All')], ['skills', tr('Skills')], ['tools', tr('Tools')], ['installed', tr('Installed')]];
+  const FILTERS = [['all', tr('All')], ['installed', tr('Installed')], ['skills', tr('Skills')], ['tools', tr('Tools')], ['mcp', 'MCP']];
   let filter = localStorageGet('market-filter') || 'all';
+  if (!FILTERS.some(([k]) => k === filter)) filter = 'all';
   let items = [];
+  let devices = {};
+  let poll = 0;
   const filterBar = h('div', { class: 'segmented', role: 'tablist' });
   const renderFilters = () => filterBar.replaceChildren(...FILTERS.map(([key, label]) => h('button', {
     class: `seg${key === filter ? ' active' : ''}`, role: 'tab', 'aria-selected': String(key === filter),
@@ -1663,92 +1699,256 @@ async function settingsPlugins(shell) {
   }, label, key === 'installed' ? h('span', { class: 'seg-count' }, String(items.filter((i) => i.installed).length)) : null)));
 
   async function act(fn, done) {
-    try { await fn(); if (done) toast(done); await load(); } catch (err) { fail(err); }
+    try { const r = await fn(); if (done) toast(done); await load(); return r; } catch (err) { fail(err); return null; }
   }
-  const install = (e) => act(() => post('/v1/extensions', { id: e.id }), e.installed ? tr('Updated: {0}', txt(e.name)) : tr('Installed: {0}', txt(e.name)));
-  const remove = async (e) => {
-    if (!await confirmDialog({ title: tr('Delete “{0}”?', txt(e.name)), text: e.installed.source === 'custom' ? tr('This is your plugin, its contents will be removed from Core.') : tr('The agent will stop using it. You can install it again anytime.'), action: tr('Delete'), danger: true })) return;
+  const install = (p) => act(() => post('/v1/plugins', { id: p.id }), p.installed ? tr('Updated: {0}', txt(p.name)) : tr('Installed: {0}', txt(p.name)));
+  const remove = async (p) => {
+    if (!await confirmDialog({ title: tr('Remove “{0}”?', txt(p.name)), text: p.installed.source === 'custom' ? tr('This is your plugin, its contents will be removed from Core.') : tr('The agent will stop using it and its saved secrets are deleted. You can install it again anytime.'), action: tr('Remove'), danger: true })) return;
     closeLayer();
-    act(() => del(`/v1/extensions/${e.id}`), tr('Removed'));
+    act(() => del(`/v1/plugins/${p.id}`), tr('Removed'));
   };
-  const setEnabled = (e, enabled) => api(`/v1/extensions/${e.id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }).then(() => { e.installed.enabled = enabled; });
+  const setEnabled = (p, enabled) => api(`/v1/plugins/${p.id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }).then((v) => { Object.assign(p, v); render(); });
 
-  function actions(e, big = false) {
-    const size = big ? '' : ' btn-sm';
-    if (!e.installed) return h('button', { class: `btn btn-primary${size}`, onclick: (ev) => { ev.stopPropagation(); closeLayer(); install(e); } }, icon('plus'), tr('Install'));
+  function cardActions(p) {
+    if (!p.installed) return h('button', { class: 'btn btn-primary btn-sm', onclick: (ev) => { ev.stopPropagation(); install(p).then((v) => v?.missing?.length && details(v)); } }, icon('plus'), tr('Install'));
+    const state = pluginState(p, devices);
     return h('div', { class: 'market-actions', onclick: (ev) => ev.stopPropagation() },
-      e.update ? h('button', { class: `btn btn-primary${size}`, onclick: () => { closeLayer(); install(e); } }, tr('Update to {0}', e.version)) : null,
-      h('label', { class: 'switch-label' }, toggleSwitch(e.installed.enabled, { label: tr('Enable “{0}”', txt(e.name)), onChange: (v) => setEnabled(e, v) }), tr('Enabled')),
-      big ? h('button', { class: 'btn btn-danger btn-sm', onclick: () => remove(e) }, tr('Delete')) : null);
+      h('label', { class: 'switch-label' }, toggleSwitch(p.installed.enabled, { label: tr('Enable “{0}”', txt(p.name)), onChange: (v) => setEnabled(p, v) }), tr('On')),
+      state ? h('span', { class: `pill ${state[1]}` }, state[0]) : null,
+      p.update ? h('button', { class: 'btn btn-sm', onclick: () => install(p) }, tr('Update to {0}', p.version)) : null);
   }
 
-  function details(e) {
-    openModal(
-      h('div', { class: 'modal-head' }, h('h2', {}, txt(e.name)), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
-      h('div', { class: 'market-meta' }, [e.author, tr('version {0}', e.installed ? e.installed.version : e.version), e.installed?.source === 'custom' ? tr('your plugin') : null].filter(Boolean).join(' · ')),
-      h('p', {}, txt(e.description) || txt(e.summary)),
-      e.tools.length ? [h('div', { class: 'field-label' }, tr('Tools')), h('div', { class: 'market-tools' }, e.tools.map((t) => h('div', { class: 'market-tool' },
+  function settingsForm(p) {
+    const inputs = {};
+    const secretInputs = {};
+    const cleared = new Set();
+    const rows = Object.entries(p.settings || {}).map(([key, spec]) => {
+      const value = p.config[key];
+      let control;
+      if (spec.secret) {
+        const isSet = !!value?.set;
+        const input = h('input', { type: 'password', autocomplete: 'off', placeholder: isSet ? tr('Saved. Type to replace') : (spec.placeholder || ''), 'aria-label': settingTitle(key, spec) });
+        secretInputs[key] = input;
+        const clear = isSet && !spec.required ? h('button', { class: 'link-btn', onclick: (e) => { e.preventDefault(); cleared.add(key); input.value = ''; input.placeholder = tr('Will be deleted on save'); } }, tr('Delete')) : null;
+        control = h('div', { class: 'secret-field' }, input, h('span', { class: `pill ${isSet ? 'ok' : spec.required ? 'warn' : ''}` }, isSet ? tr('set') : tr('not set')), clear);
+      } else if (spec.type === 'boolean') {
+        let current = !!value;
+        control = toggleSwitch(current, { label: settingTitle(key, spec), onChange: async (v) => { current = v; } });
+        inputs[key] = { get value() { return current; } };
+      } else if (spec.enum) {
+        control = h('select', { 'aria-label': settingTitle(key, spec) }, spec.enum.map((o) => h('option', { value: o, selected: o === value }, o)));
+        inputs[key] = control;
+      } else {
+        control = h('input', { type: spec.type === 'integer' || spec.type === 'number' ? 'number' : 'text', value: value ?? '', placeholder: spec.placeholder || '', min: spec.minimum, max: spec.maximum, 'aria-label': settingTitle(key, spec) });
+        inputs[key] = control;
+      }
+      const help = txt(spec.help);
+      return h('div', { class: 'plugin-field' },
+        h('div', { class: 'plugin-field-head' }, h('span', {}, settingTitle(key, spec)), spec.required ? h('span', { class: 'req' }, tr('required')) : null),
+        control,
+        help ? h('div', { class: 'row-desc' }, linkify(help)) : null);
+    });
+    const collect = () => {
+      const values = {};
+      for (const [key, input] of Object.entries(inputs)) values[key] = input.value;
+      const secrets = {};
+      for (const [key, input] of Object.entries(secretInputs)) if (input.value) secrets[key] = input.value;
+      for (const key of cleared) if (!secrets[key]) secrets[key] = null;
+      return { values, secrets };
+    };
+    return { rows, collect };
+  }
+
+  function mcpBlock(p, onChange) {
+    if (!p.provides.mcp) return null;
+    const m = p.mcp || {};
+    const st = p.status || {};
+    const where = h('select', { 'aria-label': tr('Where it runs') },
+      h('option', { value: 'core', selected: p.placement === 'core' }, tr('In Core (the server)')),
+      Object.values(devices).map((d) => h('option', { value: d.id, selected: p.placement === d.id, disabled: !d.plugins && p.placement !== d.id }, d.plugins ? d.name : tr('{0} (agent too old or offline)', d.name))),
+      p.placement ? null : h('option', { value: '', selected: true, disabled: true }, tr('Choose a device')));
+    const risk = h('select', { 'aria-label': tr('Risk') }, RISK_CHOICES.map(([k, label]) => h('option', { value: k, selected: k === p.risk }, label)));
+    const disabled = new Set(p.disabled_tools || []);
+    const toolsList = (st.tools || []).length ? h('div', { class: 'tool-rows' }, st.tools.map((t) => h('div', { class: 'tool-row' },
+      icon('plug'),
+      h('div', { class: 'row-text' }, h('div', { class: 'tool-row-title' }, t.name), t.description ? h('div', { class: 'row-desc' }, t.description.slice(0, 220)) : null),
+      toggleSwitch(!disabled.has(t.name), { label: t.name, onChange: async (v) => {
+        if (v) disabled.delete(t.name); else disabled.add(t.name);
+        Object.assign(p, await api(`/v1/plugins/${p.id}/config`, { method: 'PUT', body: JSON.stringify({ disabled_tools: [...disabled] }) }));
+      } })))) : null;
+    const probe = h('button', { class: 'btn btn-sm', onclick: async () => {
+      probe.disabled = true;
+      probe.replaceChildren(h('span', { class: 'spinner' }), tr('Connecting...'));
+      try { Object.assign(p, await post(`/v1/plugins/${p.id}/probe`)); onChange(); } catch (err) { fail(err); onChange(); }
+    } }, icon('refresh'), tr('Check connection'));
+    const stateText = { ok: tr('Connected, {0} tools', (st.tools || []).length), error: tr('Error: {0}', st.error || ''), connecting: tr('Connecting...'), off: tr('Off'), setup: tr('Needs setup') }[st.state] || tr('Not started yet');
+    const runs = m.url || [m.command, ...(m.args || [])].join(' ');
+    return {
+      where, risk,
+      el: h('div', { class: 'plugin-mcp' },
+        h('div', { class: 'field-label' }, tr('MCP server')),
+        h('pre', { class: 'market-argv' }, `${m.transport === 'http' ? 'http' : '$'} ${runs}`),
+        h('div', { class: 'plugin-grid' },
+          h('label', { class: 'plugin-field' }, h('div', { class: 'plugin-field-head' }, h('span', {}, tr('Where it runs'))), where),
+          h('label', { class: 'plugin-field' }, h('div', { class: 'plugin-field-head' }, h('span', {}, tr('Risk of its tools'))), risk)),
+        p.installed ? h('div', { class: `plugin-status ${st.state || ''}` }, h('span', { class: `dot ${st.state === 'ok' ? 'ok' : st.state === 'error' ? 'danger' : 'accent live'}` }), h('span', {}, stateText), h('span', { class: 'spacer' }), probe) : null,
+        p.installed && p.placement && p.placement !== 'core' ? h('p', { class: 'row-desc' }, tr('On a device the program must be in its list of allowed programs, and the device must allow plugins from the Core.')) : null,
+        toolsList),
+    };
+  }
+
+  function details(p) {
+    const form = settingsForm(p);
+    const mcp = mcpBlock(p, () => { closeLayer(); details(items.find((x) => x.id === p.id) || p); });
+    const coreRisk = !p.provides.mcp && p.provides.core_tools.length
+      ? h('select', { 'aria-label': tr('Risk') }, RISK_CHOICES.map(([k, label]) => h('option', { value: k, selected: k === p.risk }, label)))
+      : null;
+    const save = h('button', { class: 'btn btn-primary' }, p.installed ? tr('Save') : tr('Install'));
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      try {
+        let view = p;
+        if (!p.installed) view = await post('/v1/plugins', { id: p.id });
+        const { values, secrets } = form.collect();
+        const body = { values, secrets };
+        if (mcp && mcp.where.value) body.placement = mcp.where.value;
+        if (mcp) body.risk = mcp.risk.value;
+        if (coreRisk) body.risk = coreRisk.value;
+        if (Object.keys(values).length || Object.keys(secrets).length || mcp || coreRisk) view = await api(`/v1/plugins/${p.id}/config`, { method: 'PUT', body: JSON.stringify(body) });
+        toast(view.missing.length ? tr('Saved, still needs: {0}', view.missing.map((k) => (k === '_placement' ? tr('where it runs') : settingTitle(k, p.settings[k] || {}))).join(', ')) : tr('Saved'));
+        closeLayer();
+        await load();
+      } catch (err) { fail(err); } finally { save.disabled = false; }
+    });
+    const what = [
+      p.provides.skill ? h('div', { class: 'plugin-provides' }, icon('book'), h('div', {}, h('div', { class: 'tool-row-title' }, tr('Skill')), h('div', { class: 'row-desc' }, tr('Instructions the agent loads with skills.read before this kind of work.')))) : null,
+      p.provides.core_tools.length ? h('div', { class: 'plugin-provides' }, icon('globe'), h('div', { class: 'row-text' }, h('div', { class: 'tool-row-title' }, tr('Tools in Core: {0}', p.provides.core_tools.join(', '))), h('div', { class: 'row-desc' }, tr('They run on the Core server; requests to the network go through approval unless you lower the risk.')), coreRisk ? h('label', { class: 'plugin-field plugin-risk' }, h('div', { class: 'plugin-field-head' }, h('span', {}, tr('Risk of its tools'))), coreRisk) : null)) : null,
+      p.tools.length ? [h('div', { class: 'field-label' }, tr('Tools on devices')), h('div', { class: 'market-tools' }, p.tools.map((t) => h('div', { class: 'market-tool' },
         h('div', { class: 'market-tool-head' }, h('code', {}, t.name), h('span', { class: 'pill' }, RISK_SHORT[t.risk] || t.risk)),
         h('div', { class: 'row-desc' }, t.description),
         h('pre', { class: 'market-argv' }, `$ ${t.argv.join(' ')}`))))] : null,
-      e.instructions ? [h('div', { class: 'field-label' }, tr('Instructions for the agent')), h('div', { class: 'prose market-instructions', html: markdown(e.instructions) })] : null,
-      h('div', { class: 'modal-actions' }, actions(e, true)),
+    ];
+    const state = pluginState(p, devices);
+    openModal(
+      h('div', { class: 'modal-head' }, h('h2', {}, txt(p.name)), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
+      h('div', { class: 'market-meta' }, [p.author, tr('version {0}', p.installed ? p.installed.version : p.version), p.installed?.source === 'custom' ? tr('your plugin') : null].filter(Boolean).join(' · '), p.homepage ? [' · ', h('a', { href: p.homepage, target: '_blank', rel: 'noopener' }, tr('Website'))] : null, state ? [' ', h('span', { class: `pill ${state[1]}` }, state[0])] : null),
+      h('p', {}, txt(p.description) || txt(p.summary)),
+      what,
+      mcp ? mcp.el : null,
+      form.rows.length ? [h('div', { class: 'field-label' }, tr('Settings')), h('div', { class: 'plugin-form' }, form.rows)] : null,
+      p.instructions ? h('details', { class: 'plugin-skill' }, h('summary', {}, tr('Show the instructions')), h('div', { class: 'prose market-instructions', html: markdown(p.instructions) })) : null,
+      h('div', { class: 'modal-actions' },
+        p.installed ? h('button', { class: 'btn btn-danger btn-sm', onclick: () => remove(p) }, tr('Remove')) : null,
+        h('span', { class: 'spacer' }),
+        p.update ? h('button', { class: 'btn', onclick: () => { closeLayer(); install(p); } }, tr('Update to {0}', p.version)) : null,
+        (!p.installed || form.rows.length || mcp || coreRisk) ? save : null),
     ).classList.add('modal-wide');
   }
 
-  function card(e) {
-    return h('div', { class: `market-card${e.installed ? ' installed' : ''}`, role: 'button', tabindex: '0', onclick: () => details(e), onkeydown: (ev) => { if (ev.key === 'Enter') details(e); } },
-      h('div', { class: 'market-card-head' }, h('span', { class: 'market-icon' }, icon(extIcon(e))), h('div', { class: 'market-title' }, h('div', {}, txt(e.name)), h('div', { class: 'market-meta' }, [e.author, e.installed?.source === 'custom' ? tr('your plugin') : `v${e.version}`].filter(Boolean).join(' · ')))),
-      h('p', { class: 'market-summary' }, txt(e.summary)),
-      h('div', { class: 'market-tags' }, extKind(e).map((k) => h('span', { class: 'pill tag-kind' }, k))),
-      h('div', { class: 'market-foot' }, actions(e)));
+  function card(p) {
+    return h('div', { class: `market-card${p.installed ? ' installed' : ''}`, role: 'button', tabindex: '0', onclick: () => details(p), onkeydown: (ev) => { if (ev.key === 'Enter') details(p); } },
+      h('div', { class: 'market-card-head' }, h('span', { class: 'market-icon' }, icon(pluginIcon(p))), h('div', { class: 'market-title' }, h('div', {}, txt(p.name)), h('div', { class: 'market-meta' }, [p.author, p.installed?.source === 'custom' ? tr('your plugin') : `v${p.version}`].filter(Boolean).join(' · ')))),
+      h('p', { class: 'market-summary' }, txt(p.summary)),
+      h('div', { class: 'market-tags' }, pluginKinds(p).map((k) => h('span', { class: 'pill tag-kind' }, k))),
+      h('div', { class: 'market-foot' }, cardActions(p)));
   }
 
   function render() {
     const q = search.value.trim().toLowerCase();
-    const shown = items.filter((e) => ({ all: true, skills: !!e.instructions, tools: e.tools.length > 0, installed: !!e.installed }[filter]))
-      .filter((e) => !q || [txt(e.name), txt(e.summary), txt(e.description), e.id, ...(e.tags || []), ...e.tools.map((t) => t.name)].join(' ').toLowerCase().includes(q));
+    const shown = items.filter((p) => ({ all: true, installed: !!p.installed, skills: p.provides.skill, tools: p.provides.device_tools.length > 0 || p.provides.core_tools.length > 0, mcp: p.provides.mcp }[filter]))
+      .filter((p) => !q || [txt(p.name), txt(p.summary), txt(p.description), p.id, ...(p.tags || []), ...p.provides.device_tools, ...p.provides.core_tools].join(' ').toLowerCase().includes(q));
     grid.replaceChildren(...(shown.length ? shown.map(card) : [h('div', { class: 'empty' }, filter === 'installed' && !q ? tr('Nothing installed yet.') : tr('Nothing found.'))]));
   }
 
   async function load() {
-    const data = await get('/v1/marketplace');
+    const data = await get('/v1/plugins');
     items = data.items;
+    devices = Object.fromEntries(data.devices.map((d) => [d.id, d]));
     note.textContent = data.error ? tr('The mensarium.com catalog is currently unavailable, showing plugins bundled with this version of Mensarium.') : '';
     note.classList.toggle('hidden', !data.error);
     renderFilters();
     render();
+    clearTimeout(poll);
+    if (items.some((p) => p.installed?.enabled && p.status?.state === 'connecting')) poll = setTimeout(() => load().catch(() => {}), 2000);
   }
 
   function addCustom() {
     const ta = h('textarea', { class: 'market-yaml', rows: 14, spellcheck: 'false', 'aria-label': tr('Plugin manifest'),
-      placeholder: tr('id: my-skill\nname: {en: My skill, ru: Мой навык}\nversion: 1.0.0\nsummary: Short description of what it does\ninstructions: |\n  # How to work\n  1. ...') });
+      placeholder: 'id: my-skill\nname: {en: My skill, ru: Мой навык}\nversion: 1.0.0\nsummary: What it does\ninstructions: |\n  # How to work\n  1. ...' });
     const save = h('button', { class: 'btn btn-primary' }, tr('Install'));
     save.addEventListener('click', async () => {
       save.disabled = true;
       try {
-        await api('/v1/extensions/custom', { method: 'POST', body: ta.value, headers: { 'Content-Type': 'text/plain' } });
+        await api('/v1/plugins/custom', { method: 'POST', body: ta.value, headers: { 'Content-Type': 'text/plain' } });
         closeLayer();
         toast(tr('Plugin installed'));
         await load();
       } catch (err) { fail(err); } finally { save.disabled = false; }
     });
     openModal(
-      h('div', { class: 'modal-head' }, h('h2', {}, tr('Custom skill or tool')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
-      h('p', {}, tr('Paste a YAML manifest. A skill is an instructions field with instructions for the agent, a tool is a tools list with a command in argv; you can include both. Same format as catalog plugins.')),
+      h('div', { class: 'modal-head' }, h('h2', {}, tr('Your own plugin')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
+      h('p', {}, tr('Paste a YAML manifest. A skill is an instructions field, device tools are a tools list with a command in argv, an MCP server is an mcp block; settings go into config. Same format as catalog plugins.')),
       ta,
       h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
     ).classList.add('modal-wide');
     ta.focus();
   }
 
+  function addMcp() {
+    const name = h('input', { type: 'text', placeholder: 'github', 'aria-label': tr('Name') });
+    const transport = h('select', { 'aria-label': tr('Connection') }, h('option', { value: 'stdio' }, tr('Program (stdio)')), h('option', { value: 'http' }, tr('Address (HTTP)')));
+    const command = h('input', { type: 'text', placeholder: 'npx -y @modelcontextprotocol/server-everything', 'aria-label': tr('Command') });
+    const url = h('input', { type: 'text', placeholder: 'https://example.com/mcp', 'aria-label': tr('Address') });
+    const where = h('select', { 'aria-label': tr('Where it runs') }, h('option', { value: 'core' }, tr('In Core (the server)')), Object.values(devices).filter((d) => d.plugins).map((d) => h('option', { value: d.id }, d.name)));
+    const risk = h('select', { 'aria-label': tr('Risk') }, RISK_CHOICES.map(([k, label]) => h('option', { value: k, selected: k === 'network' }, label)));
+    const env = h('textarea', { class: 'market-yaml', rows: 3, spellcheck: 'false', placeholder: 'KEY=value', 'aria-label': tr('Environment variables') });
+    const secretEnv = h('textarea', { class: 'market-yaml', rows: 2, spellcheck: 'false', placeholder: 'API_TOKEN=...', 'aria-label': tr('Secret values') });
+    const description = h('input', { type: 'text', placeholder: tr('What it is for'), 'aria-label': tr('Description') });
+    const field = (label, control, hint) => h('label', { class: 'plugin-field' }, h('div', { class: 'plugin-field-head' }, h('span', {}, label)), control, hint ? h('div', { class: 'row-desc' }, hint) : null);
+    const cmdField = field(tr('Command'), command, tr('The program must be installed where the server runs; on a device it must also be in its allowed programs.'));
+    const urlField = field(tr('Address'), url, null);
+    const sync = () => { cmdField.classList.toggle('hidden', transport.value !== 'stdio'); urlField.classList.toggle('hidden', transport.value === 'stdio'); };
+    transport.addEventListener('change', sync);
+    sync();
+    const pairs = (text) => Object.fromEntries(text.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf('='); return i > 0 ? [l.slice(0, i).trim(), l.slice(i + 1)] : [l, '']; }));
+    const save = h('button', { class: 'btn btn-primary' }, tr('Add'));
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      const http = transport.value === 'http';
+      const body = { name: name.value.trim().toLowerCase(), transport: transport.value, command: http ? null : command.value.trim(), url: http ? url.value.trim() : null, placement: where.value, risk: risk.value, description: description.value.trim() };
+      body[http ? 'headers' : 'env'] = pairs(env.value);
+      body[http ? 'secret_headers' : 'secret_env'] = pairs(secretEnv.value);
+      try {
+        const view = await post('/v1/plugins/mcp', body);
+        closeLayer();
+        toast(tr('MCP server added, connecting'));
+        await load();
+        details(items.find((x) => x.id === view.id) || view);
+      } catch (err) { fail(err); } finally { save.disabled = false; }
+    });
+    openModal(
+      h('div', { class: 'modal-head' }, h('h2', {}, tr('Add an MCP server')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
+      h('p', {}, tr('The agent gets the server’s tools as mcp.<name>.<tool>. Secret values are stored in Core and never reach the model; a server with secrets runs only in Core.')),
+      h('div', { class: 'plugin-form' },
+        h('div', { class: 'plugin-grid' }, field(tr('Name'), name, tr('Lowercase letters, digits and dashes')), field(tr('Connection'), transport, null)),
+        cmdField, urlField,
+        h('div', { class: 'plugin-grid' }, field(tr('Where it runs'), where, null), field(tr('Risk of its tools'), risk, null)),
+        field(tr('Environment variables or headers'), env, tr('One KEY=value per line: environment for a program, HTTP headers for an address.')),
+        field(tr('Secret values'), secretEnv, tr('Same format; stored as secrets in Core.')),
+        field(tr('Description'), description, null)),
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
+    ).classList.add('modal-wide');
+    name.focus();
+  }
+
   search.addEventListener('input', render);
-  page(shell, tr('Plugins'), tr('Skills tell the agent how to do the work, tools give it ready-made commands. The agent sees what\'s installed starting from the next step; commands still go through approval and the device\'s allowed program lists.'),
-    h('button', { class: 'btn', onclick: addCustom }, icon('plus'), tr('Add your own')),
+  page(shell, tr('Plugins'), tr('Skills tell the agent how to work; tools add abilities on devices and in Core: web search, MCP servers and more. Everything is configured here or with mensarium plugins on the Core server.'),
+    [h('button', { class: 'btn', onclick: addCustom }, icon('plus'), tr('Your own plugin')), h('button', { class: 'btn btn-primary', onclick: addMcp }, icon('plug'), tr('Add an MCP server'))],
     h('div', { class: 'market-bar' }, filterBar, h('div', { class: 'settings-search market-search' }, icon('search'), search)),
     note,
     grid,
   );
+  viewCleanups.push(() => clearTimeout(poll));
   await load();
 }
 
@@ -1776,6 +1976,8 @@ async function settingsAudit(shell) {
     'task.model': tr('Chat model changed'), 'llm.default_model': tr('Default model changed'),
     'target.tool': tr('Device tool toggled'),
     'extension.installed': tr('Plugin installed'), 'extension.toggled': tr('Plugin enabled or disabled'), 'extension.removed': tr('Plugin removed'),
+    'plugin.installed': tr('Plugin installed'), 'plugin.toggled': tr('Plugin enabled or disabled'), 'plugin.removed': tr('Plugin removed'),
+    'plugin.configured': tr('Plugin settings changed'),
     'tool.core': tr('Core tool'),
     'memory.note_created': tr('Note created'), 'memory.note_updated': tr('Note edited'), 'memory.note_deleted': tr('Note deleted'),
     'target.update': tr('Device agent update'), 'core.update': tr('Core update'),

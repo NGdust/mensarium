@@ -24,6 +24,7 @@ def pair(
     command_allowlist: list[str] | None = None,
     allow_full_access: bool = True,
     allow_remote_update: bool = True,
+    allow_remote_plugins: bool = True,
 ) -> TargetConfig:
     server = server.rstrip("/")
     resolved_roots = []
@@ -64,6 +65,7 @@ def pair(
         command_allowlist=command_allowlist or list(DEFAULT_COMMAND_ALLOWLIST),
         allow_full_access=allow_full_access,
         allow_remote_update=allow_remote_update,
+        allow_remote_plugins=allow_remote_plugins,
     )
     save_target_config(paths, cfg)
     return cfg

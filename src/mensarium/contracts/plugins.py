@@ -57,8 +57,57 @@ class CommandTool(BaseModel):
         return self
 
 
-class Extension(BaseModel):
-    """A marketplace package: a skill (instructions for the model), command tools, or both."""
+Risk = Literal["read", "write", "execute", "network", "destructive"]
+BUILTINS = ("web_search", "web_fetch")
+
+
+class ConfigField(BaseModel):
+    """One plugin setting; secret values live in Core secrets and never reach the model, the UI or devices."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["string", "integer", "number", "boolean"] = "string"
+    title: Text | None = None
+    help: Text | None = None
+    default: Any = None
+    required: bool = False
+    secret: bool = False
+    enum: list[str] | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    placeholder: str | None = None
+    flag: str | None = Field(None, description="For booleans used in an MCP template: the argument inserted when true")
+
+
+class McpTemplate(BaseModel):
+    """An MCP server the plugin starts; `{key}` placeholders are filled from the plugin config."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transport: Literal["stdio", "http"] = "stdio"
+    command: str | None = None
+    args: list[str] = []
+    env: dict[str, str] = {}
+    url: str | None = None
+    headers: dict[str, str] = {}
+    placement: Literal["core", "device"] = "core"
+    risk: Risk = "network"
+
+    @model_validator(mode="after")
+    def _check(self) -> "McpTemplate":
+        if self.transport == "stdio" and (not self.command or "/" in self.command or PLACEHOLDER.search(self.command)):
+            raise ValueError("stdio MCP servers need `command`: a program name without a path or placeholders")
+        if self.transport == "http" and not (self.url or "").startswith(("http://", "https://", "{")):
+            raise ValueError("http MCP servers need an http(s) `url`")
+        return self
+
+    def placeholders(self) -> set[str]:
+        parts = [*self.args, *self.env.values(), self.url or "", *self.headers.values()]
+        return {m for part in parts for m in PLACEHOLDER.findall(part)}
+
+
+class Plugin(BaseModel):
+    """A plugin: a skill for the model, command tools for devices, a built-in Core tool, an MCP server, or a mix."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -69,14 +118,23 @@ class Extension(BaseModel):
     summary: Text
     description: Text = ""
     tags: list[str] = []
+    homepage: str | None = None
+    config: dict[str, ConfigField] = {}
     instructions: str | None = Field(None, description="Skill body in markdown, loaded by the model via skills.read")
     tools: list[CommandTool] = []
+    builtin: Literal["web_search", "web_fetch"] | None = Field(None, description="Core tools shipped with Mensarium")
+    mcp: McpTemplate | None = None
 
     @model_validator(mode="after")
-    def _check(self) -> "Extension":
-        if not self.instructions and not self.tools:
-            raise ValueError("an extension needs `instructions`, `tools` or both")
+    def _check(self) -> "Plugin":
+        if not (self.instructions or self.tools or self.builtin or self.mcp):
+            raise ValueError("a plugin needs `instructions`, `tools`, `builtin` or `mcp`")
         names = [t.name for t in self.tools]
         if len(names) != len(set(names)):
             raise ValueError("tool names must be unique")
+        if self.mcp and (missing := self.mcp.placeholders() - set(self.config)):
+            raise ValueError(f"mcp uses undeclared config keys {sorted(missing)}")
         return self
+
+    def secret_keys(self) -> set[str]:
+        return {k for k, f in self.config.items() if f.secret}

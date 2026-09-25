@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import secrets
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,7 +16,10 @@ from mensarium.contracts.protocol import (
     ExecutionCancel,
     ExecutionRequest,
     ExecutionResult,
+    McpServerDef,
     TargetHello,
+    TargetPlugins,
+    TargetPluginsStatus,
     TargetUpdate,
     TargetUpdateStatus,
 )
@@ -39,6 +43,7 @@ class TargetConnection:
     hello: TargetHello
     pending: dict[str, asyncio.Future[ExecutionResult]] = field(default_factory=dict)
     updates: dict[str, asyncio.Future[TargetUpdateStatus]] = field(default_factory=dict)
+    plugins: dict[str, asyncio.Future[TargetPluginsStatus]] = field(default_factory=dict)
 
 
 class TargetHub:
@@ -46,6 +51,8 @@ class TargetHub:
         self.repo = repo
         self.key = signing_key
         self.connections: dict[str, TargetConnection] = {}
+        self.on_connect: Callable[[str], Coroutine[Any, Any, None]] | None = None
+        self.tasks: set[asyncio.Task[None]] = set()
 
     def is_online(self, target_id: str) -> bool:
         return target_id in self.connections
@@ -66,6 +73,10 @@ class TargetHub:
         log.info("target connected", extra={"target_id": conn.target_id})
         try:
             await ws.send_json({"type": "auth.ok", "ts": now_iso()})
+            if self.on_connect:
+                task: asyncio.Task[None] = asyncio.create_task(self.on_connect(conn.target_id))
+                self.tasks.add(task)
+                task.add_done_callback(self.tasks.discard)
             while True:
                 msg = await ws.receive_json()
                 await self._on_message(conn, msg)
@@ -75,7 +86,7 @@ class TargetHub:
             if self.connections.get(conn.target_id) is conn:
                 del self.connections[conn.target_id]
                 await self.repo.update_target(conn.target_id, {"status": "offline", "last_seen_at": now_iso()})
-            waiters: list[asyncio.Future[Any]] = [*conn.pending.values(), *conn.updates.values()]
+            waiters: list[asyncio.Future[Any]] = [*conn.pending.values(), *conn.updates.values(), *conn.plugins.values()]
             for fut in waiters:
                 if not fut.done():
                     fut.set_exception(TargetUnavailable("target disconnected"))
@@ -139,6 +150,42 @@ class TargetHub:
             waiter = conn.updates.pop(status.request_id, None)
             if waiter and not waiter.done() and verify(conn.public_key, msg):
                 waiter.set_result(status)
+        elif kind == "target.plugins.status":
+            try:
+                answer = TargetPluginsStatus.model_validate(msg)
+            except ValidationError:
+                return
+            plugin_waiter = conn.plugins.pop(answer.request_id, None)
+            if plugin_waiter and not plugin_waiter.done() and verify(conn.public_key, msg):
+                plugin_waiter.set_result(answer)
+
+    def supports(self, target_id: str, tool: str) -> bool:
+        hello = self.hello(target_id)
+        return bool(hello and tool in hello.capabilities.tools)
+
+    async def request_plugins(self, target_id: str, servers: list[McpServerDef], ttl_s: int) -> TargetPluginsStatus:
+        """Send a device its MCP servers; it starts them and answers with their tools (first start may download)."""
+        conn = self.connections.get(target_id)
+        if conn is None:
+            raise TargetUnavailable("target is offline")
+        msg = TargetPlugins(
+            request_id=new_id("plg"),
+            target_id=target_id,
+            issued_at=now_iso(),
+            expires_at=iso_in(ttl_s),
+            nonce=secrets.token_hex(32),
+            servers=servers,
+        )
+        msg.signature = sign(self.key, msg.model_dump())
+        fut: asyncio.Future[TargetPluginsStatus] = asyncio.get_running_loop().create_future()
+        conn.plugins[msg.request_id] = fut
+        try:
+            await conn.ws.send_json(msg.model_dump())
+            return await asyncio.wait_for(fut, 300)
+        except TimeoutError as e:
+            raise TargetUnavailable("the device did not report its MCP servers in time") from e
+        finally:
+            conn.plugins.pop(msg.request_id, None)
 
     async def request_update(self, target_id: str, version: str, ttl_s: int) -> TargetUpdateStatus:
         """Ask a device to update its agent from this Core; returns the device's signed answer."""

@@ -11,6 +11,7 @@ import typer
 
 from mensarium import __version__
 from mensarium.cli import service
+from mensarium.cli.plugins import mcp_app, plugins_app, target_plugins
 from mensarium.cli.ui import console, fail, ok, summary, use_select_event_loop, warn
 from mensarium.core.config import CorePaths, load_config, read_secret
 from mensarium.shared.logging import setup_logging
@@ -24,6 +25,8 @@ service_app = typer.Typer(help="Background service management", no_args_is_help=
 app.add_typer(core_app, name="core")
 app.add_typer(target_app, name="target")
 app.add_typer(service_app, name="service")
+app.add_typer(plugins_app, name="plugins")
+app.add_typer(mcp_app, name="mcp")
 
 Role = Literal["core", "target"]
 
@@ -297,6 +300,9 @@ def target_pair(
     remote_update: Annotated[
         bool, typer.Option("--remote-update/--no-remote-update", help="Allow updating this agent from the Core web UI")
     ] = True,
+    remote_plugins: Annotated[
+        bool, typer.Option("--remote-plugins/--no-remote-plugins", help="Allow the Core to run MCP servers here")
+    ] = True,
 ) -> None:
     """Pair this machine with a Core non-interactively."""
     from mensarium.target.pairing import PairingError, pair
@@ -310,6 +316,7 @@ def target_pair(
             roots=root,
             allow_full_access=full_access,
             allow_remote_update=remote_update,
+            allow_remote_plugins=remote_plugins,
         )
     except PairingError as e:
         fail(str(e))
@@ -320,6 +327,12 @@ def target_pair(
         ok("Target service restarted")
     else:
         console.print("Start the agent with `mensarium target run` or `mensarium service install target`.")
+
+
+@target_app.command("plugins")
+def target_plugins_cmd() -> None:
+    """Show the MCP servers the Core runs on this device."""
+    target_plugins()
 
 
 @target_app.command("run")

@@ -10,6 +10,7 @@ from mensarium.contracts.protocol import TargetPolicy
 from mensarium.contracts.tools import PATH_FIELDS
 from mensarium.shared.redaction import is_secret_path
 from mensarium.tool_runtime.commands import render
+from mensarium.tool_runtime.mcp import check_arguments
 from mensarium.tool_runtime.registry import REGISTRY, Risk, ToolSpec
 
 RISK_ORDER: list[Risk] = ["read", "execute", "write", "network", "destructive", "privileged"]
@@ -113,12 +114,34 @@ def evaluate(
         args = spec.args_model.model_validate(raw_args).model_dump()
     except ValidationError as e:
         return _deny(f"invalid arguments: {e.errors(include_url=False)}")
+    if spec.schema is not None and (problem := check_arguments(args, spec.schema)):
+        return _deny(f"invalid arguments: {problem}")
     if spec.runs_on == "core":
         return Decision(
-            allowed=True, risk=spec.risk, arguments=args, display=spec.display(args), exec_tool=tool, runs_on="core"
+            allowed=True,
+            risk=spec.risk,
+            requires_approval=spec.risk in required_risks,
+            arguments=args,
+            display=spec.display(args),
+            exec_tool=tool,
+            runs_on="core",
         )
 
     exec_tool = tool
+    if spec.mcp:
+        exec_tool = "mcp.call"
+        if exec_tool in disabled:
+            return _deny(f"tool {tool!r} runs through mcp.call, which is disabled for this device")
+        if exec_tool not in target_tools:
+            return _deny(f"target does not support tool {exec_tool!r}")
+        return Decision(
+            allowed=True,
+            risk=spec.risk,
+            requires_approval=spec.risk in required_risks,
+            arguments={"server": spec.mcp[0], "tool": spec.mcp[1], "arguments": args},
+            display=spec.display(args),
+            exec_tool=exec_tool,
+        )
     if spec.command:
         try:
             args = render(spec.command, args)

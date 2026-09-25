@@ -38,6 +38,10 @@ UI Core показывает готовую команду для target — о�
 | `mensarium core backup -o file.pab` / `restore file.pab` | Зашифрованный перенос Core на другой хост |
 | `mensarium target pair --server URL --code CODE --root DIR` | Пара без мастера (`--no-full-access`, `--no-remote-update` — запреты на устройстве) |
 | `mensarium target run` | Запуск Target Agent в foreground |
+| `mensarium plugins list [--catalog]`, `info ID`, `install ID\|file.yaml`, `update ID`, `remove ID` | Плагины Core на этой машине |
+| `mensarium plugins config ID KEY=VALUE [--secret KEY] [--placement core\|УСТРОЙСТВО] [--risk RISK]` | Настройки плагина; секреты вводятся без эха |
+| `mensarium mcp add NAME --command 'npx -y pkg' \| --url URL [--secret-env KEY] [--device NAME]` | MCP-сервер в Core или на устройстве; `mcp list`, `probe`, `tools`, `remove` |
+| `mensarium target plugins` | MCP-серверы, которые Core запустил на этом устройстве |
 | `mensarium service install\|restart\|logs core\|target` | Управление сервисом |
 | `mensarium uninstall --purge` | Удалить сервисы и данные |
 
@@ -53,7 +57,7 @@ LLM proposal → schema validation → target capability check → policy evalua
 - Режимы доступа в каждом чате: «С запросом действий» (по умолчанию) и «Полный доступ». Машина с Core всегда доступна агенту как устройство.
 - Tools v0.1: `files.list`, `files.read`, `files.search`, `git.status`, `git.diff` (read, без подтверждения) и `shell.exec` (всегда с подтверждением «Approve once»). Правки файлов — через `git apply` с патчем в stdin.
 - Память (Настройки → Память): заметки со ссылками `[[Название]]`, интерактивный граф связей и сновидения — ночная консолидация новых чатов в долговременную память с дневником. Агент ищет, читает и дополняет память инструментами `memory.*`, закреплённые и важные заметки попадают в системный промпт.
-- Плагины (Настройки → Плагины): навыки — инструкции, которые агент загружает через `skills.read`, и инструменты — шаблоны команд, которые уходят на устройство как `shell.exec` и проходят те же проверки и подтверждения. Каталог встроен в релиз и обновляется с mensarium.com; свой пакет добавляется манифестом в YAML.
+- Плагины (Настройки → Плагины или `mensarium plugins` / `mensarium mcp` на сервере Core) расширяют агента: навыки — инструкции, которые он загружает через `skills.read`; инструменты устройства — шаблоны команд, которые уходят на устройство как `shell.exec`; инструменты Core работают в самом Core (`web.search` через Brave Search, `web.fetch` с блокировкой внутренних адресов); MCP-серверы работают в Core или на выбранном устройстве и дают агенту `mcp.<сервер>.<инструмент>`. У плагинов есть настройки с секретными полями, которые остаются в Core, и уровень риска, от которого зависит подтверждение; каталог встроен в релиз и обновляется с mensarium.com. Устройство запускает MCP-сервер, только если его программа есть в списке разрешённых и устройство разрешает плагины от Core.
 - Target проверяет подпись, nonce, срок жизни запроса, хеш политики и наличие approval; пути ограничены выбранными папками, программы — allowlist-ом; `.env`, ключи и токены не читаются и вычищаются из вывода.
 - Хранилище Core — SQLite в `~/.mensarium/core`; секреты — файлы с правами 0600, в UI, промпты и на target не попадают.
 - После рестарта Core незавершённые задачи переходят в `PAUSED` и сами не продолжаются.

@@ -111,7 +111,7 @@ h1, h2, h3 { text-wrap: balance; }
 .icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .icon { width: 17px; height: 17px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 
-input[type="text"], input[type="password"], input[type="search"], textarea {
+input[type="text"], input[type="password"], input[type="search"], input[type="number"], textarea {
   width: 100%; background: var(--surface); color: var(--text);
   border: 1px solid var(--line-strong); border-radius: var(--r); padding: 10px 14px; font: 14px var(--font);
 }
@@ -640,6 +640,32 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .dream-change.created { color: var(--ok); border-color: rgba(90, 212, 154, 0.35); }
 .dream-change.reinforced { color: var(--accent-strong); border-color: var(--accent-line); }
 
+/* plugin settings */
+.plugin-form { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+.plugin-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.plugin-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.plugin-field-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-2); }
+.plugin-field-head .req { font-size: 11.5px; color: var(--faint); }
+.plugin-field .row-desc { margin: 0; font-size: 12px; }
+.plugin-field select { width: 100%; }
+.secret-field { display: flex; align-items: center; gap: 8px; }
+.secret-field input { flex: 1; min-width: 0; }
+.secret-field .pill { height: 22px; font-size: 11.5px; flex: none; }
+.link-btn { padding: 0; border: 0; background: none; color: var(--danger); font: 12.5px var(--font); cursor: pointer; flex: none; }
+.plugin-mcp { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.plugin-mcp .field-label { margin: 4px 0 0; }
+.plugin-mcp .market-argv { margin: 0; padding: 9px 12px; border-radius: var(--r); border: 1px solid var(--line); background: var(--frame); }
+.plugin-status { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-radius: var(--r); border: 1px solid var(--line); font-size: 13px; color: var(--text-2); }
+.plugin-status.error { border-color: rgba(244, 124, 124, 0.35); color: var(--danger); }
+.plugin-status .spacer { flex: 1; }
+.plugin-status .btn .spinner { width: 13px; height: 13px; }
+.plugin-provides { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; margin-bottom: 8px; border-radius: var(--r); border: 1px solid var(--line); background: var(--frame); }
+.plugin-provides > .icon { margin-top: 2px; color: var(--accent-strong); }
+.plugin-risk { margin-top: 10px; max-width: 320px; }
+.plugin-skill { margin-bottom: 16px; font-size: 13px; color: var(--text-2); }
+.plugin-skill summary { cursor: pointer; margin-bottom: 8px; }
+.market-actions .pill { height: 22px; font-size: 11.5px; }
+
 /* modal */
 .backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 16px; background: rgba(3, 2, 6, 0.7); }
 .modal { width: 100%; max-width: 540px; padding: 24px; border-radius: var(--r-xl); background: var(--surface); box-shadow: var(--pop); }
@@ -715,6 +741,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
   .segmented::-webkit-scrollbar { display: none; }
   .seg { flex: none; padding: 0 11px; }
   .market-grid { grid-template-columns: 1fr; }
+  .plugin-grid { grid-template-columns: 1fr; }
   .device-head { padding: 14px 16px; gap: 10px; }
   .device-head .status-label { display: none; }
   .device-body { padding: 0 16px 16px; }

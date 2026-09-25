@@ -1,0 +1,22 @@
+id: mcp-filesystem
+name: {en: Filesystem, ru: Файловая система}
+version: 1.0.0
+author: Model Context Protocol
+summary:
+  en: Read, write and move files in one folder on a device through the reference MCP server.
+  ru: Чтение, запись и перенос файлов в одной папке устройства через эталонный MCP-сервер.
+description:
+  en: Runs @modelcontextprotocol/server-filesystem with npx on the device you choose and limits it to one folder. The device needs Node.js, and npx must be in its list of allowed programs.
+  ru: Запускает @modelcontextprotocol/server-filesystem через npx на выбранном устройстве и ограничивает его одной папкой. На устройстве нужен Node.js, а npx должен быть в списке разрешённых программ.
+tags: [mcp, files]
+homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem
+config:
+  path:
+    required: true
+    placeholder: /Users/me/Projects
+    title: {en: Folder, ru: Папка}
+mcp:
+  command: npx
+  args: ["-y", "@modelcontextprotocol/server-filesystem", "{path}"]
+  placement: device
+  risk: write

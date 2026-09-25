@@ -38,6 +38,10 @@ The installer sets up [uv](https://docs.astral.sh/uv/) and Python 3.12 in `~/.me
 | `mensarium core backup -o file.pab` / `restore file.pab` | Encrypted transfer of Core to another host |
 | `mensarium target pair --server URL --code CODE --root DIR` | Pairing without the wizard (`--no-full-access`, `--no-remote-update` — restrictions on the device) |
 | `mensarium target run` | Run Target Agent in the foreground |
+| `mensarium plugins list [--catalog]`, `info ID`, `install ID\|file.yaml`, `update ID`, `remove ID` | Manage plugins of the Core on this machine |
+| `mensarium plugins config ID KEY=VALUE [--secret KEY] [--placement core\|DEVICE] [--risk RISK]` | Plugin settings; secrets are asked without echo |
+| `mensarium mcp add NAME --command 'npx -y pkg' \| --url URL [--secret-env KEY] [--device NAME]` | Add an MCP server in the Core or on a device; `mcp list`, `probe`, `tools`, `remove` |
+| `mensarium target plugins` | MCP servers the Core runs on this device |
 | `mensarium service install\|restart\|logs core\|target` | Manage the service |
 | `mensarium uninstall --purge` | Remove services and data |
 
@@ -53,7 +57,7 @@ LLM proposal → schema validation → target capability check → policy evalua
 - Access modes per chat: "Ask before acting" (default) and "Full access". The machine running Core is always available to the agent as a device.
 - Tools v0.1: `files.list`, `files.read`, `files.search`, `git.status`, `git.diff` (read, no confirmation needed) and `shell.exec` (always requires "Approve once" confirmation). File edits go through `git apply` with the patch on stdin.
 - Memory (Settings → Memory): notes with `[[Title]]` links, an interactive relationship graph, and dreaming — nightly consolidation of new chats into long-term memory with a diary. The agent searches, reads, and adds to memory via `memory.*` tools; pinned and important notes are included in the system prompt.
-- Plugins (Settings → Plugins): skills — instructions the agent loads via `skills.read` — and tools — command templates that are sent to the device as `shell.exec` and go through the same checks and approvals. The catalog ships with the release and updates from mensarium.com; a custom package is added via a YAML manifest.
+- Plugins (Settings → Plugins, or `mensarium plugins` / `mensarium mcp` on the Core host) extend the agent: skills are instructions it loads via `skills.read`; device tools are command templates sent to a device as `shell.exec`; Core tools run in the Core (`web.search` through Brave Search, `web.fetch` with internal addresses blocked); MCP servers run in the Core or on a chosen device and give the agent `mcp.<server>.<tool>`. Plugins have settings with secret fields that stay in the Core, a risk level that decides approvals, and a catalog bundled with the release and refreshed from mensarium.com. A device runs an MCP server only if its program is in the device's allowlist and plugins from the Core are allowed there.
 - The web UI is available in English (default) and Russian, switchable in Settings → Overview.
 - Target verifies the signature, nonce, request TTL, policy hash, and presence of approval; paths are restricted to selected folders, programs to an allowlist; `.env` files, keys, and tokens are never read and are stripped from output.
 - Core storage is SQLite in `~/.mensarium/core`; secrets are files with 0600 permissions and never reach the UI, prompts, or the target.

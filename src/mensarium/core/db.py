@@ -4,12 +4,14 @@ from typing import Any
 
 import aiosqlite
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 COLUMN_MIGRATIONS = [
     ("tasks", "mode", "TEXT NOT NULL DEFAULT 'ask'"),
     ("tasks", "model", "TEXT"),
     ("targets", "disabled_tools", "TEXT NOT NULL DEFAULT '[]'"),
+    ("plugins", "config", "TEXT NOT NULL DEFAULT '{}'"),
+    ("plugins", "status", "TEXT NOT NULL DEFAULT '{}'"),
 ]
 
 SCHEMA = """
@@ -76,15 +78,16 @@ CREATE TABLE IF NOT EXISTS dream_runs (
     started_at TEXT NOT NULL, finished_at TEXT, stats TEXT NOT NULL DEFAULT '{}',
     changes TEXT NOT NULL DEFAULT '[]', diary TEXT, error TEXT
 );
-CREATE TABLE IF NOT EXISTS extensions (
+CREATE TABLE IF NOT EXISTS plugins (
     id TEXT PRIMARY KEY, version TEXT NOT NULL, source TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
-    manifest TEXT NOT NULL, installed_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    manifest TEXT NOT NULL, config TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT '{}',
+    installed_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 """
 
 JSON_COLUMNS = {
     "settings", "capabilities", "policy", "body", "budget", "input", "output", "params", "usage",
-    "arguments", "metadata", "payload", "disabled_tools", "manifest", "tags", "stats", "changes",
+    "arguments", "metadata", "payload", "disabled_tools", "manifest", "tags", "stats", "changes", "config", "status",
 }
 
 
@@ -120,6 +123,10 @@ class Database:
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA foreign_keys=ON")
+        async with self._conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'") as cur:
+            tables = {row[0] for row in await cur.fetchall()}
+        if "extensions" in tables and "plugins" not in tables:
+            await self._conn.execute("ALTER TABLE extensions RENAME TO plugins")
         await self._conn.executescript(SCHEMA)
         for table, column, ddl in COLUMN_MIGRATIONS:
             async with self._conn.execute(f"PRAGMA table_info({table})") as cur:

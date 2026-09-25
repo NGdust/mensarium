@@ -3,7 +3,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
-from mensarium.contracts.extensions import PLACEHOLDER, CommandTool, ParamSpec
+from mensarium.contracts.plugins import PLACEHOLDER, CommandTool, ParamSpec
 from mensarium.tool_runtime.registry import ToolSpec
 
 _TYPES: dict[str, type] = {"string": str, "integer": int, "number": float, "boolean": bool}

@@ -3,7 +3,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from mensarium.contracts import llm, protocol
+from mensarium.contracts import llm, plugins, protocol
 from mensarium.contracts.tools import TOOL_ARGS
 
 MODELS: dict[str, type[BaseModel]] = {
@@ -16,10 +16,13 @@ MODELS: dict[str, type[BaseModel]] = {
     "execution.result": protocol.ExecutionResult,
     "target.update": protocol.TargetUpdate,
     "target.update.status": protocol.TargetUpdateStatus,
+    "target.plugins": protocol.TargetPlugins,
+    "target.plugins.status": protocol.TargetPluginsStatus,
     "pair.request": protocol.PairRequest,
     "pair.response": protocol.PairResponse,
     "llm.chat_request": llm.ChatRequest,
     "llm.model_response": llm.ModelResponse,
+    "plugin.manifest": plugins.Plugin,
     **{f"tool.{name}": model for name, model in TOOL_ARGS.items()},
 }
 

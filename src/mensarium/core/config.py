@@ -36,14 +36,14 @@ class LocalTargetConfig(BaseModel):
     allow_full_access: bool = True
 
 
-class MarketplaceConfig(BaseModel):
-    url: str | None = "https://mensarium.com/dist/marketplace.json"
+class PluginsConfig(BaseModel):
+    catalog_url: str | None = "https://mensarium.com/dist/plugins.json"
 
 
 class CoreConfig(BaseModel):
     update_url: str = "https://mensarium.com"
     server: ServerConfig = Field(default_factory=ServerConfig)
-    marketplace: MarketplaceConfig = Field(default_factory=MarketplaceConfig)
+    plugins: PluginsConfig = Field(default_factory=PluginsConfig)
     local_target: LocalTargetConfig = Field(default_factory=LocalTargetConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)

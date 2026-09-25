@@ -25,6 +25,7 @@ class TargetConfig(BaseModel):
     command_allowlist: list[str] = Field(default_factory=lambda: list(DEFAULT_COMMAND_ALLOWLIST))
     allow_full_access: bool = True
     allow_remote_update: bool = True
+    allow_remote_plugins: bool = True
     limits: TargetLimits = Field(default_factory=TargetLimits)
 
     @property
@@ -40,6 +41,7 @@ class TargetPaths:
         self.config = self.root / "config.yaml"
         self.key = self.root / "keys" / "target_ed25519.pem"
         self.audit = self.root / "audit.jsonl"
+        self.plugins = self.root / "plugins.json"
         self.backups = self.root / "backups"
 
     def ensure(self) -> None:

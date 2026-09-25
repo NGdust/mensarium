@@ -197,28 +197,30 @@ class Repo:
     async def get_artifact(self, artifact_id: str) -> dict[str, Any] | None:
         return await self.db.fetchone("SELECT * FROM artifacts WHERE id = ?", (artifact_id,))
 
-    # extensions
-    async def list_extensions(self, enabled_only: bool = False) -> list[dict[str, Any]]:
+    # plugins
+    async def list_plugins(self, enabled_only: bool = False) -> list[dict[str, Any]]:
         where = " WHERE enabled = 1" if enabled_only else ""
-        return await self.db.fetchall(f"SELECT * FROM extensions{where} ORDER BY id")
+        return await self.db.fetchall(f"SELECT * FROM plugins{where} ORDER BY id")
 
-    async def get_extension(self, ext_id: str) -> dict[str, Any] | None:
-        return await self.db.fetchone("SELECT * FROM extensions WHERE id = ?", (ext_id,))
+    async def get_plugin(self, plugin_id: str) -> dict[str, Any] | None:
+        return await self.db.fetchone("SELECT * FROM plugins WHERE id = ?", (plugin_id,))
 
-    async def save_extension(self, manifest: dict[str, Any], source: str) -> None:
+    async def save_plugin(self, manifest: dict[str, Any], source: str, config: dict[str, Any]) -> None:
         now = now_iso()
         await self.db.execute(
-            "INSERT INTO extensions(id, version, source, enabled, manifest, installed_at, updated_at) "
-            "VALUES (?, ?, ?, 1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET version = excluded.version, "
-            "source = excluded.source, manifest = excluded.manifest, updated_at = excluded.updated_at",
-            (manifest["id"], manifest["version"], source, canonical_json(manifest).decode(), now, now),
+            "INSERT INTO plugins(id, version, source, enabled, manifest, config, installed_at, updated_at) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET version = excluded.version, "
+            "source = excluded.source, manifest = excluded.manifest, config = excluded.config, updated_at = excluded.updated_at",
+            (manifest["id"], manifest["version"], source, canonical_json(manifest).decode(), canonical_json(config).decode(), now, now),
         )
 
-    async def set_extension_enabled(self, ext_id: str, enabled: bool) -> None:
-        await self.db.update("extensions", ext_id, {"enabled": int(enabled), "updated_at": now_iso()})
+    async def update_plugin(self, plugin_id: str, values: dict[str, Any]) -> None:
+        if "enabled" in values:
+            values["enabled"] = int(values["enabled"])
+        await self.db.update("plugins", plugin_id, {**values, "updated_at": now_iso()})
 
-    async def delete_extension(self, ext_id: str) -> None:
-        await self.db.execute("DELETE FROM extensions WHERE id = ?", (ext_id,))
+    async def delete_plugin(self, plugin_id: str) -> None:
+        await self.db.execute("DELETE FROM plugins WHERE id = ?", (plugin_id,))
 
     # settings (kv)
     async def get_setting(self, key: str) -> Any:

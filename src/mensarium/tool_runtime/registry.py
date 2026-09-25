@@ -4,8 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from mensarium.contracts.extensions import CommandTool
 from mensarium.contracts.llm import ToolDefinition
+from mensarium.contracts.plugins import CommandTool
 from mensarium.contracts.tools import CORE_TOOL_ARGS, TOOL_ARGS
 
 Risk = Literal["read", "write", "execute", "network", "destructive", "privileged"]
@@ -14,7 +14,8 @@ RunsOn = Literal["target", "core"]
 
 @dataclass(frozen=True)
 class ToolSpec:
-    """`runs_on="core"` tools touch only Core data; `command` tools run on the device as shell.exec."""
+    """`runs_on="core"` tools run inside the Core; `command` tools run on the device as shell.exec and
+    `mcp` tools are (server, tool) of an MCP server in the Core or on the device."""
 
     name: str
     description: str
@@ -23,10 +24,13 @@ class ToolSpec:
     display: Callable[[dict[str, Any]], str]
     runs_on: RunsOn = "target"
     command: CommandTool | None = None
+    mcp: tuple[str, str] | None = None
+    schema: dict[str, Any] | None = None
 
     def definition(self) -> ToolDefinition:
-        schema = self.args_model.model_json_schema()
+        schema = dict(self.schema) if self.schema else self.args_model.model_json_schema()
         schema.pop("title", None)
+        schema.pop("$schema", None)
         return ToolDefinition(name=self.name, description=self.description, parameters=schema)
 
 

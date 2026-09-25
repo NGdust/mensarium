@@ -75,11 +75,29 @@ class MemorySaveArgs(_Args):
     tags: list[str] = Field(default_factory=list, max_length=8)
 
 
-CORE_TOOL_ARGS: dict[str, type[_Args]] = {
+class WebSearchArgs(_Args):
+    query: str = Field(min_length=1, max_length=400, description="Search query")
+    count: int | None = Field(None, ge=1, le=20, description="Number of results, the plugin setting by default")
+
+
+class WebFetchArgs(_Args):
+    url: str = Field(pattern=r"^https?://", max_length=2000, description="Page address, http or https")
+    max_chars: int = Field(20000, ge=500, le=100000, description="Longest text to return")
+
+
+class McpArgs(BaseModel):
+    """MCP tools bring their own JSON schema; the harness checks it separately."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+CORE_TOOL_ARGS: dict[str, type[BaseModel]] = {
     "skills.read": SkillsReadArgs,
     "memory.search": MemorySearchArgs,
     "memory.read": MemoryReadArgs,
     "memory.save": MemorySaveArgs,
+    "web.search": WebSearchArgs,
+    "web.fetch": WebFetchArgs,
 }
 
 PATH_FIELDS: dict[str, tuple[str, ...]] = {

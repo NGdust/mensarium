@@ -1,0 +1,24 @@
+id: mcp-github
+name: GitHub
+version: 1.0.0
+author: GitHub
+summary:
+  en: Issues, pull requests, code search and repository files through GitHub's MCP server.
+  ru: Задачи, пулл-реквесты, поиск по коду и файлы репозиториев через MCP-сервер GitHub.
+description:
+  en: Connects the Core to GitHub's hosted MCP server with your personal access token. The token stays in the Core. Pick the token scopes you are comfortable with; every call that writes to GitHub goes through approval unless you lower the risk.
+  ru: Подключает Core к облачному MCP-серверу GitHub по вашему персональному токену. Токен хранится в Core. Выдайте токену только нужные права; каждый вызов, который пишет в GitHub, идёт через подтверждение, если не понизить риск.
+tags: [mcp, git, github]
+homepage: https://github.com/github/github-mcp-server
+config:
+  token:
+    secret: true
+    required: true
+    title: {en: Personal access token, ru: Персональный токен}
+    help: {en: "https://github.com/settings/personal-access-tokens", ru: "https://github.com/settings/personal-access-tokens"}
+mcp:
+  transport: http
+  url: https://api.githubcopilot.com/mcp/
+  headers:
+    Authorization: "Bearer {token}"
+  risk: network

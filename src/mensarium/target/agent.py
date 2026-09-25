@@ -23,8 +23,11 @@ from mensarium.contracts.protocol import (
     ExecutionRequest,
     ExecutionResult,
     Heartbeat,
+    McpServerStatus,
     TargetHello,
     TargetInfo,
+    TargetPlugins,
+    TargetPluginsStatus,
     TargetPolicy,
     TargetUpdate,
     TargetUpdateStatus,
@@ -34,6 +37,7 @@ from mensarium.contracts.protocol import (
 from mensarium.shared.crypto import canonical_json, sha256_hex, sign, verify
 from mensarium.shared.timeutil import now_iso, parse_iso, utcnow
 from mensarium.target.config import TargetConfig, TargetPaths
+from mensarium.target.mcp_host import McpHost
 from mensarium.target.tools import ExecTimeout, Executor, ToolError
 
 log = logging.getLogger(__name__)
@@ -79,18 +83,22 @@ class TargetAgent:
         self.key = key
         self.executor = Executor(cfg)
         self.audit = AuditLog(paths)
+        self.mcp = McpHost(cfg, self.executor.roots, paths.plugins)
+        self.executor.mcp = self.mcp
+        self.tools = TOOLS + (["mcp.call"] if cfg.allow_remote_plugins else [])
         self.policy = TargetPolicy(
             roots=[str(r) for r in self.executor.roots],
             command_allowlist=cfg.command_allowlist,
             allow_full_access=cfg.allow_full_access,
         )
-        self.policy_hash = policy_snapshot_hash(self.policy, TOOLS)
+        self.policy_hash = policy_snapshot_hash(self.policy, self.tools)
         self.started_at = utcnow()
         self.seen_nonces: dict[str, float] = {}
         self.running: dict[str, asyncio.Task[None]] = {}
         self.send_lock = asyncio.Lock()
         self.ws: Any = None
         self.updating: asyncio.Task[None] | None = None
+        self.syncing: set[asyncio.Task[None]] = set()
 
     def hello(self) -> TargetHello:
         return TargetHello(
@@ -102,7 +110,7 @@ class TargetAgent:
                 agent_version=__version__,
             ),
             capabilities=Capabilities(
-                tools=TOOLS,
+                tools=self.tools,
                 shells=[os.path.basename(os.environ.get("SHELL", "sh"))],
                 limits=self.cfg.limits,
                 remote_update=self.cfg.allow_remote_update and updater().exists(),
@@ -169,6 +177,10 @@ class TargetAgent:
             task = asyncio.create_task(self._execute(req, msg))
             self.running[req.request_id] = task
             task.add_done_callback(lambda _: self.running.pop(req.request_id, None))
+        elif kind == "target.plugins":
+            task = asyncio.create_task(self._plugins(msg))
+            self.syncing.add(task)
+            task.add_done_callback(self.syncing.discard)
         elif kind == "target.update":
             if self.updating and not self.updating.done():
                 await self._send_status(str(msg.get("request_id")), "rejected", "an update is already running")
@@ -183,7 +195,7 @@ class TargetAgent:
             if running:
                 running.cancel()
 
-    def _check_signed(self, req: ExecutionRequest | TargetUpdate, raw: dict[str, Any]) -> str | None:
+    def _check_signed(self, req: ExecutionRequest | TargetUpdate | TargetPlugins, raw: dict[str, Any]) -> str | None:
         """Signature, addressee, freshness and replay checks shared by every command from the Core."""
         if not verify(self.cfg.core_public_key, raw):
             return "invalid signature"
@@ -207,10 +219,13 @@ class TargetAgent:
             return reason
         if req.policy_snapshot_hash != self.policy_hash:
             return "policy snapshot mismatch; core must refresh target policy"
-        if req.tool not in TOOLS:
+        if req.tool not in self.tools:
             return f"tool {req.tool} is not enabled on this target"
         full_access = req.mode == "full" and self.cfg.allow_full_access
-        if req.tool in APPROVAL_REQUIRED and not req.approval_ref and not full_access:
+        needs_approval = req.tool in APPROVAL_REQUIRED or (
+            req.tool == "mcp.call" and self.mcp.risk(str(req.arguments.get("server"))) != "read"
+        )
+        if needs_approval and not req.approval_ref and not full_access:
             return f"tool {req.tool} requires an approval reference (full access is disabled on this device)"
         return None
 
@@ -243,6 +258,29 @@ class TargetAgent:
             return
         log.info("update installed; restarting the agent")
         os.execv(sys.executable, [sys.executable, *sys.argv])
+
+    async def _plugins(self, raw: dict[str, Any]) -> None:
+        """Start, keep or stop the MCP servers the Core placed here and report their tools."""
+        try:
+            req = TargetPlugins.model_validate(raw)
+        except ValidationError as e:
+            log.warning("invalid target.plugins", extra={"error": str(e)})
+            return
+        reason = self._check_signed(req, raw)
+        if not reason and not self.cfg.allow_remote_plugins:
+            reason = "plugins from the Core are disabled on this device (allow_remote_plugins)"
+        if reason:
+            log.warning("plugins request rejected", extra={"reason": reason})
+            states = [McpServerStatus(name=d.name, state="rejected", error=reason) for d in req.servers]
+        else:
+            states = await self.mcp.apply(req.servers)
+        self.audit.append({"request_id": req.request_id, "action": "plugins", "servers": [s.name for s in states], "error": reason})
+        answer = TargetPluginsStatus(request_id=req.request_id, servers=states)
+        answer.signature = sign(self.key, answer.model_dump())
+        try:
+            await self._send(answer.model_dump())
+        except websockets.ConnectionClosed:
+            log.warning("plugins status not delivered: connection closed")
 
     async def _send_status(self, request_id: str, status: str, detail: str) -> None:
         msg = TargetUpdateStatus(request_id=request_id, status=status, detail=detail)  # type: ignore[arg-type]

@@ -1,0 +1,24 @@
+id: web-fetch
+name: {en: Web page reader, ru: Чтение веб-страниц}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Open a web page and read its text.
+  ru: Открывает веб-страницу и читает её текст.
+description:
+  en: Adds the web.fetch tool that runs in the Core. It downloads a public page, drops scripts and styles and returns readable text. Internal and private addresses are blocked unless you allow them, so the agent cannot reach services next to the Core.
+  ru: Добавляет инструмент web.fetch, который работает в Core. Скачивает публичную страницу, убирает скрипты и стили и возвращает читаемый текст. Внутренние и частные адреса заблокированы, пока вы их не разрешите, поэтому агент не доберётся до сервисов рядом с Core.
+tags: [web]
+builtin: web_fetch
+config:
+  max_chars:
+    type: integer
+    default: 20000
+    minimum: 1000
+    maximum: 100000
+    title: {en: Longest text per page, ru: Максимум текста со страницы}
+  allow_private:
+    type: boolean
+    default: false
+    title: {en: Allow internal addresses, ru: Разрешить внутренние адреса}
+    help: {en: "localhost, 10.x, 192.168.x and similar", ru: "localhost, 10.x, 192.168.x и подобные"}

@@ -5,7 +5,7 @@ import shlex
 import shutil
 import signal
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mensarium.contracts.protocol import ToolOutput
 from mensarium.contracts.tools import (
@@ -18,6 +18,10 @@ from mensarium.contracts.tools import (
 )
 from mensarium.shared.redaction import SECRET_DIRS, SECRET_FILE_PATTERNS, is_secret_path, redact
 from mensarium.target.config import TargetConfig
+from mensarium.tool_runtime.mcp import McpError
+
+if TYPE_CHECKING:
+    from mensarium.target.mcp_host import McpHost
 
 MAX_READ_BYTES = 2_000_000
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".ruff_cache", ".pytest_cache", "dist", "build", ".next", ".idea"}  # fmt: skip
@@ -32,6 +36,7 @@ class Executor:
     def __init__(self, cfg: TargetConfig) -> None:
         self.cfg = cfg
         self.roots = [Path(r).expanduser().resolve() for r in cfg.roots]
+        self.mcp: McpHost | None = None
 
     def _path(self, value: str) -> Path:
         p = Path(value).expanduser()
@@ -57,6 +62,7 @@ class Executor:
             "git.status": self.git_status,
             "git.diff": self.git_diff,
             "shell.exec": self.shell_exec,
+            "mcp.call": self.mcp_call,
         }.get(tool)
         if handler is None:
             raise ToolError(f"unsupported tool {tool!r}")
@@ -158,6 +164,19 @@ class Executor:
         if a.path:
             args += ["--", str(self._path(a.path))]
         return await self._git(a.repo, *args)
+
+    async def mcp_call(self, raw: dict[str, Any]) -> ToolOutput:
+        if self.mcp is None:
+            raise ToolError("MCP servers are not available on this device")
+        args = raw.get("arguments")
+        if not isinstance(args, dict):
+            raise ToolError("arguments must be a JSON object")
+        try:
+            text, is_error = await self.mcp.call(str(raw.get("server")), str(raw.get("tool")), args, self.cfg.limits.max_exec_seconds)
+        except McpError as e:
+            raise ToolError(str(e)) from e
+        out, truncated = self._limit(redact(text))
+        return ToolOutput(exit_code=1 if is_error else 0, stdout=out, truncated=truncated)
 
     async def shell_exec(self, raw: dict[str, Any]) -> ToolOutput:
         a = ShellExecArgs.model_validate(raw)

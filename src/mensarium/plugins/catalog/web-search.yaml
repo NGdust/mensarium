@@ -1,0 +1,37 @@
+id: web-search
+name: {en: Web search, ru: Поиск в интернете}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Search the web with Brave Search.
+  ru: Поиск в интернете через Brave Search.
+description:
+  en: Adds the web.search tool that runs in the Core and returns titles, links and snippets from Brave Search. Needs a Brave Search API key; there is a free plan. The key stays in the Core and never reaches the model or devices.
+  ru: Добавляет инструмент web.search, который работает в Core и возвращает заголовки, ссылки и фрагменты из Brave Search. Нужен ключ Brave Search API, есть бесплатный тариф. Ключ хранится в Core и не попадает ни к модели, ни на устройства.
+tags: [web, search]
+homepage: https://brave.com/search/api/
+builtin: web_search
+config:
+  api_key:
+    secret: true
+    required: true
+    title: {en: Brave Search API key, ru: Ключ Brave Search API}
+    help: {en: "Create one at https://api.search.brave.com/app/keys", ru: "Создать: https://api.search.brave.com/app/keys"}
+  count:
+    type: integer
+    default: 8
+    minimum: 1
+    maximum: 20
+    title: {en: Results per search, ru: Результатов на запрос}
+  country:
+    default: ""
+    placeholder: "us, de, ru"
+    title: {en: Country, ru: Страна}
+  search_lang:
+    default: ""
+    placeholder: "en, ru"
+    title: {en: Result language, ru: Язык результатов}
+  safesearch:
+    enum: ["off", "moderate", "strict"]
+    default: moderate
+    title: {en: Safe search, ru: Безопасный поиск}

@@ -112,6 +112,52 @@ class TargetUpdateStatus(BaseModel):
     signature: str = ""
 
 
+class McpServerDef(BaseModel):
+    """An MCP server the Core asks a device to run; config values are filled in, Core secrets never are."""
+
+    name: str
+    transport: Literal["stdio", "http"] = "stdio"
+    command: str | None = None
+    args: list[str] = []
+    env: dict[str, str] = {}
+    url: str | None = None
+    headers: dict[str, str] = {}
+    risk: str = "network"
+    cwd: str | None = None
+
+
+class TargetPlugins(BaseModel):
+    type: Literal["target.plugins"] = "target.plugins"
+    request_id: str
+    target_id: str
+    issued_at: str
+    expires_at: str
+    nonce: str
+    servers: list[McpServerDef] = []
+    signature: str = ""
+
+
+class McpToolInfo(BaseModel):
+    name: str
+    description: str = ""
+    input_schema: dict[str, Any] = {}
+    annotations: dict[str, Any] = {}
+
+
+class McpServerStatus(BaseModel):
+    name: str
+    state: Literal["ok", "error", "rejected"]
+    error: str = ""
+    tools: list[McpToolInfo] = []
+
+
+class TargetPluginsStatus(BaseModel):
+    type: Literal["target.plugins.status"] = "target.plugins.status"
+    request_id: str
+    servers: list[McpServerStatus] = []
+    signature: str = ""
+
+
 class ToolOutput(BaseModel):
     exit_code: int | None = None
     stdout: str = ""

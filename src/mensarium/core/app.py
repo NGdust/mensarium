@@ -1,6 +1,8 @@
 import asyncio
 import hmac
 import json
+import re
+import shlex
 import time
 from collections import deque
 from collections.abc import AsyncIterator
@@ -18,7 +20,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from mensarium import __version__
 from mensarium.agent_core.profile import AgentProfile, builtin_profiles
-from mensarium.contracts.extensions import Extension
+from mensarium.contracts.plugins import Plugin
 from mensarium.contracts.protocol import AccessMode, PairRequest, PairResponse
 from mensarium.core import distribution, pairing
 from mensarium.core.catalog import Catalog
@@ -26,10 +28,10 @@ from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secre
 from mensarium.core.db import Database
 from mensarium.core.dreaming import Dreamer, DreamError
 from mensarium.core.events import EventBus
-from mensarium.core.extensions import ExtensionError, check_conflicts, listing, parse_manifests
 from mensarium.core.local_target import ensure_local_target, local_target_paths
 from mensarium.core.memory import KINDS, Memory, NoteError
 from mensarium.core.orchestrator import Orchestrator, TaskError, full_access
+from mensarium.core.plugins import PluginError, PluginManager
 from mensarium.core.releases import ReleaseError, fetch_latest, spawn_update, updater
 from mensarium.core.repo import Repo
 from mensarium.core.target_hub import TargetHub, TargetUnavailable
@@ -62,6 +64,7 @@ class Core:
     pair_failures: deque[float]
     local_target_id: str | None
     catalog: Catalog
+    plugins: PluginManager
     memory: Memory
     dreamer: Dreamer
 
@@ -120,6 +123,28 @@ class InstallBody(BaseModel):
     id: str
 
 
+class PluginConfigBody(BaseModel):
+    values: dict[str, Any] = {}
+    secrets: dict[str, str | None] = {}
+    placement: str | None = None
+    risk: str | None = None
+    disabled_tools: list[str] | None = None
+
+
+class McpBody(BaseModel):
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,40}$")
+    transport: Literal["stdio", "http"] = "stdio"
+    command: str | None = None
+    url: str | None = None
+    env: dict[str, str] = {}
+    secret_env: dict[str, str] = {}
+    headers: dict[str, str] = {}
+    secret_headers: dict[str, str] = {}
+    placement: str = "core"
+    risk: Literal["read", "execute", "write", "network", "destructive"] = "network"
+    description: str = ""
+
+
 class EnabledBody(BaseModel):
     enabled: bool
 
@@ -168,7 +193,12 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         hub = TargetHub(repo, key)
         bus = EventBus(repo)
         memory = Memory(repo)
-        orchestrator = Orchestrator(repo, hub, bus, provider, cfg, workspace_id, paths.artifacts, memory)
+        plugins = PluginManager(repo, paths, workspace_id)
+        plugins.send_plugins = lambda target_id, servers: hub.request_plugins(target_id, servers, cfg.execution.request_ttl_s)
+        plugins.device_tools_supported = lambda target_id: hub.supports(target_id, "mcp.call")
+        hub.on_connect = plugins.sync_device
+        await plugins.start()
+        orchestrator = Orchestrator(repo, hub, bus, provider, cfg, workspace_id, paths.artifacts, memory, plugins)
         await orchestrator.recover_after_restart()
         dreamer = Dreamer(repo, memory, provider, cfg, workspace_id)
         await dreamer.recover()
@@ -192,7 +222,8 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             admin_token=admin_token,
             pair_failures=deque(maxlen=50),
             local_target_id=local[0].target_id if local else None,
-            catalog=Catalog(cfg.marketplace.url),
+            catalog=Catalog(cfg.plugins.catalog_url),
+            plugins=plugins,
             memory=memory,
             dreamer=dreamer,
         )
@@ -201,6 +232,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         finally:
             for runner in list(orchestrator.runners.values()):
                 runner.cancel()
+            await plugins.stop()
             dream_scheduler.cancel()
             for dream in list(dreamer.tasks):
                 dream.cancel()
@@ -397,7 +429,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         t = await c.repo.get_target(target_id)
         if not t or t["status"] == "revoked":
             raise HTTPException(404, "target not found")
-        known = set(REGISTRY) | {x.name for e in parse_manifests(await c.repo.list_extensions()) for x in e.tools}
+        known = set(REGISTRY) | {x["name"] for x in await c.plugins.device_tools(target_id)}
         if body.tool not in known:
             raise HTTPException(422, f"unknown tool {body.tool!r}")
         disabled = set(t.get("disabled_tools") or [])
@@ -495,67 +527,152 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         await c.repo.audit(c.workspace_id, "user", "profile.imported", {"id": profile.id, "version": profile.version})
         return {"id": profile.id}
 
-    @app.get("/v1/marketplace")
-    async def marketplace(c: Core = Depends(auth)) -> dict[str, Any]:
+    def plugin_error(e: PluginError) -> HTTPException:
+        return HTTPException(404 if "not installed" in str(e) else 409, str(e))
+
+    async def targets_by_key(c: Core) -> dict[str, dict[str, Any]]:
+        rows = [t for t in await c.repo.list_targets() if t["status"] != "revoked"]
+        return {**{t["name"]: t for t in rows}, **{t["id"]: t for t in rows}}
+
+    async def plugin_view(c: Core, plugin_id: str) -> dict[str, Any]:
+        catalog, _ = await c.catalog.load()
+        for item in await c.plugins.listing(catalog):
+            if item["id"] == plugin_id:
+                return item
+        raise HTTPException(404, f"plugin {plugin_id!r} not found")
+
+    @app.get("/v1/plugins")
+    async def list_plugins(c: Core = Depends(auth)) -> dict[str, Any]:
         catalog, error = await c.catalog.load()
-        return {"items": listing(catalog, await c.repo.list_extensions()), "error": error}
-
-    @app.get("/v1/extensions")
-    async def installed_extensions(c: Core = Depends(auth)) -> list[dict[str, Any]]:
-        rows = {r["id"]: r for r in await c.repo.list_extensions()}
-        return [
-            {**e.model_dump(), "enabled": bool(rows[e.id]["enabled"]), "source": rows[e.id]["source"]}
-            for e in parse_manifests(list(rows.values()))
+        devices = [
+            {"id": t["id"], "name": t["name"], "online": c.hub.is_online(t["id"]), "plugins": c.hub.supports(t["id"], "mcp.call")}
+            for t in await c.repo.list_targets()
+            if t["status"] != "revoked"
         ]
+        return {"items": await c.plugins.listing(catalog), "error": error, "devices": devices}
 
-    async def save_extension(c: Core, ext: Extension, source: str) -> dict[str, str]:
-        try:
-            await check_conflicts(c.repo, ext)
-        except ExtensionError as e:
-            raise HTTPException(409, str(e)) from e
-        await c.repo.save_extension(ext.model_dump(exclude_defaults=True), source)
-        await c.repo.audit(
-            c.workspace_id, "user", "extension.installed", {"id": ext.id, "version": ext.version, "source": source}
-        )
-        return {"id": ext.id, "version": ext.version}
+    @app.get("/v1/plugins/{plugin_id}")
+    async def get_plugin(plugin_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        return await plugin_view(c, plugin_id)
 
-    @app.post("/v1/extensions")
-    async def install_extension(body: InstallBody, c: Core = Depends(auth)) -> dict[str, str]:
+    @app.post("/v1/plugins")
+    async def install_plugin(body: InstallBody, c: Core = Depends(auth)) -> dict[str, Any]:
         catalog, _ = await c.catalog.load()
-        ext = catalog.get(body.id)
-        if ext is None:
-            raise HTTPException(404, f"extension {body.id!r} is not in the catalog")
-        row = await c.repo.get_extension(body.id)
+        plugin = catalog.get(body.id)
+        if plugin is None:
+            raise HTTPException(404, f"plugin {body.id!r} is not in the catalog")
+        row = await c.repo.get_plugin(body.id)
         if row and row["source"] == "custom":
-            raise HTTPException(409, f"a custom extension {body.id!r} is installed; remove it first")
-        return await save_extension(c, ext, "catalog")
-
-    @app.post("/v1/extensions/custom")
-    async def install_custom_extension(request: Request, c: Core = Depends(auth)) -> dict[str, str]:
+            raise HTTPException(409, f"a custom plugin {body.id!r} is installed; remove it first")
         try:
-            ext = Extension.model_validate(yaml.safe_load(await request.body()))
+            await c.plugins.install(plugin, "catalog")
+        except PluginError as e:
+            raise plugin_error(e) from e
+        return await plugin_view(c, body.id)
+
+    @app.post("/v1/plugins/custom")
+    async def install_custom_plugin(request: Request, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            plugin = Plugin.model_validate(yaml.safe_load(await request.body()))
         except (yaml.YAMLError, ValidationError) as e:
-            raise HTTPException(422, f"invalid extension: {e}") from e
+            raise HTTPException(422, f"invalid plugin: {e}") from e
         catalog, _ = await c.catalog.load()
-        if ext.id in catalog:
-            raise HTTPException(409, f"id {ext.id!r} belongs to a catalog extension; pick another id")
-        return await save_extension(c, ext, "custom")
+        if plugin.id in catalog:
+            raise HTTPException(409, f"id {plugin.id!r} belongs to a catalog plugin; pick another id")
+        try:
+            await c.plugins.install(plugin, "custom")
+        except PluginError as e:
+            raise plugin_error(e) from e
+        return await plugin_view(c, plugin.id)
 
-    @app.patch("/v1/extensions/{ext_id}")
-    async def toggle_extension(ext_id: str, body: EnabledBody, c: Core = Depends(auth)) -> dict[str, bool]:
-        if not await c.repo.get_extension(ext_id):
-            raise HTTPException(404, "extension not found")
-        await c.repo.set_extension_enabled(ext_id, body.enabled)
-        await c.repo.audit(c.workspace_id, "user", "extension.toggled", {"id": ext_id, "enabled": body.enabled})
-        return {"enabled": body.enabled}
+    @app.post("/v1/plugins/mcp")
+    async def add_mcp_server(body: McpBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        """A custom MCP server becomes a custom plugin; its secret env vars and headers become secret settings."""
+        plugin_id = f"mcp-{body.name}"
+        existing = await c.repo.get_plugin(plugin_id)
+        if existing and existing["source"] != "custom":
+            raise HTTPException(409, f"{plugin_id} is a catalog plugin; configure it instead")
+        config: dict[str, Any] = {}
+        secrets: dict[str, str | None] = {}
+        template: dict[str, Any] = {"transport": body.transport, "env": dict(body.env), "headers": dict(body.headers), "risk": body.risk}
+        for part, values in (("env", body.secret_env), ("headers", body.secret_headers)):
+            for key, value in values.items():
+                field = f"{part}_{re.sub(r'[^a-z0-9_]', '_', key.lower())}"
+                config[field] = {"secret": True, "required": True, "title": key}
+                template[part][key] = "{" + field + "}"
+                secrets[field] = value
+        if body.transport == "stdio":
+            try:
+                argv = shlex.split(body.command or "")
+            except ValueError as e:
+                raise HTTPException(422, f"cannot parse the command: {e}") from e
+            if not argv:
+                raise HTTPException(422, "command is required for a stdio server")
+            template |= {"command": argv[0], "args": argv[1:]}
+        else:
+            template["url"] = body.url
+        summary = body.description or f"MCP server {body.name}"
+        manifest = {"id": plugin_id, "name": body.name, "version": "1.0.0", "author": "you", "summary": summary, "config": config, "mcp": template}
+        targets = await targets_by_key(c)
+        placement = "core" if body.placement == "core" else (targets.get(body.placement) or {}).get("id")
+        if placement is None:
+            raise HTTPException(409, f"unknown device {body.placement!r}")
+        if placement != "core" and secrets:
+            raise HTTPException(409, "secrets stay in the Core: an MCP server with secret values can run only in the Core")
+        try:
+            await c.plugins.install(Plugin.model_validate(manifest), "custom")
+            await c.plugins.configure(plugin_id, secrets=secrets, placement=placement, risk=body.risk, targets=targets)
+        except ValidationError as e:
+            raise HTTPException(422, f"invalid MCP server: {e.errors(include_url=False)}") from e
+        except PluginError as e:
+            raise plugin_error(e) from e
+        return await plugin_view(c, plugin_id)
 
-    @app.delete("/v1/extensions/{ext_id}")
-    async def remove_extension(ext_id: str, c: Core = Depends(auth)) -> dict[str, bool]:
-        if not await c.repo.get_extension(ext_id):
-            raise HTTPException(404, "extension not found")
-        await c.repo.delete_extension(ext_id)
-        await c.repo.audit(c.workspace_id, "user", "extension.removed", {"id": ext_id})
+    @app.patch("/v1/plugins/{plugin_id}")
+    async def toggle_plugin(plugin_id: str, body: EnabledBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            await c.plugins.set_enabled(plugin_id, body.enabled)
+        except PluginError as e:
+            raise plugin_error(e) from e
+        return await plugin_view(c, plugin_id)
+
+    @app.put("/v1/plugins/{plugin_id}/config")
+    async def configure_plugin(plugin_id: str, body: PluginConfigBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        targets = await targets_by_key(c)
+        placement = body.placement
+        if placement and placement != "core":
+            placement = (targets.get(placement) or {}).get("id", placement)
+        try:
+            await c.plugins.configure(
+                plugin_id, body.values, body.secrets, placement, body.risk, body.disabled_tools, targets=targets
+            )
+        except PluginError as e:
+            raise plugin_error(e) from e
+        return await plugin_view(c, plugin_id)
+
+    @app.post("/v1/plugins/{plugin_id}/update")
+    async def update_plugin(plugin_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        return await install_plugin(InstallBody(id=plugin_id), c)
+
+    @app.post("/v1/plugins/{plugin_id}/probe")
+    async def probe_plugin(plugin_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            await c.plugins.probe(plugin_id)
+        except PluginError as e:
+            raise plugin_error(e) from e
+        return await plugin_view(c, plugin_id)
+
+    @app.delete("/v1/plugins/{plugin_id}")
+    async def remove_plugin(plugin_id: str, c: Core = Depends(auth)) -> dict[str, bool]:
+        try:
+            await c.plugins.remove(plugin_id)
+        except PluginError as e:
+            raise plugin_error(e) from e
         return {"ok": True}
+
+    @app.get("/v1/targets/{target_id}/plugin-tools")
+    async def target_plugin_tools(target_id: str, c: Core = Depends(auth)) -> list[dict[str, Any]]:
+        return await c.plugins.device_tools(target_id)
 
     def note_error(e: NoteError) -> HTTPException:
         return HTTPException(404 if "not found" in str(e) else 409, str(e))

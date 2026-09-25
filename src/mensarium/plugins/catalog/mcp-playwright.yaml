@@ -1,0 +1,23 @@
+id: mcp-playwright
+name: {en: Browser (Playwright), ru: Браузер (Playwright)}
+version: 1.0.0
+author: Microsoft
+summary:
+  en: Let the agent open pages, click and fill forms in a browser on a device.
+  ru: Агент открывает страницы, кликает и заполняет формы в браузере на устройстве.
+description:
+  en: Runs Microsoft's Playwright MCP server with npx on the device you choose. The agent drives a real browser there, so keep the risk at network or higher to approve each step. The device needs Node.js and npx in its allowed programs; the first start downloads a browser.
+  ru: Запускает MCP-сервер Playwright от Microsoft через npx на выбранном устройстве. Агент управляет там настоящим браузером, поэтому оставьте риск «сеть» или выше, чтобы подтверждать каждый шаг. На устройстве нужен Node.js и npx в разрешённых программах; при первом запуске скачается браузер.
+tags: [mcp, browser]
+homepage: https://github.com/microsoft/playwright-mcp
+config:
+  headless:
+    type: boolean
+    default: true
+    flag: --headless
+    title: {en: Without a window, ru: Без окна}
+mcp:
+  command: npx
+  args: ["-y", "@playwright/mcp@latest", "{headless}"]
+  placement: device
+  risk: network
