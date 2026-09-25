@@ -16,6 +16,9 @@ class LLMProvider(Protocol):
 
     default_model: str
 
+    @property
+    def vision_model(self) -> str | None: ...
+
     async def list_models(self) -> list[ModelInfo]: ...
 
     async def chat(

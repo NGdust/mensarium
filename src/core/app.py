@@ -100,6 +100,7 @@ class ProviderBody(BaseModel):
     api_key: str | None = Field(None, max_length=500)
     timeout_s: int = Field(90, ge=5, le=600)
     max_retries: int = Field(2, ge=0, le=5)
+    vision_model: str | None = Field(None, max_length=200)
 
 
 class ProviderTestBody(BaseModel):

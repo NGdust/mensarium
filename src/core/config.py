@@ -16,6 +16,7 @@ class ProviderConfig(BaseModel):
     kind: str | None = None
     base_url: str
     default_model: str
+    vision_model: str | None = None
     api_key_ref: str | None = None
     timeout_s: int = 90
     max_retries: int = 2

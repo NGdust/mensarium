@@ -1153,6 +1153,9 @@ async function viewChat(taskId) {
       case 'task.error':
         note('alert', p.message, 'error');
         break;
+      case 'task.note':
+        note('alert', p.message);
+        break;
       default:
     }
   }
@@ -1326,6 +1329,7 @@ async function settingsProviders(shell) {
     const listId = `models-${Math.random().toString(36).slice(2)}`;
     const modelList = h('datalist', { id: listId });
     const model = h('input', { type: 'text', value: x ? x.default_model : kinds[kindSel.value].default_model, list: listId, 'aria-label': tr('Default model') });
+    const vision = h('input', { type: 'text', value: x ? (x.vision_model || '') : (kinds[kindSel.value].vision_model || ''), list: listId, placeholder: kinds[kindSel.value].vision_model || '', 'aria-label': tr('Model for images') });
     const timeout = h('input', { type: 'number', value: x ? x.timeout_s : 90, min: 5, max: 600, 'aria-label': tr('Timeout, s') });
     const retries = h('input', { type: 'number', value: x ? x.max_retries : 2, min: 0, max: 5, 'aria-label': tr('Retries') });
     let makeActive = adding && !data.providers.length;
@@ -1367,7 +1371,7 @@ async function settingsProviders(shell) {
       try {
         await api(`/v1/providers/${encodeURIComponent(id.value.trim())}`, { method: 'PUT', body: JSON.stringify({
           kind: kindSel.value, base_url: base.value.trim(), default_model: model.value.trim(), api_key: key.value || null,
-          timeout_s: Number(timeout.value) || 90, max_retries: Number(retries.value) || 0,
+          timeout_s: Number(timeout.value) || 90, max_retries: Number(retries.value) || 0, vision_model: vision.value.trim() || null,
         }) });
         if (makeActive) await post(`/v1/providers/${encodeURIComponent(id.value.trim())}/activate`);
         state.models = null;
@@ -1385,6 +1389,7 @@ async function settingsProviders(shell) {
         field(tr('API key'), key, keyHint),
         status,
         field(tr('Default model'), h('div', {}, model, modelList)),
+        field(tr('Model for images'), vision, h('div', { class: 'row-desc' }, tr('Used automatically on steps where the agent looks at a screenshot; leave empty if the default model accepts images.'))),
         h('div', { class: 'plugin-grid' }, field(tr('Timeout, s'), timeout), field(tr('Retries'), retries)),
         activeSwitch),
       h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
@@ -1394,7 +1399,7 @@ async function settingsProviders(shell) {
   const rows = h('div', { class: 'rows' }, data.providers.map((x) => h('div', { class: 'row' },
     h('div', { class: 'row-text' },
       h('div', { class: 'row-title' }, x.title, x.id !== x.kind ? h('code', { class: 'provider-id' }, x.id) : null, x.active ? h('span', { class: 'pill accent' }, tr('active')) : null),
-      h('div', { class: 'row-desc' }, [x.base_url, x.default_model, x.needs_key || x.has_key ? (x.has_key ? tr('key saved') : tr('no key')) : null].filter(Boolean).join(' · '))),
+      h('div', { class: 'row-desc' }, [x.base_url, x.default_model, x.vision_model ? tr('images: {0}', x.vision_model) : null, x.needs_key || x.has_key ? (x.has_key ? tr('key saved') : tr('no key')) : null].filter(Boolean).join(' · '))),
     h('div', { class: 'row-value' },
       x.active ? null : h('button', { class: 'btn btn-sm', onclick: () => activate(x) }, tr('Make active')),
       h('button', { class: 'icon-btn', title: tr('Edit'), 'aria-label': tr('Edit'), onclick: () => editor(x) }, icon('sliders')),

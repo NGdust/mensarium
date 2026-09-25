@@ -39,6 +39,7 @@ class Providers:
             api_key=api_key if api_key is not None else read_secret(self.paths, p.api_key_ref),
             timeout_s=p.timeout_s,
             max_retries=p.max_retries,
+            vision_model=p.vision_model,
         )
 
     def active_client(self) -> OpenAICompatibleProvider:
@@ -57,6 +58,7 @@ class Providers:
                     "title": meta.get("title", kind),
                     "base_url": p.base_url,
                     "default_model": p.default_model,
+                    "vision_model": p.vision_model or "",
                     "has_key": bool(read_secret(self.paths, p.api_key_ref)),
                     "needs_key": bool(meta.get("needs_key")),
                     "timeout_s": p.timeout_s,
@@ -77,6 +79,7 @@ class Providers:
         api_key: str | None,
         timeout_s: int,
         max_retries: int,
+        vision_model: str | None = None,
     ) -> None:
         """`api_key` None keeps the stored key, "" deletes it."""
         if not ID_RE.match(pid):
@@ -98,7 +101,7 @@ class Providers:
             raise ProviderError(f"{PROVIDER_KINDS[kind]['title']} needs an API key")
         self.cfg.llm.providers[pid] = ProviderConfig(
             kind=kind, base_url=base_url.rstrip("/"), default_model=default_model.strip(), api_key_ref=ref,
-            timeout_s=timeout_s, max_retries=max_retries,
+            timeout_s=timeout_s, max_retries=max_retries, vision_model=(vision_model or "").strip() or None,
         )
         save_config(self.paths, self.cfg)
         if pid == self.cfg.llm.active_provider:

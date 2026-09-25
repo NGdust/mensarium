@@ -30,6 +30,10 @@ class ProviderRouter:
     def default_model(self, value: str) -> None:
         self.current.default_model = value
 
+    @property
+    def vision_model(self) -> str | None:
+        return self.current.vision_model
+
     def swap(self, provider: OpenAICompatibleProvider) -> None:
         """Requests already in flight finish on the old client, which is closed a while later."""
         old, self.current = self.current, provider

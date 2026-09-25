@@ -69,6 +69,21 @@ def build_system_prompt(
     return prompt
 
 
+NO_VISION_NOTE = (
+    "(the screenshot could not be shown: the current model does not accept images. It is visible to the user in the chat; "
+    "ask them what it shows, or tell them to set a model for images in Settings -> Providers)"
+)
+
+
+def has_images(messages: list[Message]) -> bool:
+    return any(isinstance(m.content, list) for m in messages)
+
+
+def strip_images(messages: list[Message]) -> list[Message]:
+    """Replace image messages with a note the model can act on; used when the model rejects image input."""
+    return [Message(role="user", content=NO_VISION_NOTE) if isinstance(m.content, list) else m for m in messages]
+
+
 def build_messages(
     steps: list[dict[str, Any]], max_context_tokens: int, images: dict[str, str] | None = None
 ) -> list[Message]:

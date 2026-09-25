@@ -9,7 +9,7 @@ from typing import Any
 
 from mensarium import __version__
 from mensarium.agent_core.actions import ToolCallAction, parse_action
-from mensarium.agent_core.context import build_messages, build_system_prompt
+from mensarium.agent_core.context import build_messages, build_system_prompt, has_images, strip_images
 from mensarium.agent_core.profile import AgentProfile
 from mensarium.contracts.llm import ChatRequest
 from mensarium.contracts.protocol import (
@@ -52,6 +52,11 @@ def _brief(arguments: dict[str, Any]) -> dict[str, Any]:
 
 OPTIONAL_DEVICE_TOOLS = {"shell.bash", "screen.capture", "screen.windows", "input.mouse", "input.type", "input.key", "app.open", "system.volume"}
 RECENT_IMAGES = 2
+
+
+def _rejects_images(error: str) -> bool:
+    text = error.lower()
+    return "image" in text and any(word in text for word in ("support", "vision", "multimodal", "not accept", "invalid content"))
 
 
 def missing_tools(reported: list[str]) -> list[str]:
@@ -351,10 +356,13 @@ class Orchestrator:
             await self._set_status(task_id, "PLANNING")
             llm_steps += 1
             steps = await self.repo.list_steps(task_id)
+            messages = build_messages(steps, profile.llm.max_context_tokens, await self._recent_images(steps))
+            if has_images(messages) and self.provider.vision_model:
+                model = self.provider.vision_model
             request = ChatRequest(
                 model=model,
                 system=build_system_prompt(profile, target["name"], target["platform"], policy, available, skills, memory, outdated),
-                messages=build_messages(steps, profile.llm.max_context_tokens, await self._recent_images(steps)),
+                messages=messages,
                 temperature=profile.llm.temperature,
                 max_output_tokens=profile.llm.max_output_tokens,
                 timeout_s=self.cfg.llm.providers[self.cfg.llm.active_provider].timeout_s,
@@ -370,8 +378,21 @@ class Orchestrator:
                 ),
                 )
             except LLMError as e:
-                await self.bus.emit(task_id, "task.error", {"message": f"LLM call failed: {e}"})
-                raise Stop("FAILED_RECOVERABLE", f"LLM call failed: {e}") from e
+                if has_images(request.messages) and _rejects_images(str(e)):
+                    log.info("model rejected image input; retrying without the screenshot", extra={"task_id": task_id, "model": request.model})
+                    await self.bus.emit(task_id, "task.note", {"message": f"{request.model} does not accept images; the step continues without the screenshot. Set a model for images in Settings -> Providers."})
+                    request.messages = strip_images(request.messages)
+                    try:
+                        resp = await self._interruptible(
+                            task_id,
+                            self.provider.chat(request, tools=[toolbox.registry[t].definition() for t in available], response_schema=None),
+                        )
+                    except LLMError as e2:
+                        await self.bus.emit(task_id, "task.error", {"message": f"LLM call failed: {e2}"})
+                        raise Stop("FAILED_RECOVERABLE", f"LLM call failed: {e2}") from e2
+                else:
+                    await self.bus.emit(task_id, "task.error", {"message": f"LLM call failed: {e}"})
+                    raise Stop("FAILED_RECOVERABLE", f"LLM call failed: {e}") from e
             latency = int((time.monotonic() - t0) * 1000)
             action = parse_action(resp)
             usage = resp.usage.model_dump() if resp.usage else None

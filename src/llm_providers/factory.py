@@ -2,8 +2,8 @@ from mensarium.llm_providers.openai_compat import OpenAICompatibleProvider
 
 # All of them speak the OpenAI-compatible /v1 API; the kind only sets defaults and whether a key is needed.
 PROVIDER_KINDS: dict[str, dict[str, str | bool]] = {
-    "ollama_cloud": {"title": "Ollama Cloud", "base_url": "https://ollama.com/v1", "default_model": "gpt-oss:120b", "needs_key": True, "key_url": "https://ollama.com/settings/keys"},
-    "ollama_local": {"title": "Ollama", "base_url": "http://127.0.0.1:11434/v1", "default_model": "qwen3:8b", "needs_key": False, "key_url": ""},
+    "ollama_cloud": {"title": "Ollama Cloud", "base_url": "https://ollama.com/v1", "default_model": "gpt-oss:120b", "vision_model": "gemma4", "needs_key": True, "key_url": "https://ollama.com/settings/keys"},
+    "ollama_local": {"title": "Ollama", "base_url": "http://127.0.0.1:11434/v1", "default_model": "qwen3:8b", "vision_model": "gemma4", "needs_key": False, "key_url": ""},
     "llama_cpp": {"title": "llama.cpp", "base_url": "http://127.0.0.1:8080/v1", "default_model": "local", "needs_key": False, "key_url": ""},
     "lmstudio": {"title": "LM Studio", "base_url": "http://127.0.0.1:1234/v1", "default_model": "local", "needs_key": False, "key_url": ""},
     "openai": {"title": "OpenAI", "base_url": "https://api.openai.com/v1", "default_model": "gpt-4.1-mini", "needs_key": True, "key_url": "https://platform.openai.com/api-keys"},
@@ -24,6 +24,7 @@ def build_provider(
     timeout_s: int,
     max_retries: int,
     kind: str | None = None,
+    vision_model: str | None = None,
 ) -> OpenAICompatibleProvider:
     if (kind or name) not in PROVIDER_KINDS:
         raise ValueError(f"unknown LLM provider kind {kind or name!r}")
@@ -34,4 +35,5 @@ def build_provider(
         api_key=api_key,
         timeout_s=timeout_s,
         max_retries=max_retries,
+        vision_model=vision_model,
     )

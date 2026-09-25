@@ -160,7 +160,7 @@ async def run(argv: list[str], timeout: float = 30, stdin: str | None = None) ->
         raise DesktopError(f"{Path(argv[0]).name} timed out") from e
     if proc.returncode != 0:
         text = (err or out).decode(errors="replace").strip()
-        if "assistive access" in text or "-1719" in text or "(-25211)" in text:
+        if "assistive access" in text or "not allowed to send keystrokes" in text or "-1719" in text or "(-25211)" in text or "(1002)" in text:
             text += ACCESSIBILITY_HINT
         elif "could not create image" in text:
             text += " Screen Recording is not allowed for the agent, or it runs outside the user's desktop session." + ACCESSIBILITY_HINT

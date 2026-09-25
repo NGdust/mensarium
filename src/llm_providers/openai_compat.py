@@ -57,10 +57,12 @@ class OpenAICompatibleProvider:
         api_key: str | None = None,
         timeout_s: int = 90,
         max_retries: int = 2,
+        vision_model: str | None = None,
     ) -> None:
         self.name = name
         self.base_url = base_url.rstrip("/")
         self.default_model = default_model
+        self.vision_model = vision_model
         self.timeout_s = timeout_s
         self.max_retries = max_retries
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
