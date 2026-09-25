@@ -426,9 +426,6 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .model-list { max-height: min(320px, 50vh); overflow-y: auto; }
 .mi-model { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12.5px var(--mono); }
 .popover-empty { padding: 10px; color: var(--muted); font-size: 13px; }
-.row-extra.model-grid { padding: 16px 20px; margin: 0; }
-.model-pill { cursor: pointer; }
-.model-pill:hover:not(.accent) { border-color: rgba(255, 255, 255, 0.24); color: var(--text); }
 
 /* plan above the composer */
 .plan { max-width: var(--chat-w); margin: 0 auto 8px; border-radius: 14px; border: 1px solid var(--line); background: rgba(22, 20, 28, 0.6); overflow: hidden; }
@@ -726,7 +723,13 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .plugin-provides > .icon { margin-top: 2px; color: var(--accent-strong); }
 .plugin-risk { margin-top: 10px; max-width: 320px; }
 .provider-hero { margin-bottom: 8px; }
+.provider-cards { display: flex; flex-direction: column; gap: 10px; }
+.provider-cards .provider-hero { margin: 0; }
 .provider-hero .hero-text p { overflow-wrap: anywhere; }
+.provider-card { cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+.provider-card:hover, .provider-card:focus-visible { border-color: var(--line-strong); background: rgba(28, 25, 36, 0.8); outline: none; }
+.provider-card h2 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.provider-card > .icon { color: var(--muted); }
 .provider-id { font-size: 12px; color: var(--muted); }
 .plugin-status.ok { color: var(--text-2); }
 .plugin-skill { margin-bottom: 16px; font-size: 13px; color: var(--text-2); }

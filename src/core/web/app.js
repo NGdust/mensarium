@@ -680,6 +680,8 @@ function modeSwitch(initial, { target, onPick }) {
 
 // Chip + searchable popover to pick the LLM model; an empty value means the Core default.
 const defaultModel = () => state.system?.provider?.model || '';
+const MODEL_NOTES = { 'mistral-large-3:675b': () => tr('uncensored') };
+const modelLabel = (id) => (MODEL_NOTES[id] ? `${id} · ${MODEL_NOTES[id]()}` : id);
 function loadModels() {
   if (!state.models) state.models = get('/v1/models').catch((err) => { state.models = null; throw err; });
   return state.models;
@@ -714,7 +716,7 @@ function modelSwitch(initial, { onPick }) {
           if (id === current) return;
           try { await onPick(id); model = id; render(); } catch (err) { fail(err); }
         },
-      }, h('span', { class: 'mi-model' }, id), id === defaultModel() ? h('span', { class: 'popover-sub' }, tr('default')) : null, id === current ? icon('check') : null))
+      }, h('span', { class: 'mi-model' }, modelLabel(id)), id === defaultModel() ? h('span', { class: 'popover-sub' }, tr('default')) : null, id === current ? icon('check') : null))
         : [h('div', { class: 'popover-empty' }, tr('Nothing found'))]));
       place();
     };
@@ -1444,17 +1446,15 @@ async function settingsProviders(shell) {
   const [data, sys] = await Promise.all([get('/v1/providers'), get('/v1/system')]);
   state.system = sys;
   const health = sys.provider.health || {};
-  const active = data.providers.find((x) => x.active) || data.providers[0];
   const kinds = Object.fromEntries(data.kinds.map((k) => [k.kind, k]));
-  const models = h('div', { class: 'rows' }, h('div', { class: 'empty' }, tr('Loading the list...')));
 
   const reload = () => settingsProviders(shell).catch(fail);
   const activate = async (x) => {
-    try { await post(`/v1/providers/${x.id}/activate`); state.models = null; toast(tr('Active provider: {0}', x.title)); reload(); } catch (err) { fail(err); }
+    try { await post(`/v1/providers/${x.id}/activate`); state.models = null; closeLayer(); toast(tr('Active provider: {0}', x.title)); reload(); } catch (err) { fail(err); }
   };
   const remove = async (x) => {
     if (!await confirmDialog({ title: tr('Remove “{0}”?', x.title), text: tr('Its settings and saved key are deleted from Core.'), action: tr('Remove'), danger: true })) return;
-    try { await del(`/v1/providers/${x.id}`); toast(tr('Removed')); reload(); } catch (err) { fail(err); }
+    try { await del(`/v1/providers/${x.id}`); closeLayer(); toast(tr('Removed')); reload(); } catch (err) { fail(err); }
   };
 
   function editor(x) {
@@ -1465,10 +1465,8 @@ async function settingsProviders(shell) {
     const id = h('input', { type: 'text', value: x ? x.id : freeId(kindSel.value), disabled: !adding, 'aria-label': tr('Name in the config') });
     const base = h('input', { type: 'text', value: x ? x.base_url : kinds[kindSel.value].base_url, 'aria-label': tr('API address') });
     const key = h('input', { type: 'password', autocomplete: 'off', placeholder: x?.has_key ? tr('Saved. Type to replace') : '', 'aria-label': tr('API key') });
-    const listId = `models-${Math.random().toString(36).slice(2)}`;
-    const modelList = h('datalist', { id: listId });
-    const model = h('input', { type: 'text', value: x ? x.default_model : kinds[kindSel.value].default_model, list: listId, 'aria-label': tr('Default model') });
-    const vision = h('input', { type: 'text', value: x ? (x.vision_model || '') : (kinds[kindSel.value].vision_model || ''), list: listId, placeholder: kinds[kindSel.value].vision_model || '', 'aria-label': tr('Model for images') });
+    const model = h('select', { 'aria-label': tr('Default model') });
+    const vision = h('select', { 'aria-label': tr('Model for images') });
     const timeout = h('input', { type: 'number', value: x ? x.timeout_s : 90, min: 5, max: 600, 'aria-label': tr('Timeout, s') });
     const retries = h('input', { type: 'number', value: x ? x.max_retries : 2, min: 0, max: 5, 'aria-label': tr('Retries') });
     let makeActive = adding && !data.providers.length;
@@ -1478,31 +1476,39 @@ async function settingsProviders(shell) {
     const statusText = h('span', {}, tr('Check the connection to load the models.'));
     const status = h('div', { class: 'plugin-status' }, statusDot, statusText);
     const setStatus = (kind, text) => { status.className = `plugin-status ${kind}`; statusDot.className = `dot ${{ ok: 'ok', error: 'danger', busy: 'accent live' }[kind] || ''}`; statusText.textContent = text; };
+    // The lists hold what the provider returned plus the current values, so a saved model stays selectable before the check.
+    const options = (ids, current) => [...new Set([current, ...ids].filter(Boolean))].map((m) => h('option', { value: m, selected: m === current }, modelLabel(m)));
+    const fillModels = (ids, current, currentVision) => {
+      model.replaceChildren(...options(ids, current));
+      vision.replaceChildren(h('option', { value: '', selected: !currentVision }, tr('Same as the default model')), ...options(ids, currentVision));
+    };
+    fillModels([], x ? x.default_model : kinds[kindSel.value].default_model, x ? (x.vision_model || '') : (kinds[kindSel.value].vision_model || ''));
     let touchedBase = !!x;
     base.addEventListener('input', () => { touchedBase = true; });
     const syncKind = () => {
       const k = kinds[kindSel.value];
       if (!touchedBase) base.value = k.base_url;
-      if (adding) { id.value = freeId(k.kind); if (!model.value || !x) model.value = k.default_model; }
-      keyHint.replaceChildren(...(k.needs_key ? [tr('Required. '), k.key_url ? linkify(k.key_url) : ''] : [tr('Only if the server asks for one.')]));
+      if (adding) { id.value = freeId(k.kind); fillModels([], k.default_model, k.vision_model || ''); }
+      keyHint.replaceChildren(...(k.needs_key ? [tr('Required. '), k.key_url ? linkify(k.key_url) : ''] : [tr('Only if the server asks for one.')]).flat());
     };
     kindSel.addEventListener('change', syncKind);
     syncKind();
-    const check = h('button', { class: 'btn btn-sm', onclick: async (e) => {
-      e.preventDefault();
+    const runCheck = async () => {
       check.disabled = true;
       setStatus('busy', tr('Connecting...'));
       try {
         const r = await post('/v1/providers/test', { kind: kindSel.value, base_url: base.value.trim(), api_key: key.value || null, id: x?.id || null });
         if (r.ok) {
-          modelList.replaceChildren(...r.models.map((m) => h('option', { value: m })));
-          if (r.models.length && !r.models.includes(model.value)) model.value = r.models.includes(kinds[kindSel.value].default_model) ? kinds[kindSel.value].default_model : r.models[0];
+          const preferred = kinds[kindSel.value].default_model;
+          const pick = r.models.includes(model.value) ? model.value : r.models.includes(preferred) ? preferred : r.models[0] || model.value;
+          fillModels(r.models, pick, r.models.includes(vision.value) ? vision.value : '');
           setStatus('ok', tr('Available, {0} models', r.models.length));
         } else {
           setStatus('error', tr('Error: {0}', r.error));
         }
       } catch (err) { fail(err); } finally { check.disabled = false; }
-    } }, icon('refresh'), tr('Check connection'));
+    };
+    const check = h('button', { class: 'btn btn-sm', onclick: (e) => { e.preventDefault(); runCheck(); } }, icon('refresh'), tr('Check connection'));
     status.append(h('span', { class: 'spacer' }), check);
     const save = h('button', { class: 'btn btn-primary' }, tr('Save'));
     save.addEventListener('click', async () => {
@@ -1527,56 +1533,34 @@ async function settingsProviders(shell) {
         field(tr('API address'), base),
         field(tr('API key'), key, keyHint),
         status,
-        field(tr('Default model'), h('div', {}, model, modelList)),
+        field(tr('Default model'), model, h('div', { class: 'row-desc' }, tr('For new chats. In a chat the model is changed with the robot button in the input.'))),
         field(tr('Model for images'), vision, h('div', { class: 'row-desc' }, tr('Used automatically on steps where the agent looks at a screenshot; leave empty if the default model accepts images.'))),
         h('div', { class: 'plugin-grid' }, field(tr('Timeout, s'), timeout), field(tr('Retries'), retries)),
         activeSwitch),
-      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
+      h('div', { class: 'modal-actions' },
+        x && !x.active ? h('button', { class: 'btn btn-danger', onclick: () => remove(x) }, tr('Remove')) : null,
+        x && !x.active ? h('button', { class: 'btn', onclick: () => activate(x) }, tr('Make active')) : null,
+        h('span', { class: 'spacer' }),
+        h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
     ).classList.add('modal-wide');
+    if (x && (x.has_key || !kinds[x.kind].needs_key)) runCheck();
   }
 
-  const rows = h('div', { class: 'rows' }, data.providers.map((x) => h('div', { class: 'row' },
-    h('div', { class: 'row-text' },
-      h('div', { class: 'row-title' }, x.title, x.id !== x.kind ? h('code', { class: 'provider-id' }, x.id) : null, x.active ? h('span', { class: 'pill accent' }, tr('active')) : null),
-      h('div', { class: 'row-desc' }, [x.base_url, x.default_model, x.vision_model ? tr('images: {0}', x.vision_model) : null, x.needs_key || x.has_key ? (x.has_key ? tr('key saved') : tr('no key')) : null].filter(Boolean).join(' · '))),
-    h('div', { class: 'row-value' },
-      x.active ? null : h('button', { class: 'btn btn-sm', onclick: () => activate(x) }, tr('Make active')),
-      h('button', { class: 'icon-btn', title: tr('Edit'), 'aria-label': tr('Edit'), onclick: () => editor(x) }, icon('sliders')),
-      x.active ? null : h('button', { class: 'icon-btn', title: tr('Remove'), 'aria-label': tr('Remove'), onclick: () => remove(x) }, icon('trash'))))));
+  const card = (x) => h('div', {
+    class: 'hero provider-hero provider-card', role: 'button', tabindex: '0', onclick: () => editor(x),
+    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); editor(x); } },
+  },
+  h('span', { class: 'market-icon' }, icon('robot')),
+  h('div', { class: 'hero-text' },
+    h('h2', {}, x.title, x.id !== x.kind ? h('code', { class: 'provider-id' }, x.id) : null, x.active ? h('span', { class: 'pill accent' }, tr('active')) : null),
+    h('p', {}, [x.base_url, x.default_model, x.vision_model ? tr('images: {0}', x.vision_model) : null, x.needs_key || x.has_key ? (x.has_key ? tr('key saved') : tr('no key')) : null].filter(Boolean).join(' · '))),
+  x.active ? h('span', { class: 'status' }, h('span', { class: `dot ${health.ok ? 'ok' : 'danger'}` }), health.ok ? tr('Available') : tr('Unavailable')) : icon('chevron'));
 
   page(shell, tr('Providers'), tr('Where the agent thinks: the LLM provider and its models. Keys are stored only on the Core server; switching the active provider applies from the next step of running tasks.'),
     h('button', { class: 'btn btn-primary', onclick: () => editor(null) }, icon('plus'), tr('Add a provider')),
-    h('div', { class: 'hero provider-hero' }, h('span', { class: 'market-icon' }, icon('robot')), h('div', { class: 'hero-text' },
-      h('h2', {}, active ? active.title : '—'),
-      h('p', {}, [sys.provider.base_url, sys.provider.model].join(' · '))),
-      h('span', { class: 'status' }, h('span', { class: `dot ${health.ok ? 'ok' : 'danger'}` }), health.ok ? tr('Available') : tr('Unavailable'))),
+    h('div', { class: 'provider-cards' }, data.providers.length ? data.providers.map(card) : h('div', { class: 'empty rows' }, tr('No providers yet.'))),
     health.ok ? null : h('p', { class: 'market-note' }, health.detail || ''),
-    section(tr('Default model'), tr('For new chats with the active provider. In a chat the model is changed with the robot button in the input.'), models),
-    section(tr('Providers'), null, rows),
   );
-  const render = (ids) => {
-    models.replaceChildren(ids.length
-      ? h('div', { class: 'row-extra model-grid' }, ids.map((mid) => h('button', {
-        class: `pill tag model-pill${mid === state.system.provider.model ? ' accent' : ''}`,
-        'aria-pressed': String(mid === state.system.provider.model),
-        onclick: async () => {
-          if (mid === state.system.provider.model) return;
-          try {
-            await api('/v1/system/model', { method: 'PUT', body: JSON.stringify({ model: mid }) });
-            state.system.provider.model = mid;
-            toast(tr('Default model: {0}', mid));
-            render(ids);
-          } catch (err) { fail(err); }
-        },
-      }, mid)))
-      : h('div', { class: 'empty' }, tr('The provider did not return any models.')));
-  };
-  try {
-    state.models = null;
-    render((await loadModels()).map((m) => m.id));
-  } catch (err) {
-    models.replaceChildren(h('div', { class: 'empty' }, err.message));
-  }
 }
 
 const TOOL_INFO = {
