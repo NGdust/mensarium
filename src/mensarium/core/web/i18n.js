@@ -452,4 +452,10 @@ const RU = {
   'Request error ({0})': 'Ошибка запроса ({0})',
   'Language': 'Язык',
   'Interface language. The agent answers in the language you write to it.': 'Язык интерфейса. Агент отвечает на том языке, на котором вы ему пишете.',
+  'Stop the agent': 'Остановить агента',
+  'Resume the agent': 'Продолжить работу агента',
+  'Resume the agent or write what to do next': 'Продолжите работу агента или напишите, что делать дальше',
+  'The agent is thinking…': 'Агент думает…',
+  'The agent is running an action…': 'Агент выполняет действие…',
+  'The agent is reading the result…': 'Агент разбирает результат…',
 };

@@ -238,7 +238,7 @@ class Orchestrator:
             approval = await self.repo.get_approval(approval_id)
             if approval and approval["task_id"] == task_id and not waiter.done():
                 waiter.set_result(action)
-        if action == "cancel" and task_id in self.running_requests:
+        if task_id in self.running_requests:
             target_id, request_id = self.running_requests[task_id]
             await self.hub.cancel(target_id, request_id)
 

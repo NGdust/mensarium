@@ -72,6 +72,8 @@ const ICONS = {
   pause: '<path d="M9 5v14M15 5v14"/>',
   play: '<path d="M7 5v14l12-7z"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  stopFill: '<rect x="7.5" y="7.5" width="9" height="9" rx="1.8" fill="currentColor" stroke="none"/>',
+  playFill: '<path d="M9 6.8v10.4a.8.8 0 0 0 1.2.7l8.3-5.2a.8.8 0 0 0 0-1.4L10.2 6.1A.8.8 0 0 0 9 6.8z" fill="currentColor" stroke="none"/>',
   logout: '<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5M5 12h11"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   terminal: '<path d="m5 8 4 4-4 4M12 17h7"/>',
@@ -284,11 +286,6 @@ const fullAccessBlock = (t) => (fullAccessOf(t) === 'outdated'
   : tr('Disabled on the device: allow_full_access in its config.'));
 const devices = () => state.targets.filter((t) => t.status !== 'revoked').sort((a, b) => isLocal(b) - isLocal(a));
 const taskTitle = (t) => ((t.input || '').split('\n')[0] || tr('Untitled')).slice(0, 80);
-
-function statusPill(status) {
-  const [label, kind, live] = statusOf(status);
-  return h('span', { class: `pill ${kind}` }, h('span', { class: `dot ${kind}${live ? ' live' : ''}` }), label);
-}
 
 // ---------- overlays ----------
 
@@ -541,36 +538,62 @@ function ensureAppShell() {
 
 // ---------- composer ----------
 
-function composer({ placeholder, chips, onSend }) {
+// The round button sends a message; while the agent works it becomes a pulsing stop, on a pause it resumes.
+function composer({ placeholder, chips, onSend, onStop, onResume }) {
   const ta = h('textarea', { rows: 1, placeholder, 'aria-label': placeholder });
-  const send = h('button', { class: 'send', 'aria-label': tr('Send'), title: tr('Send (Enter)'), disabled: true }, icon('arrowUp'));
+  const send = h('button', { class: 'send', disabled: true });
   const box = h('div', { class: 'composer' },
     h('div', { class: 'composer-input' }, icon('sparkle'), ta),
     h('div', { class: 'composer-bar' }, chips, h('span', { class: 'spacer' }), send),
   );
-  let locked = false;
-  const sync = () => { send.disabled = locked || !ta.value.trim(); };
+  let mode = 'idle';
+  let hint = '';
+  let busy = false;
+  let shown = '';
+  const action = () => (mode === 'running' ? 'stop' : mode === 'paused' && !ta.value.trim() ? 'resume' : 'send');
+  const sync = () => {
+    const a = action();
+    if (a !== shown) {
+      shown = a;
+      const [ic, label] = { stop: ['stopFill', tr('Stop the agent')], resume: ['playFill', tr('Resume the agent')], send: ['arrowUp', tr('Send (Enter)')] }[a];
+      send.className = `send${a === 'send' ? '' : ` ${a}`}`;
+      send.replaceChildren(icon(ic));
+      send.title = label;
+      send.setAttribute('aria-label', label);
+    }
+    if (a === 'stop' && hint) send.title = `${hint} ${tr('Stop the agent')}`;
+    send.disabled = busy || (a === 'send' && !ta.value.trim());
+    ta.disabled = mode === 'running';
+    ta.placeholder = mode === 'running' ? hint : mode === 'paused' ? tr('Resume the agent or write what to do next') : placeholder;
+  };
   const grow = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, 240)}px`; };
   ta.addEventListener('input', () => { grow(); sync(); });
-  const submit = async () => {
+  const run = async (fn) => {
+    busy = true;
+    sync();
+    try { await fn(); } catch (err) { fail(err); } finally { busy = false; sync(); }
+  };
+  const submit = () => {
     const text = ta.value.trim();
-    if (!text || locked) return;
-    send.disabled = true;
-    try {
-      await onSend(text);
-      ta.value = '';
-      grow();
-    } catch (err) { fail(err); } finally { sync(); }
+    if (!text || mode === 'running' || busy) return;
+    return run(async () => { await onSend(text); ta.value = ''; grow(); });
   };
   ta.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
   });
-  send.addEventListener('click', submit);
+  send.addEventListener('click', () => {
+    const a = action();
+    if (a === 'stop') run(onStop);
+    else if (a === 'resume') run(onResume);
+    else submit();
+  });
+  sync();
   return {
     el: h('div', { class: 'composer-wrap' }, box),
     textarea: ta,
     setText(text) { ta.value = text; grow(); sync(); ta.focus(); ta.setSelectionRange(text.length, text.length); },
-    setLocked(value, hint) { locked = value; ta.disabled = value; ta.placeholder = value ? hint : placeholder; sync(); },
+    // mode: idle | running | paused; hint is the agent status shown while it works
+    setAgent(value, statusHint = '') { mode = value; hint = statusHint; sync(); },
   };
 }
 
@@ -738,15 +761,10 @@ async function viewChat(taskId) {
   try { task = await get(`/v1/tasks/${taskId}`); } catch (err) { fail(err); go('#/'); return; }
   state.lastChat = `#/chat/${taskId}`;
 
-  const statusSlot = h('span', {});
   const act = async (action) => {
-    try { const t = await post(`/v1/tasks/${taskId}/${action}`); setStatus(t.status); } catch (err) { fail(err); }
+    const t = await post(`/v1/tasks/${taskId}/${action}`);
+    setStatus(t.status);
   };
-  const btnPause = h('button', { class: 'icon-btn', title: tr('Paused'), 'aria-label': tr('Paused'), onclick: () => act('pause') }, icon('pause'));
-  const btnResume = h('button', { class: 'icon-btn', title: tr('Continue'), 'aria-label': tr('Continue'), onclick: () => act('resume') }, icon('play'));
-  const btnCancel = h('button', { class: 'icon-btn', title: tr('Stop task'), 'aria-label': tr('Stop task'), onclick: async () => {
-    if (await confirmDialog({ title: tr('Stop the task?'), text: tr('The agent will interrupt the current step, and the command on the device will be canceled. This task can\'t be resumed, but you can send a new message in the chat.'), action: tr('Stop'), danger: true })) act('cancel');
-  } }, icon('stop'));
   const btnDelete = h('button', { class: 'icon-btn', title: tr('Delete chat'), 'aria-label': tr('Delete chat'), onclick: () => deleteChat(task) }, icon('trash'));
 
   const thread = h('div', { class: 'thread' });
@@ -768,24 +786,23 @@ async function viewChat(taskId) {
     placeholder: tr('Reply to the agent'),
     chips: [modeCtl.el, modelCtl.el],
     onSend: (text) => post(`/v1/tasks/${taskId}/messages`, { input: text }),
+    onStop: () => act('pause'),
+    onResume: () => act('resume'),
   });
 
   shell.panel.replaceChildren(
     topbar(shell,
       [h('span', { class: 'crumb-device' }, icon('laptop'), task.target_name || tr('device'), h('span', { class: 'sep' }, '/')), h('span', { class: 'current', title: task.input }, taskTitle(task))],
-      [statusSlot, btnPause, btnResume, btnCancel, btnDelete]),
+      [btnDelete]),
     thread,
     c.el,
   );
 
   function setStatus(status) {
     task.status = status;
-    statusSlot.replaceChildren(statusPill(status));
-    const running = isRunning(status);
-    btnPause.classList.toggle('hidden', !running);
-    btnResume.classList.toggle('hidden', !RESUMABLE.includes(status));
-    btnCancel.classList.toggle('hidden', !(running || RESUMABLE.includes(status)));
-    c.setLocked(running, status === 'WAITING_APPROVAL' ? tr('The agent is waiting for your decision above') : tr('The agent is working. You can pause it'));
+    const hints = { WAITING_APPROVAL: tr('The agent is waiting for your decision above'), EXECUTING: tr('The agent is running an action…'), OBSERVING: tr('The agent is reading the result…') };
+    if (isRunning(status)) c.setAgent('running', hints[status] || tr('The agent is thinking…'));
+    else c.setAgent(RESUMABLE.includes(status) ? 'paused' : 'idle');
   }
   setStatus(task.status);
 

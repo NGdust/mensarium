@@ -337,6 +337,12 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 }
 .send:hover:not(:disabled) { background: var(--accent-btn-hover); }
 .send:disabled { background: var(--surface-3); color: var(--faint); cursor: not-allowed; }
+.send.stop { animation: send-pulse 1.6s ease-in-out infinite; }
+.send.stop:disabled, .send.resume:disabled { background: var(--accent-btn); color: #fff; opacity: 0.6; cursor: progress; }
+@keyframes send-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(116, 69, 240, 0.45); transform: scale(1); }
+  50% { box-shadow: 0 0 0 6px rgba(116, 69, 240, 0); transform: scale(0.94); }
+}
 .send .icon { width: 18px; height: 18px; stroke-width: 2.2; }
 
 .templates { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; max-width: var(--chat-w); margin: 0 auto 12px; }
