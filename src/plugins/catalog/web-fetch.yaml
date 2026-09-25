@@ -9,6 +9,7 @@ description:
   en: Adds the web.fetch tool that runs in the Core. It downloads a public page, drops scripts and styles and returns readable text. Internal and private addresses are blocked unless you allow them, so the agent cannot reach services next to the Core.
   ru: Добавляет инструмент web.fetch, который работает в Core. Скачивает публичную страницу, убирает скрипты и стили и возвращает читаемый текст. Внутренние и частные адреса заблокированы, пока вы их не разрешите, поэтому агент не доберётся до сервисов рядом с Core.
 tags: [web]
+category: web
 builtin: web_fetch
 config:
   max_chars:

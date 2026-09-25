@@ -9,6 +9,7 @@ description:
   en: Connects the Core to the hosted Context7 MCP server so the agent can look up current docs for frameworks and libraries instead of relying on memory. Works without a key; a key raises the rate limit.
   ru: Подключает Core к облачному MCP-серверу Context7, чтобы агент сверялся с актуальной документацией фреймворков и библиотек, а не полагался на память. Работает без ключа, ключ поднимает лимит запросов.
 tags: [mcp, docs]
+category: development
 homepage: https://context7.com
 config:
   api_key:

@@ -528,7 +528,10 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .seg.active { background: var(--surface-3); color: var(--text); }
 .seg-count { font-size: 11.5px; color: var(--muted); }
 .market-note { margin: -4px 0 14px; font-size: 12.5px; color: var(--warn); }
+.market-groups { display: flex; flex-direction: column; gap: 22px; }
+.market-group-title { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 14.5px; font-weight: 600; }
 .market-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.market-groups > .empty { border: 1px solid var(--line); border-radius: var(--r-lg); }
 .market-grid > .empty { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: var(--r-lg); }
 .market-card {
   display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; border-radius: var(--r-lg); cursor: pointer;

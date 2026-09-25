@@ -9,6 +9,7 @@ description:
   en: Connects the Core to GitHub's hosted MCP server with your personal access token. The token stays in the Core. Pick the token scopes you are comfortable with; every call that writes to GitHub goes through approval unless you lower the risk.
   ru: Подключает Core к облачному MCP-серверу GitHub по вашему персональному токену. Токен хранится в Core. Выдайте токену только нужные права; каждый вызов, который пишет в GitHub, идёт через подтверждение, если не понизить риск.
 tags: [mcp, git, github]
+category: development
 homepage: https://github.com/github/github-mcp-server
 config:
   token:

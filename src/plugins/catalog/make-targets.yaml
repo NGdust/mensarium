@@ -9,6 +9,7 @@ description:
   en: Runs a make target on the device, or previews the commands it would run with make -n, without guessing at shell syntax.
   ru: Запускает make-цель на устройстве или показывает через make -n, какие команды она выполнит, без угадывания синтаксиса shell.
 tags: [make, build]
+category: development
 tools:
   - name: make.run
     description: Run a make target, or the default target when none is given.

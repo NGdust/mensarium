@@ -9,6 +9,7 @@ description:
   en: Gives the agent read-only visibility into Docker; running and stopped containers, a container's recent logs, local images and a compose project's status. Nothing here starts, stops or modifies a container.
   ru: Даёт агенту доступ только на чтение к Docker; запущенные и остановленные контейнеры, последние логи контейнера, локальные образы и статус compose-проекта. Ничего не запускает, не останавливает и не меняет.
 tags: [docker, containers]
+category: system
 tools:
   - name: docker.ps
     description: List containers, including stopped ones, in a compact table.

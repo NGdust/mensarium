@@ -9,6 +9,7 @@ description:
   en: Gives the agent structured git history tools instead of free-form commands. Each call runs `git` on the device and follows the usual approval rules.
   ru: Даёт агенту инструменты для истории git вместо произвольных команд. Каждый вызов запускает `git` на устройстве и подчиняется обычным правилам подтверждения.
 tags: [git]
+category: development
 tools:
   - name: git.log
     description: Show recent commits, one line each.

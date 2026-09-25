@@ -9,6 +9,7 @@ description:
   en: Gives the agent structured tools for a Go project's tests, static analysis and build, scoped to a package pattern that defaults to the whole module.
   ru: Даёт агенту инструменты для тестов, статического анализа и сборки Go-проекта с областью действия по шаблону пакетов, по умолчанию — весь модуль.
 tags: [go, testing, lint]
+category: development
 tools:
   - name: go.test
     description: Run go test for the given packages (defaults to ./...).

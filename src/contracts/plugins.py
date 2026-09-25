@@ -59,6 +59,10 @@ class CommandTool(BaseModel):
 
 Risk = Literal["read", "write", "execute", "network", "destructive"]
 BUILTINS = ("web_search", "web_fetch")
+Category = Literal[
+    "development", "browser", "web", "databases", "cloud", "observability",
+    "productivity", "communication", "automation", "system", "other",
+]
 
 
 class ConfigField(BaseModel):
@@ -118,6 +122,7 @@ class Plugin(BaseModel):
     summary: Text
     description: Text = ""
     tags: list[str] = []
+    category: Category = "other"
     homepage: str | None = None
     config: dict[str, ConfigField] = {}
     tools: list[CommandTool] = []

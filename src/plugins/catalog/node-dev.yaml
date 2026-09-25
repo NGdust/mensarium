@@ -9,6 +9,7 @@ description:
   en: Gives the agent structured tools for a Node.js project's test suite, arbitrary npm scripts and installed packages. Never installs or updates dependencies.
   ru: Даёт агенту инструменты для тестов Node.js-проекта, произвольных npm-скриптов и списка установленных пакетов. Никогда не устанавливает и не обновляет зависимости.
 tags: [node, javascript, testing]
+category: development
 tools:
   - name: npm.test
     description: Run the project test suite with npm test --silent.

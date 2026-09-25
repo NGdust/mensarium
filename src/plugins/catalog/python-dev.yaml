@@ -9,6 +9,7 @@ description:
   en: Adds a test runner plus read-only lint, format-check and type-check tools for Python projects. Each one runs a single allowlisted program on the device.
   ru: Добавляет запуск тестов и инструменты для линта, проверки форматирования и типов Python-проекта только на чтение. Каждый запускает одну разрешённую программу на устройстве.
 tags: [python, testing, lint]
+category: development
 tools:
   - name: python.test
     description: Run pytest, optionally scoped to a path and filtered by a -k expression.

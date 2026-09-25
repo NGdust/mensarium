@@ -102,13 +102,13 @@ def plugins_list(
         return
     devices = {d["id"]: d["name"] for d in data["devices"]}
     table = Table(box=None, header_style="dim")
-    for col in ("id", "name", "version", "provides", "state"):
+    for col in ("id", "name", "version", "category", "provides", "state"):
         table.add_column(col)
     for p in items:
         version = p["installed"]["version"] if p["installed"] else p["version"]
         if p["update"]:
             version += f" → {p['version']}"
-        table.add_row(p["id"], _text(p["name"]), version, _kind(p), _state(p, devices))
+        table.add_row(p["id"], _text(p["name"]), version, p.get("category") or "other", _kind(p), _state(p, devices))
     console.print(table if items else "No plugins installed. See the catalog: mensarium plugins list --catalog")
     if data.get("error"):
         warn(data["error"])

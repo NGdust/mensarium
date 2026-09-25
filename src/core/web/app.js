@@ -1902,21 +1902,32 @@ function pluginState(p, devices) {
   return [tr('{0} · connecting', where), 'accent'];
 }
 
+const PLUGIN_CATEGORIES = [
+  ['development', tr('Development')],
+  ['browser', tr('Browser')],
+  ['web', tr('Web and search')],
+  ['databases', tr('Databases')],
+  ['cloud', tr('Cloud and infrastructure')],
+  ['observability', tr('Monitoring')],
+  ['productivity', tr('Productivity')],
+  ['communication', tr('Communication')],
+  ['automation', tr('Automation')],
+  ['system', tr('System')],
+  ['other', tr('Other')],
+];
+
 async function settingsPlugins(shell) {
-  const grid = h('div', { class: 'market-grid' }, h('div', { class: 'empty' }, tr('Loading the catalog...')));
+  const grid = h('div', { class: 'market-groups' }, h('div', { class: 'empty' }, tr('Loading the catalog...')));
   const note = h('p', { class: 'market-note hidden' });
   const search = h('input', { type: 'search', placeholder: tr('Search by name and description'), 'aria-label': tr('Search plugins') });
-  const FILTERS = [['all', tr('All')], ['installed', tr('Installed')], ['tools', tr('Tools')], ['mcp', 'MCP']];
-  let filter = localStorageGet('market-filter') || 'all';
-  if (!FILTERS.some(([k]) => k === filter)) filter = 'all';
+  let installedOnly = localStorageGet('market-installed') === '1';
   let items = [];
   let devices = {};
   let poll = 0;
-  const filterBar = h('div', { class: 'segmented', role: 'tablist' });
-  const renderFilters = () => filterBar.replaceChildren(...FILTERS.map(([key, label]) => h('button', {
-    class: `seg${key === filter ? ' active' : ''}`, role: 'tab', 'aria-selected': String(key === filter),
-    onclick: () => { filter = key; localStorageSet('market-filter', key); renderFilters(); render(); },
-  }, label, key === 'installed' ? h('span', { class: 'seg-count' }, String(items.filter((i) => i.installed).length)) : null)));
+  const count = h('span', { class: 'seg-count' });
+  const installedSwitch = h('label', { class: 'switch-label' },
+    toggleSwitch(installedOnly, { label: tr('Installed only'), onChange: async (v) => { installedOnly = v; localStorageSet('market-installed', v ? '1' : '0'); render(); } }),
+    tr('Installed only'), count);
 
   async function act(fn, done) {
     try { const r = await fn(); if (done) toast(done); await load(); return r; } catch (err) { fail(err); return null; }
@@ -2073,9 +2084,14 @@ async function settingsPlugins(shell) {
 
   function render() {
     const q = search.value.trim().toLowerCase();
-    const shown = items.filter((p) => ({ all: true, installed: !!p.installed, tools: p.provides.device_tools.length > 0 || p.provides.core_tools.length > 0, mcp: p.provides.mcp }[filter]))
-      .filter((p) => !q || [txt(p.name), txt(p.summary), txt(p.description), p.id, ...(p.tags || []), ...p.provides.device_tools, ...p.provides.core_tools].join(' ').toLowerCase().includes(q));
-    grid.replaceChildren(...(shown.length ? shown.map(card) : [h('div', { class: 'empty' }, filter === 'installed' && !q ? tr('Nothing installed yet.') : tr('Nothing found.'))]));
+    count.textContent = String(items.filter((i) => i.installed).length);
+    const shown = items.filter((p) => !installedOnly || p.installed)
+      .filter((p) => !q || [txt(p.name), txt(p.summary), txt(p.description), p.id, p.category, ...(p.tags || []), ...p.provides.device_tools, ...p.provides.core_tools].join(' ').toLowerCase().includes(q));
+    const groups = PLUGIN_CATEGORIES.map(([key, label]) => [label, shown.filter((p) => (p.category || 'other') === key).sort((a, b) => (!!b.installed - !!a.installed) || txt(a.name).localeCompare(txt(b.name)))])
+      .filter(([, list]) => list.length);
+    grid.replaceChildren(...(groups.length
+      ? groups.map(([label, list]) => h('div', { class: 'market-group' }, h('h2', { class: 'market-group-title' }, label, h('span', { class: 'seg-count' }, String(list.length))), h('div', { class: 'market-grid' }, list.map(card))))
+      : [h('div', { class: 'empty' }, installedOnly && !q ? tr('Nothing installed yet.') : tr('Nothing found.'))]));
   }
 
   async function load() {
@@ -2084,7 +2100,6 @@ async function settingsPlugins(shell) {
     devices = Object.fromEntries(data.devices.map((d) => [d.id, d]));
     note.textContent = data.error ? tr('The mensarium.com catalog is currently unavailable, showing plugins bundled with this version of Mensarium.') : '';
     note.classList.toggle('hidden', !data.error);
-    renderFilters();
     render();
     clearTimeout(poll);
     if (items.some((p) => p.installed?.enabled && p.status?.state === 'connecting')) poll = setTimeout(() => load().catch(() => {}), 2000);
@@ -2092,7 +2107,7 @@ async function settingsPlugins(shell) {
 
   function addCustom() {
     const ta = h('textarea', { class: 'market-yaml', rows: 14, spellcheck: 'false', 'aria-label': tr('Plugin manifest'),
-      placeholder: 'id: my-tools\nname: {en: My tools, ru: Мои инструменты}\nversion: 1.0.0\nsummary: What it does\ntools:\n  - name: my.tool\n    description: ...\n    argv: [program, --flag]' });
+      placeholder: 'id: my-tools\nname: {en: My tools, ru: Мои инструменты}\nversion: 1.0.0\nsummary: What it does\ncategory: development\ntools:\n  - name: my.tool\n    description: ...\n    argv: [program, --flag]' });
     const save = h('button', { class: 'btn btn-primary' }, tr('Install'));
     save.addEventListener('click', async () => {
       save.disabled = true;
@@ -2162,7 +2177,7 @@ async function settingsPlugins(shell) {
   search.addEventListener('input', render);
   page(shell, tr('Plugins'), tr('Plugins add abilities to the agent: tools on devices, tools in Core such as web search, and MCP servers. Everything is configured here or with mensarium plugins on the Core server.'),
     [h('button', { class: 'btn', onclick: addCustom }, icon('plus'), tr('Your own plugin')), h('button', { class: 'btn btn-primary', onclick: addMcp }, icon('plug'), tr('Add an MCP server'))],
-    h('div', { class: 'market-bar' }, filterBar, h('div', { class: 'settings-search market-search' }, icon('search'), search)),
+    h('div', { class: 'market-bar' }, h('div', { class: 'settings-search market-search' }, icon('search'), search), installedSwitch),
     note,
     grid,
   );

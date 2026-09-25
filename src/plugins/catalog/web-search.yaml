@@ -9,6 +9,7 @@ description:
   en: Adds the web.search tool that runs in the Core and returns titles, links and snippets from Brave Search. Needs a Brave Search API key; there is a free plan. The key stays in the Core and never reaches the model or devices.
   ru: Добавляет инструмент web.search, который работает в Core и возвращает заголовки, ссылки и фрагменты из Brave Search. Нужен ключ Brave Search API, есть бесплатный тариф. Ключ хранится в Core и не попадает ни к модели, ни на устройства.
 tags: [web, search]
+category: web
 homepage: https://brave.com/search/api/
 builtin: web_search
 config:

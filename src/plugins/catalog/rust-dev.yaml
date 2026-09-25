@@ -9,6 +9,7 @@ description:
   en: Gives the agent structured tools for a Rust crate's tests, type-checking and lints.
   ru: Даёт агенту инструменты для тестов, проверки типов и линтов Rust-крейта.
 tags: [rust, testing, lint]
+category: development
 tools:
   - name: cargo.test
     description: Run the crate's test suite with cargo test.

@@ -9,6 +9,7 @@ description:
   en: Runs the reference mcp-server-time with uvx in the Core. Useful when the agent schedules, reads logs from other regions or needs today's date.
   ru: Запускает эталонный mcp-server-time через uvx в Core. Пригодится, когда агент планирует, читает логи из других регионов или ему нужна сегодняшняя дата.
 tags: [mcp, time]
+category: productivity
 homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/time
 config:
   timezone:
