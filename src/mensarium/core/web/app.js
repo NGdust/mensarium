@@ -1098,7 +1098,7 @@ async function viewChat(taskId) {
 
 const SETTINGS = [
   ['overview', 'pulse', tr('Overview')],
-  ['model', 'robot', tr('Model')],
+  ['providers', 'robot', tr('Providers')],
   ['devices', 'laptop', tr('Devices')],
   ['memory', 'graph', tr('Memory')],
   ['plugins', 'package', tr('Plugins')],
@@ -1158,7 +1158,7 @@ const cmdValue = (cmd) => [h('code', {}, cmd), copyBtn(cmd)];
 async function viewSettings(key) {
   const shell = ensureSettingsShell();
   shell.setActive();
-  const views = { overview: settingsOverview, model: settingsModel, devices: settingsDevices, memory: settingsMemory, plugins: settingsPlugins, marketplace: settingsPlugins, profiles: settingsProfiles, audit: settingsAudit };
+  const views = { overview: settingsOverview, providers: settingsProviders, model: settingsProviders, devices: settingsDevices, memory: settingsMemory, plugins: settingsPlugins, marketplace: settingsPlugins, profiles: settingsProfiles, audit: settingsAudit };
   await (views[key] || settingsOverview)(shell);
 }
 
@@ -1206,46 +1206,140 @@ async function settingsOverview(shell) {
   );
 }
 
-async function settingsModel(shell) {
-  const s = await get('/v1/system');
-  state.system = s;
-  const p = s.provider || {};
-  const health = p.health || {};
-  const providerName = { ollama_cloud: 'Ollama Cloud', ollama_local: tr('Local Ollama'), llama_cpp: 'llama.cpp' }[p.name] || p.name;
-  const current = h('span', {}, p.model);
-  const list = h('div', { class: 'rows' }, h('div', { class: 'empty' }, tr('Loading the list...')));
-  page(shell, tr('Model'), tr('Which provider and model the agent thinks through. The API key is stored only on the Core server.'), null,
-    h('div', { class: 'rows' },
-      row(tr('Provider'), null, providerName),
-      row(tr('API address'), null, p.base_url, true),
-      row(tr('Default model'), tr('Used for new chats. Inside a chat, the model is changed with the robot button in the input field.'), h('span', { class: 'status' }, icon('robot'), current), true),
-      row(tr('Status'), health.ok ? null : health.detail, h('span', { class: 'status' }, h('span', { class: `dot ${health.ok ? 'ok' : 'danger'}` }), health.ok ? tr('Available') : tr('Unavailable'))),
-    ),
-    section(tr('Available models'), tr('Click a model to make it the default.'), list),
+async function settingsProviders(shell) {
+  const [data, sys] = await Promise.all([get('/v1/providers'), get('/v1/system')]);
+  state.system = sys;
+  const health = sys.provider.health || {};
+  const active = data.providers.find((x) => x.active) || data.providers[0];
+  const kinds = Object.fromEntries(data.kinds.map((k) => [k.kind, k]));
+  const models = h('div', { class: 'rows' }, h('div', { class: 'empty' }, tr('Loading the list...')));
+
+  const reload = () => settingsProviders(shell).catch(fail);
+  const activate = async (x) => {
+    try { await post(`/v1/providers/${x.id}/activate`); state.models = null; toast(tr('Active provider: {0}', x.title)); reload(); } catch (err) { fail(err); }
+  };
+  const remove = async (x) => {
+    if (!await confirmDialog({ title: tr('Remove “{0}”?', x.title), text: tr('Its settings and saved key are deleted from Core.'), action: tr('Remove'), danger: true })) return;
+    try { await del(`/v1/providers/${x.id}`); toast(tr('Removed')); reload(); } catch (err) { fail(err); }
+  };
+
+  function editor(x) {
+    const adding = !x;
+    const kindSel = h('select', { 'aria-label': tr('Type') }, data.kinds.map((k) => h('option', { value: k.kind, selected: x ? k.kind === x.kind : k.kind === 'ollama_local' }, k.title)));
+    const taken = new Set(data.providers.map((y) => y.id));
+    const freeId = (kind) => { let id = kind; for (let i = 2; taken.has(id); i++) id = `${kind}-${i}`; return id; };
+    const id = h('input', { type: 'text', value: x ? x.id : freeId(kindSel.value), disabled: !adding, 'aria-label': tr('Name in the config') });
+    const base = h('input', { type: 'text', value: x ? x.base_url : kinds[kindSel.value].base_url, 'aria-label': tr('API address') });
+    const key = h('input', { type: 'password', autocomplete: 'off', placeholder: x?.has_key ? tr('Saved. Type to replace') : '', 'aria-label': tr('API key') });
+    const listId = `models-${Math.random().toString(36).slice(2)}`;
+    const modelList = h('datalist', { id: listId });
+    const model = h('input', { type: 'text', value: x ? x.default_model : kinds[kindSel.value].default_model, list: listId, 'aria-label': tr('Default model') });
+    const timeout = h('input', { type: 'number', value: x ? x.timeout_s : 90, min: 5, max: 600, 'aria-label': tr('Timeout, s') });
+    const retries = h('input', { type: 'number', value: x ? x.max_retries : 2, min: 0, max: 5, 'aria-label': tr('Retries') });
+    let makeActive = adding && !data.providers.length;
+    const activeSwitch = adding ? h('label', { class: 'switch-label' }, toggleSwitch(makeActive, { label: tr('Make it active'), onChange: async (v) => { makeActive = v; } }), tr('Make it active')) : null;
+    const keyHint = h('div', { class: 'row-desc' });
+    const statusDot = h('span', { class: 'dot' });
+    const statusText = h('span', {}, tr('Check the connection to load the models.'));
+    const status = h('div', { class: 'plugin-status' }, statusDot, statusText);
+    const setStatus = (kind, text) => { status.className = `plugin-status ${kind}`; statusDot.className = `dot ${{ ok: 'ok', error: 'danger', busy: 'accent live' }[kind] || ''}`; statusText.textContent = text; };
+    let touchedBase = !!x;
+    base.addEventListener('input', () => { touchedBase = true; });
+    const syncKind = () => {
+      const k = kinds[kindSel.value];
+      if (!touchedBase) base.value = k.base_url;
+      if (adding) { id.value = freeId(k.kind); if (!model.value || !x) model.value = k.default_model; }
+      keyHint.replaceChildren(...(k.needs_key ? [tr('Required. '), k.key_url ? linkify(k.key_url) : ''] : [tr('Only if the server asks for one.')]));
+    };
+    kindSel.addEventListener('change', syncKind);
+    syncKind();
+    const check = h('button', { class: 'btn btn-sm', onclick: async (e) => {
+      e.preventDefault();
+      check.disabled = true;
+      setStatus('busy', tr('Connecting...'));
+      try {
+        const r = await post('/v1/providers/test', { kind: kindSel.value, base_url: base.value.trim(), api_key: key.value || null, id: x?.id || null });
+        if (r.ok) {
+          modelList.replaceChildren(...r.models.map((m) => h('option', { value: m })));
+          if (r.models.length && !r.models.includes(model.value)) model.value = r.models.includes(kinds[kindSel.value].default_model) ? kinds[kindSel.value].default_model : r.models[0];
+          setStatus('ok', tr('Available, {0} models', r.models.length));
+        } else {
+          setStatus('error', tr('Error: {0}', r.error));
+        }
+      } catch (err) { fail(err); } finally { check.disabled = false; }
+    } }, icon('refresh'), tr('Check connection'));
+    status.append(h('span', { class: 'spacer' }), check);
+    const save = h('button', { class: 'btn btn-primary' }, tr('Save'));
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      try {
+        await api(`/v1/providers/${encodeURIComponent(id.value.trim())}`, { method: 'PUT', body: JSON.stringify({
+          kind: kindSel.value, base_url: base.value.trim(), default_model: model.value.trim(), api_key: key.value || null,
+          timeout_s: Number(timeout.value) || 90, max_retries: Number(retries.value) || 0,
+        }) });
+        if (makeActive) await post(`/v1/providers/${encodeURIComponent(id.value.trim())}/activate`);
+        state.models = null;
+        closeLayer();
+        toast(tr('Saved'));
+        reload();
+      } catch (err) { fail(err); } finally { save.disabled = false; }
+    });
+    const field = (label, control, hint) => h('label', { class: 'plugin-field' }, h('div', { class: 'plugin-field-head' }, h('span', {}, label)), control, hint || null);
+    openModal(
+      h('div', { class: 'modal-head' }, h('h2', {}, adding ? tr('Add a provider') : x.title), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
+      h('div', { class: 'plugin-form' },
+        h('div', { class: 'plugin-grid' }, field(tr('Type'), kindSel), field(tr('Name in the config'), id)),
+        field(tr('API address'), base),
+        field(tr('API key'), key, keyHint),
+        status,
+        field(tr('Default model'), h('div', {}, model, modelList)),
+        h('div', { class: 'plugin-grid' }, field(tr('Timeout, s'), timeout), field(tr('Retries'), retries)),
+        activeSwitch),
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
+    ).classList.add('modal-wide');
+  }
+
+  const rows = h('div', { class: 'rows' }, data.providers.map((x) => h('div', { class: 'row' },
+    h('div', { class: 'row-text' },
+      h('div', { class: 'row-title' }, x.title, x.id !== x.kind ? h('code', { class: 'provider-id' }, x.id) : null, x.active ? h('span', { class: 'pill accent' }, tr('active')) : null),
+      h('div', { class: 'row-desc' }, [x.base_url, x.default_model, x.needs_key || x.has_key ? (x.has_key ? tr('key saved') : tr('no key')) : null].filter(Boolean).join(' · '))),
+    h('div', { class: 'row-value' },
+      x.active ? null : h('button', { class: 'btn btn-sm', onclick: () => activate(x) }, tr('Make active')),
+      h('button', { class: 'icon-btn', title: tr('Edit'), 'aria-label': tr('Edit'), onclick: () => editor(x) }, icon('sliders')),
+      x.active ? null : h('button', { class: 'icon-btn', title: tr('Remove'), 'aria-label': tr('Remove'), onclick: () => remove(x) }, icon('trash'))))));
+
+  page(shell, tr('Providers'), tr('Where the agent thinks: the LLM provider and its models. Keys are stored only on the Core server; switching the active provider applies from the next step of running tasks.'),
+    h('button', { class: 'btn btn-primary', onclick: () => editor(null) }, icon('plus'), tr('Add a provider')),
+    h('div', { class: 'hero provider-hero' }, h('span', { class: 'market-icon' }, icon('robot')), h('div', { class: 'hero-text' },
+      h('h2', {}, active ? active.title : '—'),
+      h('p', {}, [sys.provider.base_url, sys.provider.model].join(' · '))),
+      h('span', { class: 'status' }, h('span', { class: `dot ${health.ok ? 'ok' : 'danger'}` }), health.ok ? tr('Available') : tr('Unavailable'))),
+    health.ok ? null : h('p', { class: 'market-note' }, health.detail || ''),
+    section(tr('Default model'), tr('For new chats with the active provider. In a chat the model is changed with the robot button in the input.'), models),
+    section(tr('Providers'), null, rows),
   );
   const render = (ids) => {
-    list.replaceChildren(ids.length
-      ? h('div', { class: 'row-extra model-grid' }, ids.map((id) => h('button', {
-        class: `pill tag model-pill${id === state.system.provider.model ? ' accent' : ''}`,
-        'aria-pressed': String(id === state.system.provider.model),
+    models.replaceChildren(ids.length
+      ? h('div', { class: 'row-extra model-grid' }, ids.map((mid) => h('button', {
+        class: `pill tag model-pill${mid === state.system.provider.model ? ' accent' : ''}`,
+        'aria-pressed': String(mid === state.system.provider.model),
         onclick: async () => {
-          if (id === state.system.provider.model) return;
+          if (mid === state.system.provider.model) return;
           try {
-            await api('/v1/system/model', { method: 'PUT', body: JSON.stringify({ model: id }) });
-            state.system.provider.model = id;
-            current.textContent = id;
-            toast(tr('Default model: {0}', id));
+            await api('/v1/system/model', { method: 'PUT', body: JSON.stringify({ model: mid }) });
+            state.system.provider.model = mid;
+            toast(tr('Default model: {0}', mid));
             render(ids);
           } catch (err) { fail(err); }
         },
-      }, id)))
-      : h('div', { class: 'empty' }, tr('The provider didn\'t return any models.')));
+      }, mid)))
+      : h('div', { class: 'empty' }, tr('The provider did not return any models.')));
   };
   try {
     state.models = null;
     render((await loadModels()).map((m) => m.id));
   } catch (err) {
-    list.replaceChildren(h('div', { class: 'empty' }, err.message));
+    models.replaceChildren(h('div', { class: 'empty' }, err.message));
   }
 }
 

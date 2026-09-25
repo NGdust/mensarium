@@ -13,6 +13,7 @@ class ServerConfig(BaseModel):
 
 
 class ProviderConfig(BaseModel):
+    kind: str | None = None
     base_url: str
     default_model: str
     api_key_ref: str | None = None

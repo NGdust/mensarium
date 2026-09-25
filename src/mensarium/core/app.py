@@ -32,11 +32,11 @@ from mensarium.core.local_target import ensure_local_target, local_target_paths
 from mensarium.core.memory import KINDS, Memory, NoteError
 from mensarium.core.orchestrator import Orchestrator, TaskError, full_access
 from mensarium.core.plugins import PluginError, PluginManager
+from mensarium.core.providers import ProviderError, Providers
 from mensarium.core.releases import ReleaseError, fetch_latest, spawn_update, updater
 from mensarium.core.repo import Repo
 from mensarium.core.target_hub import TargetHub, TargetUnavailable
-from mensarium.llm_providers.factory import build_provider
-from mensarium.llm_providers.openai_compat import OpenAICompatibleProvider
+from mensarium.llm_providers.router import ProviderRouter
 from mensarium.shared.crypto import fingerprint, load_or_create_private_key, public_key_b64
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import iso_in, now_iso, parse_iso, utcnow
@@ -57,7 +57,8 @@ class Core:
     hub: TargetHub
     bus: EventBus
     orchestrator: Orchestrator
-    provider: OpenAICompatibleProvider
+    provider: ProviderRouter
+    providers: Providers
     workspace_id: str
     core_public_key: str
     admin_token: str
@@ -87,6 +88,22 @@ class ModeBody(BaseModel):
 
 class ModelBody(BaseModel):
     model: str = Field(min_length=1, max_length=200)
+
+
+class ProviderBody(BaseModel):
+    kind: str
+    base_url: str = Field(max_length=500)
+    default_model: str = Field("", max_length=200)
+    api_key: str | None = Field(None, max_length=500)
+    timeout_s: int = Field(90, ge=5, le=600)
+    max_retries: int = Field(2, ge=0, le=5)
+
+
+class ProviderTestBody(BaseModel):
+    kind: str
+    base_url: str = Field(max_length=500)
+    api_key: str | None = Field(None, max_length=500)
+    id: str | None = None
 
 
 class ToolToggle(BaseModel):
@@ -173,15 +190,9 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         admin_token = read_secret(paths, "secret://admin-token")
         if not admin_token:
             raise RuntimeError("admin token is missing; run `mensarium setup`")
-        pcfg = cfg.llm.providers[cfg.llm.active_provider]
-        provider = build_provider(
-            cfg.llm.active_provider,
-            base_url=pcfg.base_url,
-            default_model=pcfg.default_model,
-            api_key=read_secret(paths, pcfg.api_key_ref),
-            timeout_s=pcfg.timeout_s,
-            max_retries=pcfg.max_retries,
-        )
+        providers = Providers(cfg, paths)
+        provider = ProviderRouter(providers.active_client())
+        providers.router = provider
         db = Database(paths.db)
         await db.connect()
         repo = Repo(db)
@@ -217,6 +228,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             bus=bus,
             orchestrator=orchestrator,
             provider=provider,
+            providers=providers,
             workspace_id=workspace_id,
             core_public_key=public_key_b64(key),
             admin_token=admin_token,
@@ -373,6 +385,47 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         c.provider.default_model = body.model
         await c.repo.audit(c.workspace_id, "user", "llm.default_model", {"model": body.model})
         return {"model": body.model}
+
+    def provider_error(e: ProviderError) -> HTTPException:
+        return HTTPException(404 if "not found" in str(e) else 409, str(e))
+
+    @app.get("/v1/providers")
+    async def list_providers(c: Core = Depends(auth)) -> dict[str, Any]:
+        return c.providers.view()
+
+    @app.put("/v1/providers/{provider_id}")
+    async def save_provider(provider_id: str, body: ProviderBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            c.providers.save(provider_id, **body.model_dump())
+        except ProviderError as e:
+            raise provider_error(e) from e
+        await c.repo.audit(c.workspace_id, "user", "provider.saved", {"id": provider_id, "kind": body.kind, "model": body.default_model})
+        return c.providers.view()
+
+    @app.delete("/v1/providers/{provider_id}")
+    async def remove_provider(provider_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            c.providers.remove(provider_id)
+        except ProviderError as e:
+            raise provider_error(e) from e
+        await c.repo.audit(c.workspace_id, "user", "provider.removed", {"id": provider_id})
+        return c.providers.view()
+
+    @app.post("/v1/providers/{provider_id}/activate")
+    async def activate_provider(provider_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            c.providers.activate(provider_id)
+        except ProviderError as e:
+            raise provider_error(e) from e
+        await c.repo.audit(c.workspace_id, "user", "provider.activated", {"id": provider_id})
+        return c.providers.view()
+
+    @app.post("/v1/providers/test")
+    async def test_provider(body: ProviderTestBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return {"ok": True, "models": await c.providers.test(body.kind, body.base_url, body.api_key, body.id)}
+        except ProviderError as e:
+            return {"ok": False, "error": str(e)}
 
     @app.get("/v1/models")
     async def models(c: Core = Depends(auth)) -> list[dict[str, str]]:

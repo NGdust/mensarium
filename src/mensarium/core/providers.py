@@ -1,0 +1,137 @@
+import re
+from typing import Any
+
+from mensarium.core.config import CoreConfig, CorePaths, ProviderConfig, read_secret, save_config, write_secret
+from mensarium.llm_providers.base import LLMError
+from mensarium.llm_providers.factory import PROVIDER_KINDS, build_provider
+from mensarium.llm_providers.openai_compat import OpenAICompatibleProvider
+from mensarium.llm_providers.router import ProviderRouter
+
+ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,40}$")
+
+
+class ProviderError(Exception):
+    pass
+
+
+class Providers:
+    """LLM providers in the Core config: add, change, remove, pick the active one; keys live in Core secrets."""
+
+    def __init__(self, cfg: CoreConfig, paths: CorePaths) -> None:
+        self.cfg = cfg
+        self.paths = paths
+        self.router: ProviderRouter | None = None
+
+    def _switch(self) -> None:
+        if self.router:
+            self.router.swap(self.active_client())
+
+    @staticmethod
+    def kind(pid: str, p: ProviderConfig) -> str:
+        return p.kind or pid
+
+    def _client(self, pid: str, p: ProviderConfig, api_key: str | None = None) -> OpenAICompatibleProvider:
+        return build_provider(
+            pid,
+            kind=self.kind(pid, p),
+            base_url=p.base_url,
+            default_model=p.default_model,
+            api_key=api_key if api_key is not None else read_secret(self.paths, p.api_key_ref),
+            timeout_s=p.timeout_s,
+            max_retries=p.max_retries,
+        )
+
+    def active_client(self) -> OpenAICompatibleProvider:
+        pid = self.cfg.llm.active_provider
+        return self._client(pid, self.cfg.llm.providers[pid])
+
+    def view(self) -> dict[str, Any]:
+        providers = []
+        for pid, p in self.cfg.llm.providers.items():
+            kind = self.kind(pid, p)
+            meta = PROVIDER_KINDS.get(kind, {})
+            providers.append(
+                {
+                    "id": pid,
+                    "kind": kind,
+                    "title": meta.get("title", kind),
+                    "base_url": p.base_url,
+                    "default_model": p.default_model,
+                    "has_key": bool(read_secret(self.paths, p.api_key_ref)),
+                    "needs_key": bool(meta.get("needs_key")),
+                    "timeout_s": p.timeout_s,
+                    "max_retries": p.max_retries,
+                    "active": pid == self.cfg.llm.active_provider,
+                }
+            )
+        kinds = [{"kind": k, **v} for k, v in PROVIDER_KINDS.items()]
+        return {"active": self.cfg.llm.active_provider, "providers": providers, "kinds": kinds}
+
+    def save(
+        self,
+        pid: str,
+        *,
+        kind: str,
+        base_url: str,
+        default_model: str,
+        api_key: str | None,
+        timeout_s: int,
+        max_retries: int,
+    ) -> None:
+        """`api_key` None keeps the stored key, "" deletes it."""
+        if not ID_RE.match(pid):
+            raise ProviderError("provider id: lowercase letters, digits, - and _")
+        if kind not in PROVIDER_KINDS:
+            raise ProviderError(f"unknown provider kind {kind!r}")
+        if not base_url.startswith(("http://", "https://")):
+            raise ProviderError("the address must start with http:// or https://")
+        if not default_model.strip():
+            raise ProviderError("choose a default model")
+        old = self.cfg.llm.providers.get(pid)
+        ref = old.api_key_ref if old else None
+        if api_key:
+            ref = write_secret(self.paths, ref.removeprefix("secret://") if ref else f"provider-{pid}-key", api_key)
+        elif api_key == "" and ref:
+            (self.paths.secrets / ref.removeprefix("secret://")).unlink(missing_ok=True)
+            ref = None
+        if PROVIDER_KINDS[kind]["needs_key"] and not read_secret(self.paths, ref):
+            raise ProviderError(f"{PROVIDER_KINDS[kind]['title']} needs an API key")
+        self.cfg.llm.providers[pid] = ProviderConfig(
+            kind=kind, base_url=base_url.rstrip("/"), default_model=default_model.strip(), api_key_ref=ref,
+            timeout_s=timeout_s, max_retries=max_retries,
+        )
+        save_config(self.paths, self.cfg)
+        if pid == self.cfg.llm.active_provider:
+            self._switch()
+
+    def remove(self, pid: str) -> None:
+        if pid not in self.cfg.llm.providers:
+            raise ProviderError("provider not found")
+        if pid == self.cfg.llm.active_provider:
+            raise ProviderError("this provider is active; make another one active first")
+        ref = self.cfg.llm.providers.pop(pid).api_key_ref
+        if ref and not any(p.api_key_ref == ref for p in self.cfg.llm.providers.values()):
+            (self.paths.secrets / ref.removeprefix("secret://")).unlink(missing_ok=True)
+        save_config(self.paths, self.cfg)
+
+    def activate(self, pid: str) -> None:
+        if pid not in self.cfg.llm.providers:
+            raise ProviderError("provider not found")
+        self.cfg.llm.active_provider = pid
+        save_config(self.paths, self.cfg)
+        self._switch()
+
+    async def test(self, kind: str, base_url: str, api_key: str | None, pid: str | None) -> list[str]:
+        """List the models with these settings; an empty key means the key already saved for `pid`."""
+        if kind not in PROVIDER_KINDS:
+            raise ProviderError(f"unknown provider kind {kind!r}")
+        stored = self.cfg.llm.providers.get(pid or "")
+        key = api_key or (read_secret(self.paths, stored.api_key_ref) if stored else None)
+        probe = ProviderConfig(kind=kind, base_url=base_url.rstrip("/"), default_model="", timeout_s=15, max_retries=0)
+        client = self._client(pid or kind, probe, api_key=key or "")
+        try:
+            return sorted(m.id for m in await client.list_models())
+        except LLMError as e:
+            raise ProviderError(str(e)) from e
+        finally:
+            await client.aclose()

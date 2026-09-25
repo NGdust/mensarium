@@ -53,7 +53,7 @@ LLM proposal → schema validation → target capability check → policy evalua
 → signed result → artifact → observation added to context → next step
 ```
 
-- LLM providers: Ollama Cloud, local Ollama, llama.cpp — all through an OpenAI-compatible API; switching providers only changes config.
+- LLM providers: Ollama Cloud, local Ollama, llama.cpp, LM Studio, OpenAI, OpenRouter or any OpenAI-compatible server — all through the OpenAI-compatible API. They are added, checked and switched in Settings → Providers (or in `mensarium setup`); the active provider changes without a restart and keys stay in Core secrets.
 - Access modes per chat: "Ask before acting" (default) and "Full access". The machine running Core is always available to the agent as a device.
 - Tools v0.1: `files.list`, `files.read`, `files.search`, `git.status`, `git.diff` (read, no confirmation needed) and `shell.exec` (always requires "Approve once" confirmation). File edits go through `git apply` with the patch on stdin.
 - Memory (Settings → Memory): notes with `[[Title]]` links, an interactive relationship graph, and dreaming — nightly consolidation of new chats into long-term memory with a diary. The agent searches, reads, and adds to memory via `memory.*` tools; pinned and important notes are included in the system prompt.

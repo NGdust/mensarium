@@ -23,7 +23,7 @@ from mensarium.core.config import (
     save_config,
     write_secret,
 )
-from mensarium.llm_providers.factory import PROVIDER_DEFAULTS
+from mensarium.llm_providers.factory import PROVIDER_KINDS
 from mensarium.shared.crypto import fingerprint, load_or_create_private_key, public_key_b64
 from mensarium.target.config import DEFAULT_COMMAND_ALLOWLIST, TargetPaths, load_target_config
 from mensarium.target.pairing import PairingError, pair
@@ -129,24 +129,29 @@ def setup_core(start_service: bool | None = None) -> None:
             choices=[
                 questionary.Choice("Ollama Cloud (ollama.com, API key)", "ollama_cloud"),
                 questionary.Choice("Local Ollama (this machine or LAN)", "ollama_local"),
-                questionary.Choice("llama.cpp server (OpenAI-compatible)", "llama_cpp"),
+                questionary.Choice("llama.cpp server", "llama_cpp"),
+                questionary.Choice("LM Studio", "lmstudio"),
+                questionary.Choice("OpenAI (API key)", "openai"),
+                questionary.Choice("OpenRouter (API key)", "openrouter"),
+                questionary.Choice("Another OpenAI-compatible server", "openai_compatible"),
             ],
             style=STYLE,
         )
     )
-    defaults = PROVIDER_DEFAULTS[provider]
-    base_url = ask(questionary.text("Provider base URL:", default=defaults["base_url"], style=STYLE)).rstrip("/")
+    kind = PROVIDER_KINDS[provider]
+    base_url = ask(questionary.text("Provider base URL:", default=str(kind["base_url"]), style=STYLE)).rstrip("/")
     api_key: str | None = None
     api_key_ref: str | None = None
-    if provider == "ollama_cloud":
-        current = read_secret(paths, "secret://ollama-api-key") if existing else None
-        hint = " (leave empty to keep the current one)" if current else ""
-        entered = ask(questionary.password(f"Ollama API key{hint}:", style=STYLE)).strip()
-        api_key = entered or current
-        if not api_key:
-            fail("An API key is required for Ollama Cloud (https://ollama.com/settings/keys).")
-            raise typer.Exit(1)
-        api_key_ref = "secret://ollama-api-key"
+    secret_name = "ollama-api-key" if provider == "ollama_cloud" else f"provider-{provider}-key"
+    current = read_secret(paths, f"secret://{secret_name}") if existing else None
+    hint = " (leave empty to keep the current one)" if current else "" if kind["needs_key"] else " (leave empty if the server needs none)"
+    entered = ask(questionary.password(f"{kind['title']} API key{hint}:", style=STYLE)).strip()
+    api_key = entered or current
+    if kind["needs_key"] and not api_key:
+        fail(f"An API key is required for {kind['title']} ({kind['key_url']}).")
+        raise typer.Exit(1)
+    if api_key:
+        api_key_ref = f"secret://{secret_name}"
 
     models: list[str] = []
     with console.status("Checking the provider and loading models..."):
@@ -156,7 +161,7 @@ def setup_core(start_service: bool | None = None) -> None:
             warn(f"Could not load models: {e}")
     if models:
         ok(f"Provider reachable, {len(models)} models available")
-        default_model = defaults["default_model"] if defaults["default_model"] in models else models[0]
+        default_model = str(kind["default_model"]) if kind["default_model"] in models else models[0]
         model = ask(
             questionary.autocomplete(
                 "Default model (type to filter, Tab to complete):",
@@ -167,7 +172,7 @@ def setup_core(start_service: bool | None = None) -> None:
             )
         )
     else:
-        model = ask(questionary.text("Default model:", default=defaults["default_model"], style=STYLE))
+        model = ask(questionary.text("Default model:", default=str(kind["default_model"]), style=STYLE))
 
     current_roots = ", ".join(existing.local_target.roots) if existing else "~"
     local_roots = ask(
@@ -181,7 +186,7 @@ def setup_core(start_service: bool | None = None) -> None:
     step(3, total, "Security")
     paths.ensure()
     if api_key and api_key_ref:
-        write_secret(paths, "ollama-api-key", api_key)
+        write_secret(paths, api_key_ref.removeprefix("secret://"), api_key)
     token = read_secret(paths, "secret://admin-token")
     if not token or ask(questionary.confirm("Generate a new admin token?", default=False, style=STYLE)):
         token = secrets.token_urlsafe(24)
@@ -197,11 +202,12 @@ def setup_core(start_service: bool | None = None) -> None:
             active_provider=provider,
             providers={
                 provider: ProviderConfig(
+                    kind=provider,
                     base_url=base_url,
                     default_model=model,
                     api_key_ref=api_key_ref,
-                    timeout_s=90 if provider == "ollama_cloud" else 180,
-                    max_retries=2 if provider == "ollama_cloud" else 0,
+                    timeout_s=90 if kind["needs_key"] else 180,
+                    max_retries=2 if kind["needs_key"] else 0,
                 )
             },
         ),

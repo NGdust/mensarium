@@ -8,8 +8,12 @@ class LLMError(Exception):
 
 
 class LLMProvider(Protocol):
-    name: str
-    base_url: str
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def base_url(self) -> str: ...
+
     default_model: str
 
     async def list_models(self) -> list[ModelInfo]: ...
