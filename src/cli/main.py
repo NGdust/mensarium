@@ -12,6 +12,7 @@ import typer
 from mensarium import __version__
 from mensarium.cli import service
 from mensarium.cli.plugins import mcp_app, plugins_app, target_plugins
+from mensarium.cli.skills import skills_app
 from mensarium.cli.ui import console, fail, ok, summary, use_select_event_loop, warn
 from mensarium.core.config import CorePaths, load_config, read_secret
 from mensarium.shared.logging import setup_logging
@@ -27,6 +28,7 @@ app.add_typer(target_app, name="target")
 app.add_typer(service_app, name="service")
 app.add_typer(plugins_app, name="plugins")
 app.add_typer(mcp_app, name="mcp")
+app.add_typer(skills_app, name="skills")
 
 Role = Literal["core", "target"]
 

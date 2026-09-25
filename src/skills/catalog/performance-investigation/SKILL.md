@@ -1,0 +1,31 @@
+---
+name: performance-investigation
+description: Find the concrete cause of a slow code path and propose a targeted fix, grounded in evidence.
+metadata:
+  mensarium:
+    requires:
+      tools: [files.search, files.read, shell.exec]
+---
+# Performance investigation
+
+Goal: find why one specific operation is slow, with evidence, and propose a targeted fix.
+
+1. Get the concrete symptom first: which operation, how it is measured, how slow is "slow" —
+   investigate only that path, not the whole codebase.
+2. Use files.search to find the entry point of that operation, then files.read to follow the call chain
+   end to end, across layers.
+3. Look for the usual causes in order: repeated calls in a loop (N+1), synchronous network or disk I/O
+   on a hot path, unbounded result sets or over-fetching, missing caching of repeated expensive work,
+   a blocking call inside async code, unnecessary copies or serialization.
+4. While reading, check the project's layering: business logic calling a repository which calls
+   external services, or a repository doing cross-service calls, is itself often the root cause.
+5. If a profile, trace or log already exists, read it with files.read — do not invent numbers you have
+   not seen.
+6. If a benchmark or timing command is documented, run it once via shell.exec (one program, no
+   chaining) before proposing a fix, to have a real baseline.
+7. Propose the smallest targeted fix (batch the calls, add a cache, add an index) as a unified diff;
+   apply it with `git apply -` only if asked to implement, not just to diagnose.
+8. If you changed anything, rerun the same benchmark once to compare against the baseline.
+
+Stop once you have a concrete bottleneck with evidence. Report: symptom, root cause with file:line,
+before/after measurement if available, and the suggested fix.

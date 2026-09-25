@@ -60,6 +60,7 @@ class CorePaths:
         self.keys = self.root / "keys"
         self.signing_key = self.keys / "core_ed25519.pem"
         self.artifacts = self.root / "artifacts"
+        self.skills = self.root / "skills"
         self.logs = self.root / "logs"
 
     def ensure(self) -> None:

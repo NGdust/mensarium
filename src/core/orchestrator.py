@@ -17,11 +17,13 @@ from mensarium.contracts.protocol import (
     TargetPolicy,
     policy_snapshot_hash,
 )
+from mensarium.contracts.skills import SkillError
 from mensarium.core.config import CoreConfig
 from mensarium.core.events import EventBus
 from mensarium.core.memory import Memory, NoteError
 from mensarium.core.plugins import PluginError, PluginManager, Toolbox
 from mensarium.core.repo import TERMINAL_STATUSES, Repo
+from mensarium.core.skills import SkillStore
 from mensarium.core.target_hub import TargetHub, TargetUnavailable
 from mensarium.llm_providers.base import LLMError, LLMProvider
 from mensarium.policy_engine.engine import Decision, evaluate
@@ -74,10 +76,12 @@ class Orchestrator:
         artifacts_dir: Path,
         memory: Memory,
         plugins: PluginManager,
+        skills: SkillStore,
     ) -> None:
         self.repo = repo
         self.memory = memory
         self.plugins = plugins
+        self.skills = skills
         self.hub = hub
         self.bus = bus
         self.provider = provider
@@ -317,7 +321,11 @@ class Orchestrator:
             policy = hello.policy if hello else TargetPolicy.model_validate(target["policy"] or {"roots": [], "command_allowlist": []})
             toolbox = await self.plugins.toolbox(profile, target)
             available = toolbox.available(target)
-            skills = toolbox.skills if "skills.read" in available else []
+            if profile.allow_extensions:
+                toolbox.add_skills(self.skills.eligible(await self.skills.all(), target["platform"], available))
+            if toolbox.skills:
+                available.append("skills.read")
+            skills = [(s.name, s.description) for s in toolbox.skills]
             memory = await self.memory.context() if "memory.search" in available else None
 
             await self._set_status(task_id, "PLANNING")
@@ -678,11 +686,14 @@ class Orchestrator:
         if tool == "memory.save":
             return await self.memory.agent_save(args["title"], args["content"], args["kind"], args["tags"], task_id)
         if tool == "skills.read":
-            if args["id"] not in {skill_id for skill_id, _ in toolbox.skills}:
-                names = ", ".join(skill_id for skill_id, _ in toolbox.skills) or "none"
-                raise TaskError(f"no installed skill {args['id']!r}; installed skills: {names}")
-            skill = (await self.plugins.get(args["id"])).plugin
-            return f"[skill {skill.id} {skill.version}, installed by the user]\n{skill.instructions}"
+            skill = next((s for s in toolbox.skills if s.name == args["name"]), None)
+            if skill is None:
+                names = ", ".join(s.name for s in toolbox.skills) or "none"
+                raise TaskError(f"no skill {args['name']!r}; available skills: {names}")
+            try:
+                return self.skills.read(skill, args.get("path"))
+            except SkillError as e:
+                raise TaskError(str(e)) from e
         return await self.plugins.call_core(toolbox, toolbox.registry[tool], args)
 
     @staticmethod

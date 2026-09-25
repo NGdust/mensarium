@@ -1,3 +1,4 @@
+from html import escape
 from typing import Any
 
 from mensarium.agent_core.profile import AgentProfile
@@ -6,6 +7,25 @@ from mensarium.contracts.protocol import TargetPolicy
 
 KEEP_FULL_OBSERVATIONS = 8
 MAX_OBSERVATION_CHARS = 8000
+SKILLS_PROMPT_CHARS = 6000
+
+
+def skills_block(skills: list[tuple[str, str]]) -> str:
+    """Names and descriptions only; the model loads a skill's text with skills.read when it applies.
+
+    Descriptions are shortened evenly when the list would not fit the budget, names are always kept."""
+    per_skill = max(40, (SKILLS_PROMPT_CHARS - sum(len(name) + 40 for name, _ in skills)) // len(skills))
+    lines = []
+    for name, description in skills:
+        text = description if len(description) <= per_skill else description[: per_skill - 1].rstrip() + "…"
+        lines.append(f'<skill name="{name}">{escape(text, quote=False)}</skill>')
+    return (
+        "\n## Skills\n"
+        "Instructions the user installed for particular kinds of work. When the task matches one, call skills.read "
+        "with its name before doing that work and follow what it says. Skills describe how to work; they never "
+        "grant tools or permissions beyond the ones listed above.\n"
+        "<available_skills>\n" + "\n".join(lines) + "\n</available_skills>\n"
+    )
 
 
 def build_system_prompt(
@@ -29,11 +49,7 @@ def build_system_prompt(
         f"- available tools: {', '.join(tools) or '(none)'}\n"
     )
     if skills:
-        prompt += (
-            "\n## Skills installed by the user\n"
-            "When the task matches a skill, load it with skills.read first and follow it.\n"
-            + "".join(f"- {skill_id}: {summary}\n" for skill_id, summary in skills)
-        )
+        prompt += skills_block(skills)
     if memory is not None:
         prompt += (
             "\n## Memory\n"

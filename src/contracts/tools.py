@@ -47,7 +47,8 @@ class ShellExecArgs(_Args):
 
 
 class SkillsReadArgs(_Args):
-    id: str = Field(min_length=1, description="Skill id from the skills list in the system prompt")
+    name: str = Field(min_length=1, description="Skill name from the available_skills list in the system prompt")
+    path: str | None = Field(None, max_length=300, description="Optional file inside the skill folder to read instead, e.g. references/api.md")
 
 
 TOOL_ARGS: dict[str, type[_Args]] = {

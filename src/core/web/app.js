@@ -902,7 +902,7 @@ async function viewChat(taskId) {
       case 'files.search': return tr('Searching for “{0}”', clip(a.query, 40));
       case 'git.status': return tr('Checking git status');
       case 'git.diff': return tr('Reading the git diff');
-      case 'skills.read': return tr('Loading skill {0}', a.id);
+      case 'skills.read': return tr('Loading skill {0}', a.path ? `${a.name} ${a.path}` : a.name);
       case 'memory.search': return tr('Searching memory for “{0}”', clip(a.query, 40));
       case 'memory.read': return tr('Reading note {0}', a.title);
       case 'memory.save': return tr('Remembering {0}', a.title);
@@ -1101,6 +1101,7 @@ const SETTINGS = [
   ['providers', 'robot', tr('Providers')],
   ['devices', 'laptop', tr('Devices')],
   ['memory', 'graph', tr('Memory')],
+  ['skills', 'book', tr('Skills')],
   ['plugins', 'package', tr('Plugins')],
   ['profiles', 'layers', tr('Profiles')],
   ['audit', 'list', tr('Activity log')],
@@ -1158,7 +1159,7 @@ const cmdValue = (cmd) => [h('code', {}, cmd), copyBtn(cmd)];
 async function viewSettings(key) {
   const shell = ensureSettingsShell();
   shell.setActive();
-  const views = { overview: settingsOverview, providers: settingsProviders, model: settingsProviders, devices: settingsDevices, memory: settingsMemory, plugins: settingsPlugins, marketplace: settingsPlugins, profiles: settingsProfiles, audit: settingsAudit };
+  const views = { overview: settingsOverview, providers: settingsProviders, model: settingsProviders, devices: settingsDevices, memory: settingsMemory, skills: settingsSkills, plugins: settingsPlugins, marketplace: settingsPlugins, profiles: settingsProfiles, audit: settingsAudit };
   await (views[key] || settingsOverview)(shell);
 }
 
@@ -1756,13 +1757,138 @@ const RISK_CHOICES = [
   ['destructive', tr('Irreversible: always confirm')],
 ];
 const pluginKinds = (p) => [
-  p.provides.skill ? tr('Skill') : null,
   p.provides.device_tools.length ? tr('Device tools: {0}', p.provides.device_tools.length) : null,
   p.provides.core_tools.length ? tr('In Core: {0}', p.provides.core_tools.join(', ')) : null,
   p.provides.mcp ? 'MCP' : null,
 ].filter(Boolean);
-const pluginIcon = (p) => (p.provides.mcp ? 'plug' : p.provides.core_tools.length ? 'globe' : p.provides.skill && p.provides.device_tools.length ? 'layers' : p.provides.skill ? 'book' : 'terminal');
+const pluginIcon = (p) => (p.provides.mcp ? 'plug' : p.provides.core_tools.length ? 'globe' : 'terminal');
 const settingTitle = (key, spec) => txt(spec.title) || key;
+
+const OS_LABELS = { darwin: 'macOS', linux: 'Linux', win32: 'Windows' };
+
+async function settingsSkills(shell) {
+  const list = h('div', {}, h('div', { class: 'empty' }, tr('Loading...')));
+  const search = h('input', { type: 'search', placeholder: tr('Search skills'), 'aria-label': tr('Search skills') });
+  let items = [];
+  let folder = '';
+
+  async function act(fn, done) {
+    try { const r = await fn(); if (done) toast(done); await load(); return r; } catch (err) { fail(err); return null; }
+  }
+  const setEnabled = (s, enabled) => api(`/v1/skills/${s.name}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }).then((v) => { Object.assign(s, v); render(); });
+  const remove = async (s) => {
+    if (!await confirmDialog({ title: tr('Delete “{0}”?', s.name), text: s.shadows ? tr('Your copy is deleted and the built-in skill is used again.') : tr('The skill folder is removed from Core.'), action: tr('Delete'), danger: true })) return;
+    closeLayer();
+    act(() => del(`/v1/skills/${s.name}`), tr('Removed'));
+  };
+
+  const pills = (s) => [
+    s.shadows ? h('span', { class: 'pill accent' }, tr('replaces the built-in')) : null,
+    s.always ? h('span', { class: 'pill' }, tr('always')) : null,
+    ...s.os.map((o) => h('span', { class: 'pill' }, OS_LABELS[o] || o)),
+    s.requires_tools.length ? h('span', { class: 'pill', title: s.requires_tools.join(', ') }, tp('needs {0} tool|needs {0} tools', s.requires_tools.length)) : null,
+  ].filter(Boolean);
+
+  function skillRow(s) {
+    return h('div', { class: 'row skill-row' },
+      h('span', { class: 'market-icon' }, s.emoji || icon('book')),
+      h('div', { class: 'row-text' },
+        h('div', { class: 'row-title' }, h('code', {}, s.name), ...pills(s)),
+        h('div', { class: 'row-desc' }, s.description)),
+      h('div', { class: 'row-value' },
+        toggleSwitch(s.enabled, { label: tr('Enable “{0}”', s.name), onChange: (v) => setEnabled(s, v) }),
+        h('button', { class: 'btn btn-sm', onclick: () => editor(s.name) }, s.source === 'user' ? tr('Edit') : tr('View'))));
+  }
+
+  async function editor(name) {
+    let s = null;
+    if (name) {
+      try { s = await get(`/v1/skills/${name}`); } catch (err) { fail(err); return; }
+    }
+    const isUser = s?.source === 'user';
+    const field = (label, control, hint) => h('label', { class: 'plugin-field' }, h('div', { class: 'plugin-field-head' }, h('span', {}, label)), control, hint ? h('div', { class: 'row-desc' }, hint) : null);
+    const nameInput = h('input', { type: 'text', value: s?.name || '', placeholder: 'my-skill', disabled: !!s, 'aria-label': tr('Name'), maxlength: 64 });
+    const description = h('input', { type: 'text', value: s?.description || '', placeholder: tr('One line: what it does and when to use it'), 'aria-label': tr('Description'), maxlength: 1024 });
+    const body = h('textarea', { class: 'market-yaml skill-body', rows: 18, spellcheck: 'false', 'aria-label': tr('Instructions'), placeholder: tr('# How to work\n\n1. Read the relevant files with files.read.\n2. ...\n\nReport format: ...') });
+    body.value = s?.body || '';
+    const homepage = h('input', { type: 'text', value: s?.homepage || '', placeholder: 'https://', 'aria-label': tr('Website') });
+    let alwaysValue = !!s?.always;
+    const always = toggleSwitch(alwaysValue, { label: tr('Offer it always'), onChange: async (v) => { alwaysValue = v; } });
+    const osBoxes = Object.entries(OS_LABELS).map(([key, label]) => {
+      const box = h('input', { type: 'checkbox', value: key, checked: (s?.os || []).includes(key) });
+      return h('label', { class: 'check-label' }, box, label);
+    });
+    const requires = h('input', { type: 'text', value: (s?.requires_tools || []).join(', '), placeholder: 'git.diff, shell.exec, mcp.github.*', 'aria-label': tr('Required tools') });
+    const save = h('button', { class: 'btn btn-primary' }, s && !isUser ? tr('Save as my copy') : tr('Save'));
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      const payload = {
+        name: s ? undefined : nameInput.value.trim().toLowerCase(),
+        description: description.value.trim(),
+        body: body.value,
+        homepage: homepage.value.trim() || null,
+        always: alwaysValue,
+        os: osBoxes.map((l) => l.firstChild).filter((b) => b.checked).map((b) => b.value),
+        requires_tools: requires.value.split(',').map((x) => x.trim()).filter(Boolean),
+      };
+      try {
+        if (s) await api(`/v1/skills/${s.name}`, { method: 'PUT', body: JSON.stringify(payload) });
+        else await post('/v1/skills', payload);
+        closeLayer();
+        toast(tr('Saved'));
+        await load();
+      } catch (err) { fail(err); } finally { save.disabled = false; }
+    });
+    openModal(
+      h('div', { class: 'modal-head' }, h('h2', {}, s ? (isUser ? tr('Edit skill') : tr('Built-in skill')) : tr('New skill')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
+      s && !isUser ? h('p', { class: 'row-desc' }, tr('Saving creates your own copy in {0}; the agent then uses it instead of the built-in one.', `${folder}/${s.name}`)) : null,
+      s?.files?.length ? h('p', { class: 'row-desc' }, tr('Files the skill ships: {0}', s.files.join(', '))) : null,
+      h('div', { class: 'plugin-form' },
+        h('div', { class: 'plugin-grid' }, field(tr('Name'), nameInput, s ? null : tr('Lowercase letters, digits and dashes; also the folder name')), field(tr('Website'), homepage, null)),
+        field(tr('Description'), description, tr('The agent sees only this line until it loads the skill, so say when the skill applies.')),
+        field(tr('Instructions'), body, tr('Markdown. Name the tools to use, the order of steps and the report format.')),
+        h('details', { class: 'skill-advanced' }, h('summary', {}, tr('When to offer the skill')),
+          h('div', { class: 'plugin-form' },
+            h('div', { class: 'plugin-grid' },
+              field(tr('Required tools'), requires, tr('Comma-separated; the skill is offered only when all of them are available on the device. Globs like mcp.github.* work.')),
+              field(tr('Devices'), h('div', { class: 'check-row' }, osBoxes), tr('Leave all unchecked for any device.'))),
+            h('label', { class: 'switch-label' }, always, tr('Offer it always, even when the required tools are missing'))))),
+      h('div', { class: 'modal-actions' },
+        isUser ? h('button', { class: 'btn btn-danger btn-sm', onclick: () => remove(s) }, tr('Delete')) : null,
+        h('span', { class: 'spacer' }),
+        h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
+    ).classList.add('modal-wide');
+    (s ? description : nameInput).focus();
+  }
+
+  function render() {
+    const q = search.value.trim().toLowerCase();
+    const match = (s) => !q || [s.name, s.description, ...s.requires_tools].join(' ').toLowerCase().includes(q);
+    const mine = items.filter((s) => s.source === 'user' && match(s));
+    const bundled = items.filter((s) => s.source === 'bundled' && match(s));
+    list.replaceChildren(
+      section(tr('Your skills'), tr('Files in {0}. Edit them here or in that folder.', folder),
+        mine.length ? h('div', { class: 'rows' }, mine.map(skillRow)) : h('div', { class: 'empty rows' }, q ? tr('Nothing found.') : tr('No skills of your own yet. Create one or open a built-in skill and save it as your copy.'))),
+      section(tr('Built-in'), tr('Shipped with Mensarium. Turn off the ones you do not need.'),
+        bundled.length ? h('div', { class: 'rows' }, bundled.map(skillRow)) : h('div', { class: 'empty rows' }, tr('Nothing found.'))),
+    );
+  }
+
+  async function load() {
+    const data = await get('/v1/skills');
+    items = data.items;
+    folder = data.folder;
+    render();
+  }
+
+  search.addEventListener('input', render);
+  page(shell, tr('Skills'), tr('A skill is a SKILL.md file with instructions for one kind of work: how to review code, write tests, investigate a failure. The agent sees the names and descriptions and loads a skill with skills.read when the task matches. Same format as Agent Skills, so skills from other tools work here.'),
+    [h('button', { class: 'btn btn-primary', onclick: () => editor(null) }, icon('plus'), tr('New skill'))],
+    h('div', { class: 'market-bar' }, h('div', { class: 'settings-search market-search' }, icon('search'), search)),
+    list,
+  );
+  await load();
+}
 
 function pluginState(p, devices) {
   if (!p.installed) return null;
@@ -1780,7 +1906,7 @@ async function settingsPlugins(shell) {
   const grid = h('div', { class: 'market-grid' }, h('div', { class: 'empty' }, tr('Loading the catalog...')));
   const note = h('p', { class: 'market-note hidden' });
   const search = h('input', { type: 'search', placeholder: tr('Search by name and description'), 'aria-label': tr('Search plugins') });
-  const FILTERS = [['all', tr('All')], ['installed', tr('Installed')], ['skills', tr('Skills')], ['tools', tr('Tools')], ['mcp', 'MCP']];
+  const FILTERS = [['all', tr('All')], ['installed', tr('Installed')], ['tools', tr('Tools')], ['mcp', 'MCP']];
   let filter = localStorageGet('market-filter') || 'all';
   if (!FILTERS.some(([k]) => k === filter)) filter = 'all';
   let items = [];
@@ -1915,7 +2041,6 @@ async function settingsPlugins(shell) {
       } catch (err) { fail(err); } finally { save.disabled = false; }
     });
     const what = [
-      p.provides.skill ? h('div', { class: 'plugin-provides' }, icon('book'), h('div', {}, h('div', { class: 'tool-row-title' }, tr('Skill')), h('div', { class: 'row-desc' }, tr('Instructions the agent loads with skills.read before this kind of work.')))) : null,
       p.provides.core_tools.length ? h('div', { class: 'plugin-provides' }, icon('globe'), h('div', { class: 'row-text' }, h('div', { class: 'tool-row-title' }, tr('Tools in Core: {0}', p.provides.core_tools.join(', '))), h('div', { class: 'row-desc' }, tr('They run on the Core server; requests to the network go through approval unless you lower the risk.')), coreRisk ? h('label', { class: 'plugin-field plugin-risk' }, h('div', { class: 'plugin-field-head' }, h('span', {}, tr('Risk of its tools'))), coreRisk) : null)) : null,
       p.tools.length ? [h('div', { class: 'field-label' }, tr('Tools on devices')), h('div', { class: 'market-tools' }, p.tools.map((t) => h('div', { class: 'market-tool' },
         h('div', { class: 'market-tool-head' }, h('code', {}, t.name), h('span', { class: 'pill' }, RISK_SHORT[t.risk] || t.risk)),
@@ -1930,7 +2055,6 @@ async function settingsPlugins(shell) {
       what,
       mcp ? mcp.el : null,
       form.rows.length ? [h('div', { class: 'field-label' }, tr('Settings')), h('div', { class: 'plugin-form' }, form.rows)] : null,
-      p.instructions ? h('details', { class: 'plugin-skill' }, h('summary', {}, tr('Show the instructions')), h('div', { class: 'prose market-instructions', html: markdown(p.instructions) })) : null,
       h('div', { class: 'modal-actions' },
         p.installed ? h('button', { class: 'btn btn-danger btn-sm', onclick: () => remove(p) }, tr('Remove')) : null,
         h('span', { class: 'spacer' }),
@@ -1949,7 +2073,7 @@ async function settingsPlugins(shell) {
 
   function render() {
     const q = search.value.trim().toLowerCase();
-    const shown = items.filter((p) => ({ all: true, installed: !!p.installed, skills: p.provides.skill, tools: p.provides.device_tools.length > 0 || p.provides.core_tools.length > 0, mcp: p.provides.mcp }[filter]))
+    const shown = items.filter((p) => ({ all: true, installed: !!p.installed, tools: p.provides.device_tools.length > 0 || p.provides.core_tools.length > 0, mcp: p.provides.mcp }[filter]))
       .filter((p) => !q || [txt(p.name), txt(p.summary), txt(p.description), p.id, ...(p.tags || []), ...p.provides.device_tools, ...p.provides.core_tools].join(' ').toLowerCase().includes(q));
     grid.replaceChildren(...(shown.length ? shown.map(card) : [h('div', { class: 'empty' }, filter === 'installed' && !q ? tr('Nothing installed yet.') : tr('Nothing found.'))]));
   }
@@ -1968,7 +2092,7 @@ async function settingsPlugins(shell) {
 
   function addCustom() {
     const ta = h('textarea', { class: 'market-yaml', rows: 14, spellcheck: 'false', 'aria-label': tr('Plugin manifest'),
-      placeholder: 'id: my-skill\nname: {en: My skill, ru: Мой навык}\nversion: 1.0.0\nsummary: What it does\ninstructions: |\n  # How to work\n  1. ...' });
+      placeholder: 'id: my-tools\nname: {en: My tools, ru: Мои инструменты}\nversion: 1.0.0\nsummary: What it does\ntools:\n  - name: my.tool\n    description: ...\n    argv: [program, --flag]' });
     const save = h('button', { class: 'btn btn-primary' }, tr('Install'));
     save.addEventListener('click', async () => {
       save.disabled = true;
@@ -1981,7 +2105,7 @@ async function settingsPlugins(shell) {
     });
     openModal(
       h('div', { class: 'modal-head' }, h('h2', {}, tr('Your own plugin')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
-      h('p', {}, tr('Paste a YAML manifest. A skill is an instructions field, device tools are a tools list with a command in argv, an MCP server is an mcp block; settings go into config. Same format as catalog plugins.')),
+      h('p', {}, tr('Paste a YAML manifest. Device tools are a tools list with a command in argv, an MCP server is an mcp block; settings go into config. Same format as catalog plugins. Instructions for the agent are skills, they live on the Skills page.')),
       ta,
       h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
     ).classList.add('modal-wide');
@@ -2036,7 +2160,7 @@ async function settingsPlugins(shell) {
   }
 
   search.addEventListener('input', render);
-  page(shell, tr('Plugins'), tr('Skills tell the agent how to work; tools add abilities on devices and in Core: web search, MCP servers and more. Everything is configured here or with mensarium plugins on the Core server.'),
+  page(shell, tr('Plugins'), tr('Plugins add abilities to the agent: tools on devices, tools in Core such as web search, and MCP servers. Everything is configured here or with mensarium plugins on the Core server.'),
     [h('button', { class: 'btn', onclick: addCustom }, icon('plus'), tr('Your own plugin')), h('button', { class: 'btn btn-primary', onclick: addMcp }, icon('plug'), tr('Add an MCP server'))],
     h('div', { class: 'market-bar' }, filterBar, h('div', { class: 'settings-search market-search' }, icon('search'), search)),
     note,

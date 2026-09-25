@@ -8,11 +8,12 @@ from typing import Any
 from pydantic import ValidationError
 
 from mensarium.agent_core.profile import AgentProfile
-from mensarium.contracts.plugins import PLACEHOLDER, McpTemplate, Plugin, text_en
+from mensarium.contracts.plugins import PLACEHOLDER, McpTemplate, Plugin
 from mensarium.contracts.protocol import McpServerDef, TargetPluginsStatus
 from mensarium.contracts.tools import CORE_TOOL_ARGS, McpArgs
 from mensarium.core.config import CorePaths, read_secret, write_secret
 from mensarium.core.repo import Repo
+from mensarium.core.skills import Skill
 from mensarium.plugins import builtin
 from mensarium.shared.paths import mensarium_home
 from mensarium.shared.timeutil import now_iso
@@ -152,15 +153,17 @@ def builtin_specs(inst: Installed) -> dict[str, ToolSpec]:
 class Toolbox:
     """Tools a task may use right now on one device: builtins, plugin tools, memory and skills."""
 
-    def __init__(self, profile: AgentProfile, registry: dict[str, ToolSpec], extra: list[str], skills: list[tuple[str, str]], owners: dict[str, str]) -> None:
+    def __init__(self, profile: AgentProfile, registry: dict[str, ToolSpec], extra: list[str], owners: dict[str, str]) -> None:
         self.registry = registry
         self.profile_tools = [*profile.allowed_tools, *extra]
-        self.skill_list = skills
+        self.skills: list[Skill] = []
         self.owners = owners
 
-    @property
-    def skills(self) -> list[tuple[str, str]]:
-        return self.skill_list
+    def add_skills(self, skills: list[Skill]) -> None:
+        self.skills = skills
+        if skills:
+            self.registry.update(CORE_TOOLS)
+            self.profile_tools.append("skills.read")
 
     def available(self, target: dict[str, Any]) -> list[str]:
         """Tools the model is offered on this device: reported by it and not switched off for it."""
@@ -470,11 +473,8 @@ class PluginManager:
         registry: dict[str, ToolSpec] = dict(REGISTRY)
         extra: list[str] = []
         owners: dict[str, str] = {}
-        skills: list[tuple[str, str]] = []
         plugins = [i for i in await self.installed() if i.enabled] if profile.allow_extensions else []
         for inst in plugins:
-            if inst.plugin.instructions:
-                skills.append((inst.id, text_en(inst.plugin.summary)))
             if inst.missing():
                 continue
             specs: dict[str, ToolSpec] = {t.name: command_spec(t) for t in inst.plugin.tools}
@@ -490,13 +490,10 @@ class PluginManager:
                     registry[name] = spec
                     owners[name] = inst.id
                     extra.append(name)
-        if skills:
-            registry.update(CORE_TOOLS)
-            extra.append("skills.read")
         if profile.memory:
             registry.update(MEMORY_TOOLS)
             extra += list(MEMORY_TOOLS)
-        return Toolbox(profile, registry, extra, skills, owners)
+        return Toolbox(profile, registry, extra, owners)
 
     async def call_core(self, toolbox: Toolbox, spec: ToolSpec, args: dict[str, Any]) -> str:
         plugin_id = toolbox.owners.get(spec.name)
@@ -548,7 +545,6 @@ class PluginManager:
             value = (inst.config if inst else {}).get(key)
             config[key] = {"set": bool(value)} if f.secret else (value if value is not None else f.default)
         provides = {
-            "skill": bool(plugin.instructions),
             "device_tools": [t.name for t in plugin.tools],
             "core_tools": builtin.PROVIDES.get(plugin.builtin or "", []),
             "mcp": bool(plugin.mcp),

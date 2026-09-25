@@ -13,7 +13,7 @@ from mensarium.cli.ui import console, fail, ok, warn
 from mensarium.core.config import CorePaths, load_config, read_secret
 from mensarium.target.config import TargetPaths
 
-plugins_app = typer.Typer(help="Plugins: skills, device tools, Core tools and MCP servers", no_args_is_help=True)
+plugins_app = typer.Typer(help="Plugins: device tools, Core tools and MCP servers", no_args_is_help=True)
 mcp_app = typer.Typer(help="MCP servers (each one is a plugin)", no_args_is_help=True)
 
 RISKS = ("read", "execute", "write", "network", "destructive")
@@ -61,8 +61,6 @@ def _text(value: Any) -> str:
 
 def _kind(p: dict[str, Any]) -> str:
     parts = []
-    if p["provides"]["skill"]:
-        parts.append("skill")
     if p["provides"]["device_tools"]:
         parts.append(f"device tools: {len(p['provides']['device_tools'])}")
     if p["provides"]["core_tools"]:

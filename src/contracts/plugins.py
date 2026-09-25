@@ -107,7 +107,7 @@ class McpTemplate(BaseModel):
 
 
 class Plugin(BaseModel):
-    """A plugin: a skill for the model, command tools for devices, a built-in Core tool, an MCP server, or a mix."""
+    """A plugin: command tools for devices, a built-in Core tool, an MCP server, or a mix."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -120,15 +120,14 @@ class Plugin(BaseModel):
     tags: list[str] = []
     homepage: str | None = None
     config: dict[str, ConfigField] = {}
-    instructions: str | None = Field(None, description="Skill body in markdown, loaded by the model via skills.read")
     tools: list[CommandTool] = []
     builtin: Literal["web_search", "web_fetch"] | None = Field(None, description="Core tools shipped with Mensarium")
     mcp: McpTemplate | None = None
 
     @model_validator(mode="after")
     def _check(self) -> "Plugin":
-        if not (self.instructions or self.tools or self.builtin or self.mcp):
-            raise ValueError("a plugin needs `instructions`, `tools`, `builtin` or `mcp`")
+        if not (self.tools or self.builtin or self.mcp):
+            raise ValueError("a plugin needs `tools`, `builtin` or `mcp`; instructions for the model are skills, not plugins")
         names = [t.name for t in self.tools]
         if len(names) != len(set(names)):
             raise ValueError("tool names must be unique")

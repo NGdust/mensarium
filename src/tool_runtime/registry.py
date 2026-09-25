@@ -94,10 +94,11 @@ REGISTRY: dict[str, ToolSpec] = {s.name: s for s in _SPECS}
 CORE_TOOLS: dict[str, ToolSpec] = {
     "skills.read": ToolSpec(
         "skills.read",
-        "Load the full instructions of an installed skill. Call it before doing work a listed skill covers.",
+        "Load the full instructions of a skill from available_skills. Call it before doing work a skill covers; "
+        "pass `path` to read a file the skill's instructions point to.",
         "read",
         CORE_TOOL_ARGS["skills.read"],
-        lambda a: f"skill {a['id']}",
+        lambda a: f"skill {a['name']}" + (f" {a['path']}" if a.get("path") else ""),
         runs_on="core",
     ),
 }

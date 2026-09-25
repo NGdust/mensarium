@@ -54,7 +54,7 @@ def export_bundle(paths: CorePaths, out: Path, passphrase: str) -> dict[str, obj
             tar.addfile(info, io.BytesIO(data))
             if db_copy.exists():
                 tar.add(db_copy, arcname="mensarium.db")
-            for name in ("config.yaml", "secrets", "keys", "artifacts", "local-target"):
+            for name in ("config.yaml", "secrets", "keys", "artifacts", "skills", "local-target"):
                 if (paths.root / name).exists():
                     tar.add(paths.root / name, arcname=name)
     plain = buf.getvalue()

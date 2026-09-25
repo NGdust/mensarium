@@ -22,6 +22,7 @@ from mensarium import __version__
 from mensarium.agent_core.profile import AgentProfile, builtin_profiles
 from mensarium.contracts.plugins import Plugin
 from mensarium.contracts.protocol import AccessMode, PairRequest, PairResponse
+from mensarium.contracts.skills import OS, SkillError, SkillMeta, SkillRequires
 from mensarium.core import distribution, pairing
 from mensarium.core.catalog import Catalog
 from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secret, save_config
@@ -35,6 +36,7 @@ from mensarium.core.plugins import PluginError, PluginManager
 from mensarium.core.providers import ProviderError, Providers
 from mensarium.core.releases import ReleaseError, fetch_latest, spawn_update, updater
 from mensarium.core.repo import Repo
+from mensarium.core.skills import SkillStore
 from mensarium.core.target_hub import TargetHub, TargetUnavailable
 from mensarium.llm_providers.router import ProviderRouter
 from mensarium.shared.crypto import fingerprint, load_or_create_private_key, public_key_b64
@@ -66,6 +68,7 @@ class Core:
     local_target_id: str | None
     catalog: Catalog
     plugins: PluginManager
+    skills: SkillStore
     memory: Memory
     dreamer: Dreamer
 
@@ -166,6 +169,16 @@ class EnabledBody(BaseModel):
     enabled: bool
 
 
+class SkillBody(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=1024)
+    body: str = Field(min_length=1, max_length=200_000)
+    homepage: str | None = Field(None, max_length=500)
+    always: bool = False
+    os: list[OS] = []
+    requires_tools: list[str] = Field([], max_length=50)
+
+
 class MessageBody(BaseModel):
     input: str
 
@@ -204,12 +217,14 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         hub = TargetHub(repo, key)
         bus = EventBus(repo)
         memory = Memory(repo)
+        skills = SkillStore(repo, workspace_id, paths.skills)
+        await skills.adopt_plugins()
         plugins = PluginManager(repo, paths, workspace_id)
         plugins.send_plugins = lambda target_id, servers: hub.request_plugins(target_id, servers, cfg.execution.request_ttl_s)
         plugins.device_tools_supported = lambda target_id: hub.supports(target_id, "mcp.call")
         hub.on_connect = plugins.sync_device
         await plugins.start()
-        orchestrator = Orchestrator(repo, hub, bus, provider, cfg, workspace_id, paths.artifacts, memory, plugins)
+        orchestrator = Orchestrator(repo, hub, bus, provider, cfg, workspace_id, paths.artifacts, memory, plugins, skills)
         await orchestrator.recover_after_restart()
         dreamer = Dreamer(repo, memory, provider, cfg, workspace_id)
         await dreamer.recover()
@@ -236,6 +251,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             local_target_id=local[0].target_id if local else None,
             catalog=Catalog(cfg.plugins.catalog_url),
             plugins=plugins,
+            skills=skills,
             memory=memory,
             dreamer=dreamer,
         )
@@ -726,6 +742,71 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     @app.get("/v1/targets/{target_id}/plugin-tools")
     async def target_plugin_tools(target_id: str, c: Core = Depends(auth)) -> list[dict[str, Any]]:
         return await c.plugins.device_tools(target_id)
+
+    def skill_error(e: SkillError) -> HTTPException:
+        return HTTPException(404 if "not found" in str(e) else 422, str(e))
+
+    async def skill_view(c: Core, name: str) -> dict[str, Any]:
+        try:
+            skill = await c.skills.get(name)
+        except SkillError as e:
+            raise skill_error(e) from e
+        return {**skill.view(), "body": skill.body, "text": (skill.path / "SKILL.md").read_text(encoding="utf-8", errors="replace")}
+
+    @app.get("/v1/skills")
+    async def list_skills(c: Core = Depends(auth)) -> dict[str, Any]:
+        return {"items": [s.view() for s in await c.skills.all()], "folder": str(c.paths.skills)}
+
+    @app.get("/v1/skills/{name}")
+    async def get_skill(name: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        return await skill_view(c, name)
+
+    async def save_skill(c: Core, name: str, body: SkillBody) -> dict[str, Any]:
+        meta = SkillMeta(always=body.always, os=body.os, requires=SkillRequires(tools=[t.strip() for t in body.requires_tools if t.strip()]))
+        try:
+            skill = await c.skills.save(name, body.description.strip(), body.body, meta, (body.homepage or "").strip() or None)
+        except SkillError as e:
+            raise skill_error(e) from e
+        return await skill_view(c, skill.name)
+
+    @app.post("/v1/skills")
+    async def create_skill(body: SkillBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        if not body.name:
+            raise HTTPException(422, "name is required")
+        if (c.paths.skills / body.name / "SKILL.md").is_file():
+            raise HTTPException(409, f"you already have a skill named {body.name!r}")
+        return await save_skill(c, body.name, body)
+
+    @app.post("/v1/skills/file")
+    async def import_skill(request: Request, c: Core = Depends(auth)) -> dict[str, Any]:
+        """A whole SKILL.md as text/plain; the name comes from its frontmatter."""
+        try:
+            skill = await c.skills.save_text((await request.body()).decode("utf-8", errors="replace"))
+        except SkillError as e:
+            raise skill_error(e) from e
+        return await skill_view(c, skill.name)
+
+    @app.put("/v1/skills/{name}")
+    async def update_skill(name: str, body: SkillBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        """Saving a bundled skill writes your own copy, which is used instead of the bundled one."""
+        await skill_view(c, name)
+        return await save_skill(c, name, body)
+
+    @app.patch("/v1/skills/{name}")
+    async def toggle_skill(name: str, body: EnabledBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            await c.skills.set_enabled(name, body.enabled)
+        except SkillError as e:
+            raise skill_error(e) from e
+        return await skill_view(c, name)
+
+    @app.delete("/v1/skills/{name}")
+    async def delete_skill(name: str, c: Core = Depends(auth)) -> dict[str, bool]:
+        try:
+            await c.skills.delete(name)
+        except SkillError as e:
+            raise skill_error(e) from e
+        return {"ok": True}
 
     def note_error(e: NoteError) -> HTTPException:
         return HTTPException(404 if "not found" in str(e) else 409, str(e))
