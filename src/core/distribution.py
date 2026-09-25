@@ -15,7 +15,7 @@ def source_dir() -> Path | None:
     candidates = [
         os.environ.get("MENSARIUM_SOURCE_DIR"),
         str(mensarium_home() / "src"),
-        str(Path(__file__).resolve().parents[3]),
+        str(Path(__file__).resolve().parents[2]),
     ]
     for c in candidates:
         if c and (Path(c) / "pyproject.toml").exists() and (Path(c) / "install.sh").exists():

@@ -1,15 +1,20 @@
 .PHONY: dev lint test schemas core target dist release
 
 DIST_URL ?= https://mensarium.com
-VERSION := $(shell sed -n 's/^__version__ = "\(.*\)"/\1/p' src/mensarium/__init__.py)
+VERSION := $(shell sed -n 's/^__version__ = "\(.*\)"/\1/p' src/__init__.py)
 
+# hatch cannot install src/ as `mensarium` in editable mode, so dev mode links it through .dev/
 dev:
-	uv venv --python 3.12 .venv
-	uv pip install --python .venv/bin/python -e . ruff mypy types-PyYAML
+	uv venv --allow-existing --python 3.12 .venv
+	uv pip uninstall --python .venv/bin/python mensarium 2>/dev/null || true
+	uv pip install --python .venv/bin/python -r pyproject.toml ruff mypy types-PyYAML
+	mkdir -p .dev && ln -sfn ../src .dev/mensarium
+	echo "$(CURDIR)/.dev" > "$$(.venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/mensarium-dev.pth"
+	printf '#!/bin/sh\nexec "$$(dirname "$$0")/python" -m mensarium "$$@"\n' > .venv/bin/mensarium && chmod +x .venv/bin/mensarium
 
 lint:
 	.venv/bin/ruff check src
-	.venv/bin/mypy src
+	MYPYPATH=.dev .venv/bin/mypy -p mensarium
 
 test: lint
 

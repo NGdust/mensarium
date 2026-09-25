@@ -28,10 +28,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
-path = "src/mensarium/__init__.py"
+path = "src/__init__.py"
 
+# the code lives directly in src/ and is installed as the `mensarium` package
 [tool.hatch.build.targets.wheel]
-packages = ["src/mensarium"]
+only-include = ["src"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = "mensarium"
 
 [tool.ruff]
 line-length = 120
@@ -40,6 +44,9 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
 ignore = ["E501", "SIM105", "B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mensarium"]
 
 [tool.mypy]
 python_version = "3.12"

@@ -165,7 +165,7 @@ stage_source() {
   rm -rf "$tmp"
 }
 
-if [ -z "$MENSARIUM_SOURCE" ] && [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/pyproject.toml" ] && [ -d "$SCRIPT_DIR/src/mensarium" ]; then
+if [ -z "$MENSARIUM_SOURCE" ] && [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/pyproject.toml" ] && [ -f "$SCRIPT_DIR/src/__init__.py" ]; then
   MENSARIUM_SOURCE="$SCRIPT_DIR"
 fi
 if [ -z "$MENSARIUM_SOURCE" ] && [ -z "$SERVER" ]; then
