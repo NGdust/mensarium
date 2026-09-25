@@ -23,7 +23,7 @@ target:
 	.venv/bin/mensarium target run
 
 dist:
-	@test -z "$$(git status --porcelain)" || (echo "commit changes before make dist" && exit 1)
+	@test -z "$$(git status --porcelain --untracked-files=no)" || (echo "commit changes before make dist" && exit 1)
 	mkdir -p dist
 	git archive --format=tar.gz --prefix=mensarium/ -o dist/mensarium-$(VERSION).tar.gz HEAD
 	cp dist/mensarium-$(VERSION).tar.gz dist/mensarium.tar.gz
