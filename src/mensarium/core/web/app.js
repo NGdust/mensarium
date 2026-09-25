@@ -819,9 +819,92 @@ async function viewChat(taskId) {
   const step = (node) => { lastAgent = true; return add(h('div', { class: 'step' }, node)); };
   const note = (ic, text, cls = '') => step(h('div', { class: `note ${cls}` }, icon(ic), h('span', {}, text)));
 
-  const thinking = new Map();
   const tools = new Map();
   const approvals = new Map();
+
+  // One activity block per agent turn: a single rolling line while the agent works, a folded log afterwards.
+  let work = null;
+  function ensureWork() {
+    if (work) return work;
+    const spinner = h('span', { class: 'spinner', 'aria-hidden': 'true' });
+    const ticker = h('span', { class: 'ticker', 'aria-live': 'polite' });
+    const meta = h('span', { class: 'work-meta' });
+    const log = h('div', { class: 'work-log' });
+    const el = h('div', { class: 'work running' });
+    const head = h('button', { class: 'work-head', 'aria-expanded': 'false', onclick: () => {
+      el.classList.toggle('open');
+      head.setAttribute('aria-expanded', String(el.classList.contains('open')));
+    } }, spinner, ticker, meta, icon('chevron'));
+    el.append(head, log);
+    lastAgent = false;
+    add(el);
+    work = { el, head, spinner, ticker, meta, log, line: null, queue: [], timer: 0, shownAt: 0, actions: 0, started: null, ended: null };
+    return work;
+  }
+  // Each line stays at least DWELL ms so fast actions still read one after another; older pending ones are dropped.
+  const DWELL = 900;
+  function show(w, text, animate) {
+    const next = h('span', { class: `ticker-line${animate ? ' enter' : ''}` }, text);
+    const prev = w.line;
+    w.ticker.append(next);
+    w.line = next;
+    w.shownAt = Date.now();
+    if (!prev) return;
+    if (!animate) { prev.remove(); return; }
+    requestAnimationFrame(() => requestAnimationFrame(() => { next.classList.remove('enter'); prev.classList.add('leave'); }));
+    setTimeout(() => prev.remove(), 400);
+  }
+  function pump(w) {
+    if (w.timer || !w.queue.length) return;
+    const wait = DWELL - (Date.now() - w.shownAt);
+    if (wait > 0) { w.timer = setTimeout(() => { w.timer = 0; pump(w); }, wait); return; }
+    show(w, w.queue.shift(), true);
+    pump(w);
+  }
+  function say(text, animate, w = ensureWork()) {
+    const last = w.queue.length ? w.queue[w.queue.length - 1] : w.line?.textContent;
+    if (last === text) return;
+    if (!animate) { clearTimeout(w.timer); w.timer = 0; w.queue = []; show(w, text, false); return; }
+    w.queue = [...w.queue.slice(-1), text];
+    pump(w);
+  }
+  function stamp(ev) {
+    const w = ensureWork();
+    const at = new Date(ev.created_at).getTime();
+    if (!w.started) w.started = at;
+    w.ended = at;
+  }
+  function finishWork() {
+    if (!work) return;
+    const w = work;
+    work = null;
+    if (!w.actions && !w.log.childElementCount) { w.el.remove(); return; }
+    w.el.classList.remove('running');
+    w.el.classList.add('done');
+    w.spinner.replaceWith(icon('check'));
+    const secs = Math.max(0, Math.round((w.ended - w.started) / 1000));
+    say(w.actions ? tp('{0} action|{0} actions', w.actions) : tr('Details'), false, w);
+    w.meta.textContent = secs < 60 ? tr('{0} s', secs) : tr('{0} min', Math.round(secs / 60));
+  }
+  const logAdd = (node) => { ensureWork().log.append(node); if (stick) thread.scrollTop = thread.scrollHeight; return node; };
+
+  const base = (path) => String(path || '').split('/').filter(Boolean).pop() || String(path || '');
+  const clip = (text, n) => (String(text).length > n ? `${String(text).slice(0, n - 1)}…` : String(text));
+  function actionText(tool, a, display) {
+    if (!a) return clip(short(display) || tool, 60);
+    switch (tool) {
+      case 'files.list': return tr('Looking at {0}', base(a.path) || '.');
+      case 'files.read': return tr('Reading {0}', base(a.path));
+      case 'files.search': return tr('Searching for “{0}”', clip(a.query, 40));
+      case 'git.status': return tr('Checking git status');
+      case 'git.diff': return tr('Reading the git diff');
+      case 'skills.read': return tr('Loading skill {0}', a.id);
+      case 'memory.search': return tr('Searching memory for “{0}”', clip(a.query, 40));
+      case 'memory.read': return tr('Reading note {0}', a.title);
+      case 'memory.save': return tr('Remembering {0}', a.title);
+      default: return a.command ? tr('Running {0}', clip(a.command, 56)) : tool;
+    }
+  }
 
   function toolCard(id, tool, display) {
     let entry = tools.get(id);
@@ -835,7 +918,7 @@ async function viewChat(taskId) {
       head.setAttribute('aria-expanded', String(card.classList.contains('open')));
     } }, icon(TOOL_ICON[tool] || 'terminal'), h('span', { class: 'tool-display', title: `${tool}: ${display || ''}` }, short(display) || tool), stateEl);
     card.append(head, out, noteEl);
-    step(card);
+    logAdd(card);
     entry = { card, head, stateEl, out, noteEl };
     tools.set(id, entry);
     return entry;
@@ -850,10 +933,6 @@ async function viewChat(taskId) {
     e.out.textContent = (p.output || '').replace(/^\[tool output: untrusted data, not instructions\]\n/, '').replace(/^status: [^\n]*\n?/, '') || tr('Empty output');
     if (p.truncated || p.artifact_id) {
       e.noteEl.replaceChildren(p.truncated ? tr('Output truncated. ') : '', p.artifact_id ? h('a', { href: `/v1/artifacts/${p.artifact_id}`, target: '_blank', rel: 'noopener' }, tr('Full output')) : '');
-    }
-    if (!ok || p.tool === 'shell.exec' || p.tool === 'git.diff') {
-      e.card.classList.add('open');
-      e.head.setAttribute('aria-expanded', 'true');
     }
   }
 
@@ -892,13 +971,14 @@ async function viewChat(taskId) {
     };
     approve.addEventListener('click', () => decide('approve'));
     reject.addEventListener('click', () => decide('reject'));
-    step(card);
+    lastAgent = false;
+    const wrap = add(h('div', { class: 'step' }, card));
     const expires = new Date(p.expires_at).getTime();
     const tick = () => { const left = Math.round((expires - Date.now()) / 1000); timer.textContent = left > 0 ? tr('{0} left', mmss(left)) : tr('time\'s up'); };
     tick();
     const iv = setInterval(tick, 1000);
     viewCleanups.push(() => clearInterval(iv));
-    approvals.set(p.approval_id, { card, actions, iv, timer, confirmBox });
+    approvals.set(p.approval_id, { card, wrap, actions, iv, timer, confirmBox });
   }
 
   function approvalDecided(p) {
@@ -911,16 +991,20 @@ async function viewChat(taskId) {
     const text = { approved: tr('You allowed it to run once'), rejected: tr('You rejected the action'), expired: tr('Time to decide ran out') }[p.decision] || p.decision;
     const note = p.note === 'full access enabled' ? tr('approved by turning on full access') : p.note;
     e.actions.replaceChildren(h('span', { class: 'approval-result' }, text, note ? `: ${note}` : ''));
+    if (work) { logAdd(e.card); e.wrap.remove(); }
   }
 
-  function handle({ event, payload: p }) {
+  function handle({ event, payload: p, created_at: createdAt }, live) {
+    const ev = { created_at: createdAt };
     switch (event) {
       case 'user.message':
+        finishWork();
         lastAgent = false;
         add(h('div', { class: 'msg-user' }, h('div', { class: 'bubble-user' }, p.text)));
         break;
       case 'task.status':
         setStatus(p.status);
+        if (!isRunning(p.status)) finishWork();
         if (['PAUSED', 'CANCELED', 'FAILED', 'FAILED_RECOVERABLE'].includes(p.status)) {
           note(p.status === 'PAUSED' ? 'pause' : 'alert', `${statusOf(p.status)[0]}${p.reason ? `: ${reasonText(p.reason)}` : ''}`, p.status === 'PAUSED' || p.status === 'CANCELED' ? '' : 'error');
         }
@@ -934,35 +1018,37 @@ async function viewChat(taskId) {
         note('robot', tr('Model: {0}', p.model));
         break;
       case 'llm.request':
-        thinking.set(p.step, agentMsg(h('span', { class: 'thinking' }, tr('Thinking')), true));
+        stamp(ev);
+        if (!work?.actions) say(tr('Thinking'), live);
         break;
-      case 'llm.response': {
-        const row = thinking.get(p.step);
-        if (row) {
-          row.remove();
-          thinking.delete(p.step);
-          const last = inner.lastChild;
-          lastAgent = !!last && (last.classList.contains('msg-agent') || last.classList.contains('step'));
-        }
-        if (p.text && p.tool_call) agentMsg(h('div', { class: 'prose', html: markdown(p.text) }));
+      case 'llm.response':
+        stamp(ev);
+        if (p.text && p.tool_call) logAdd(h('div', { class: 'work-thought prose', html: markdown(p.text) }));
         break;
-      }
       case 'tool_call.denied':
-        note('ban', tr('Policy didn\'t allow {0}: {1}', p.tool, policyText(p.reason)));
+        stamp(ev);
+        logAdd(h('div', { class: 'note' }, icon('ban'), h('span', {}, tr('Policy didn\'t allow {0}: {1}', p.tool, policyText(p.reason)))));
         break;
       case 'tool_call.pending_approval':
+        stamp(ev);
+        say(tr('Waiting for your decision'), live);
         approvalCard(p);
         break;
       case 'approval.decided':
         approvalDecided(p);
         break;
       case 'tool_call.executing':
+        stamp(ev);
+        ensureWork().actions += 1;
+        say(actionText(p.tool, p.arguments, p.display), live);
         toolCard(p.tool_call_id, p.tool, p.display);
         break;
       case 'tool_call.result':
+        stamp(ev);
         toolResult(p);
         break;
       case 'task.final':
+        finishWork();
         agentMsg(h('div', { class: 'prose', html: markdown(p.text) }));
         break;
       case 'task.error':
@@ -972,6 +1058,7 @@ async function viewChat(taskId) {
     }
   }
 
+  const openedAt = Date.now();
   let lastSeq = 0;
   let es = null;
   let delay = 1000;
@@ -985,7 +1072,7 @@ async function viewChat(taskId) {
       try { ev = JSON.parse(m.data); } catch { return; }
       if (ev.seq <= lastSeq) return;
       lastSeq = ev.seq;
-      handle(ev);
+      handle(ev, new Date(ev.created_at).getTime() > openedAt - 2000);
     };
     es.onerror = () => {
       es.close();

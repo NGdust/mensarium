@@ -274,7 +274,40 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .note { display: flex; align-items: flex-start; gap: 9px; padding: 4px 2px; font-size: 13.5px; color: var(--muted); }
 .note .icon { width: 16px; height: 16px; margin-top: 2px; }
 .note.error { color: var(--danger); }
-.thinking { display: inline-flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px; }
+/* activity of one agent turn: a rolling line while it works, a folded log afterwards */
+.work { margin: 8px 0 8px 42px; }
+.work-head {
+  display: flex; align-items: center; gap: 10px; width: 100%; max-width: 560px; padding: 5px 10px 5px 6px;
+  border: 0; border-radius: 10px; background: none; color: var(--text-2); font: 14px var(--font); text-align: left; cursor: pointer;
+}
+.work-head:hover { background: var(--surface); }
+.work-head > .icon { width: 15px; height: 15px; color: var(--muted); }
+.work-head > .icon:last-child { width: 14px; height: 14px; margin-left: auto; transform: rotate(-90deg); transition: transform 0.2s var(--ease); }
+.work.open .work-head > .icon:last-child { transform: none; }
+.work.running .work-head > .icon:last-child { opacity: 0; }
+.work.running .work-head:hover > .icon:last-child { opacity: 1; }
+.spinner {
+  width: 15px; height: 15px; flex: none; border-radius: 50%;
+  border: 2px solid rgba(164, 123, 255, 0.22); border-top-color: var(--accent-strong);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.ticker { position: relative; flex: 1; min-width: 0; height: 22px; overflow: hidden; }
+.ticker-line {
+  position: absolute; inset: 0; line-height: 22px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: transform 0.35s var(--ease), opacity 0.35s var(--ease);
+}
+.ticker-line.enter { transform: translateY(100%); opacity: 0; }
+.ticker-line.leave { transform: translateY(-100%); opacity: 0; }
+.work.done .work-head { display: inline-flex; width: auto; max-width: 100%; }
+.work.done .ticker { height: auto; color: var(--muted); }
+.work.done .ticker-line { position: static; display: block; }
+.work.done .work-head > .icon:last-child { margin-left: 0; }
+.work-meta { flex: none; font-size: 12.5px; color: var(--faint); }
+.work-log { display: none; flex-direction: column; gap: 6px; margin: 6px 0 4px 13px; padding-left: 14px; border-left: 1px solid var(--line); }
+.work.open .work-log { display: flex; }
+.work-thought { max-width: none; font-size: 13.5px; color: var(--muted); }
+.work-log .approval { margin: 0; }
 
 .approval {
   border-radius: var(--r-lg); padding: 16px 18px; margin: 4px 0;
@@ -653,7 +686,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
   .thread-inner { padding: 4px 16px 28px; }
   .composer-wrap { padding: 0 10px 10px; }
   .welcome { padding: 0 14px 4vh; }
-  .step { margin-left: 34px; }
+  .step, .work { margin-left: 34px; }
   .msg { grid-template-columns: 24px 1fr; column-gap: 10px; }
   .msg > .orb { --s: 24px !important; }
   .bubble-user { max-width: 88%; }

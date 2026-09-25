@@ -40,6 +40,11 @@ FULL_ACCESS_ERRORS = {
 }
 
 
+def _brief(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Arguments for the chat's activity line; patches sent through stdin stay out of the event log."""
+    return {k: v for k, v in arguments.items() if k != "stdin"}
+
+
 def full_access(target: dict[str, Any]) -> str:
     """Whether a device executes full-access requests: allowed, disabled by its owner, or too old to know the mode."""
     if parse_version(target.get("agent_version") or "0") < FULL_ACCESS_SINCE:
@@ -556,7 +561,11 @@ class Orchestrator:
         )
         await self.repo.update_tool_call(tc_id, {"status": "executing", "request_id": request.request_id})
         await self._set_status(task_id, "EXECUTING")
-        await self.bus.emit(task_id, "tool_call.executing", {"tool_call_id": tc_id, "tool": call.tool, "display": decision.display})
+        await self.bus.emit(
+            task_id,
+            "tool_call.executing",
+            {"tool_call_id": tc_id, "tool": call.tool, "display": decision.display, "arguments": _brief(decision.arguments)},
+        )
         await self.repo.audit(
             self.workspace_id,
             "core",
@@ -638,7 +647,11 @@ class Orchestrator:
         self, task_id: str, call: ToolCallAction, tc_id: str, decision: Decision, toolbox: Toolbox
     ) -> None:
         await self.repo.update_tool_call(tc_id, {"status": "executing"})
-        await self.bus.emit(task_id, "tool_call.executing", {"tool_call_id": tc_id, "tool": call.tool, "display": decision.display})
+        await self.bus.emit(
+            task_id,
+            "tool_call.executing",
+            {"tool_call_id": tc_id, "tool": call.tool, "display": decision.display, "arguments": _brief(decision.arguments)},
+        )
         try:
             content, status = await self._core_tool(task_id, call.tool, decision.arguments, toolbox), "succeeded"
         except (TaskError, NoteError) as e:
