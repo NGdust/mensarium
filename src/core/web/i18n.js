@@ -35,6 +35,17 @@ export function setLang(value) {
 }
 
 const RU = {
+  'Plan': 'План',
+  'Sub-agents': 'Субагенты',
+  'Assignment': 'Задание',
+  'Report': 'Отчёт',
+  '{0} agents, {1} running': 'Агентов: {0}, работают: {1}',
+  '{0} agent|{0} agents': '{0} агент|{0} агента|{0} агентов',
+  'Started agent “{0}”': 'Запущен агент «{0}»',
+  'Starting agent “{0}”': 'Запускает агента «{0}»',
+  'Agent “{0}” is waiting for your decision': 'Агент «{0}» ждёт вашего решения',
+  'Updating the plan': 'Обновляет план',
+  'Waiting for agents': 'Ждёт агентов',
   'Update': 'Обновить',
   'Each event is linked to the previous one\'s hash, so a record can\'t be changed or deleted unnoticed.': 'Каждое событие связано с предыдущим хешем, поэтому запись нельзя незаметно изменить или удалить.',
   'Activity log': 'Журнал действий',

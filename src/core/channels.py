@@ -419,6 +419,13 @@ class TelegramChannel:
                 log.exception("telegram relay crashed", extra={"event": ev["event"]})
 
     async def on_event(self, name: str, p: dict[str, Any]) -> None:
+        if name == "agent.event":
+            inner, payload = str(p.get("event")), dict(p.get("payload") or {})
+            if inner == "tool_call.pending_approval":
+                await self.ask_approval(payload)
+            elif inner == "approval.decided":
+                await self.settle_approval(payload)
+            return
         if name == "task.final":
             await self.finish()
             await self.reply(p.get("text") or "", p.get("image_artifact_id"))

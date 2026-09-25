@@ -98,12 +98,15 @@ class Repo:
     async def list_tasks(self, limit: int = 100) -> list[dict[str, Any]]:
         return await self.db.fetchall(
             "SELECT t.*, g.name AS target_name FROM tasks t LEFT JOIN targets g ON g.id = t.target_id "
-            "ORDER BY t.updated_at DESC LIMIT ?",
+            "WHERE t.parent_id IS NULL ORDER BY t.updated_at DESC LIMIT ?",
             (limit,),
         )
 
     async def update_task(self, task_id: str, values: dict[str, Any]) -> None:
         await self.db.update("tasks", task_id, {**values, "updated_at": now_iso()})
+
+    async def list_children(self, task_id: str) -> list[dict[str, Any]]:
+        return await self.db.fetchall("SELECT * FROM tasks WHERE parent_id = ? ORDER BY created_at", (task_id,))
 
     async def list_active_tasks(self) -> list[dict[str, Any]]:
         marks = ",".join("?" for _ in TERMINAL_STATUSES)
@@ -276,7 +279,7 @@ class Repo:
     async def tasks_updated_since(self, since: str, limit: int) -> list[dict[str, Any]]:
         marks = ",".join("?" for _ in TERMINAL_STATUSES)
         return await self.db.fetchall(
-            f"SELECT * FROM tasks WHERE updated_at > ? AND status IN ({marks}) ORDER BY updated_at LIMIT ?",
+            f"SELECT * FROM tasks WHERE updated_at > ? AND parent_id IS NULL AND status IN ({marks}) ORDER BY updated_at LIMIT ?",
             (since, *TERMINAL_STATUSES, limit),
         )
 

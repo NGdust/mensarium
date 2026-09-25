@@ -21,7 +21,16 @@ from mensarium.shared.timeutil import now_iso
 from mensarium.shared.versions import parse_version
 from mensarium.tool_runtime.commands import command_spec
 from mensarium.tool_runtime.mcp import McpClient, McpError, McpServer, connect, describe, tool_key
-from mensarium.tool_runtime.registry import CORE_TOOLS, MEMORY_TOOLS, PLUGIN_TOOLS, REGISTRY, Risk, ToolSpec
+from mensarium.tool_runtime.registry import (
+    AGENT_TOOLS,
+    CORE_TOOLS,
+    MEMORY_TOOLS,
+    PLAN_TOOLS,
+    PLUGIN_TOOLS,
+    REGISTRY,
+    Risk,
+    ToolSpec,
+)
 
 log = logging.getLogger(__name__)
 
@@ -164,8 +173,11 @@ class Toolbox:
     def add_skills(self, skills: list[Skill]) -> None:
         self.skills = skills
         if skills:
-            self.registry.update(CORE_TOOLS)
-            self.profile_tools.append("skills.read")
+            self.add_tools(CORE_TOOLS)
+
+    def add_tools(self, specs: dict[str, ToolSpec]) -> None:
+        self.registry.update(specs)
+        self.profile_tools += [name for name in specs if name not in self.profile_tools]
 
     def available(self, target: dict[str, Any]) -> list[str]:
         """Tools the model is offered on this device: reported by it and not switched off for it."""
@@ -256,7 +268,7 @@ class PluginManager:
     # ---- install / configure -----------------------------------------------
 
     async def check_conflicts(self, plugin: Plugin) -> None:
-        taken = set(REGISTRY) | set(CORE_TOOLS) | set(MEMORY_TOOLS) | set(PLUGIN_TOOLS)
+        taken = set(REGISTRY) | set(CORE_TOOLS) | set(MEMORY_TOOLS) | set(PLUGIN_TOOLS) | set(PLAN_TOOLS) | set(AGENT_TOOLS)
         servers: set[str] = set()
         for other in await self.installed():
             if other.id == plugin.id:

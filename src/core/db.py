@@ -4,7 +4,7 @@ from typing import Any
 
 import aiosqlite
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 COLUMN_MIGRATIONS = [
     ("tasks", "mode", "TEXT NOT NULL DEFAULT 'ask'"),
@@ -12,6 +12,9 @@ COLUMN_MIGRATIONS = [
     ("targets", "disabled_tools", "TEXT NOT NULL DEFAULT '[]'"),
     ("plugins", "config", "TEXT NOT NULL DEFAULT '{}'"),
     ("plugins", "status", "TEXT NOT NULL DEFAULT '{}'"),
+    ("tasks", "parent_id", "TEXT"),
+    ("tasks", "label", "TEXT"),
+    ("tasks", "plan", "TEXT NOT NULL DEFAULT '[]'"),
 ]
 
 SCHEMA = """
@@ -37,7 +40,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, profile_id TEXT NOT NULL, target_id TEXT NOT NULL,
     input TEXT NOT NULL, status TEXT NOT NULL, status_reason TEXT, result TEXT, mode TEXT NOT NULL DEFAULT 'ask', model TEXT,
     budget TEXT NOT NULL DEFAULT '{}', policy_snapshot_hash TEXT, trace_id TEXT NOT NULL,
-    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, parent_id TEXT, label TEXT, plan TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS task_steps (
     id TEXT PRIMARY KEY, task_id TEXT NOT NULL, sequence INTEGER NOT NULL, kind TEXT NOT NULL,
@@ -87,7 +90,7 @@ CREATE TABLE IF NOT EXISTS plugins (
 
 JSON_COLUMNS = {
     "settings", "capabilities", "policy", "body", "budget", "input", "output", "params", "usage",
-    "arguments", "metadata", "payload", "disabled_tools", "manifest", "tags", "stats", "changes", "config", "status",
+    "arguments", "metadata", "payload", "disabled_tools", "manifest", "tags", "stats", "changes", "config", "status", "plan",
 }
 
 

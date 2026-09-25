@@ -226,6 +226,25 @@ class PluginsInstallArgs(_Args):
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,48}$", description="Plugin id from plugins.find")
 
 
+class PlanItem(_Args):
+    title: str = Field(min_length=1, max_length=200, description="One step of the plan, in the user's language")
+    status: Literal["pending", "in_progress", "done"] = "pending"
+
+
+class PlanUpdateArgs(_Args):
+    items: list[PlanItem] = Field(max_length=20, description="The whole plan; it replaces the previous one")
+
+
+class AgentSpawnArgs(_Args):
+    label: str = Field(min_length=1, max_length=60, description="Short name shown to the user, e.g. 'tests' or 'API research'")
+    task: str = Field(min_length=1, max_length=20_000, description="Complete instructions: the sub-agent sees only this text, not your conversation")
+    model: str | None = Field(None, max_length=200, description="Model id for this sub-agent; the chat's model by default")
+
+
+class AgentWaitArgs(_Args):
+    ids: list[str] = Field(default_factory=list, max_length=20, description="Sub-agent ids to wait for; all of them when empty")
+
+
 class McpArgs(BaseModel):
     """MCP tools bring their own JSON schema; the harness checks it separately."""
 
@@ -241,6 +260,9 @@ CORE_TOOL_ARGS: dict[str, type[BaseModel]] = {
     "web.fetch": WebFetchArgs,
     "plugins.find": PluginsFindArgs,
     "plugins.install": PluginsInstallArgs,
+    "plan.update": PlanUpdateArgs,
+    "agent.spawn": AgentSpawnArgs,
+    "agent.wait": AgentWaitArgs,
 }
 
 PATH_FIELDS: dict[str, tuple[str, ...]] = {

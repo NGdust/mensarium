@@ -98,6 +98,7 @@ const ICONS = {
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.7 5.7 3.7 9s-1.2 6.3-3.7 9c-2.5-2.7-3.7-5.7-3.7-9S9.5 5.7 12 3z"/>',
   robot: '<rect x="4.5" y="8" width="15" height="11" rx="3"/><path d="M12 8V5.2M2.5 12.5v3M21.5 12.5v3M9.5 16h5"/><circle cx="12" cy="4.2" r="1"/><circle cx="9.3" cy="12.4" r=".9"/><circle cx="14.7" cy="12.4" r=".9"/>',
   send: '<path d="m21 3-7 18-4-8-8-4z"/><path d="M21 3 10 13"/>',
+  agents: '<circle cx="9" cy="8" r="3.2"/><path d="M3 19c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><circle cx="17" cy="9" r="2.5"/><path d="M16.5 13.6c2.7.3 4.5 2.3 4.5 5.4"/>',
 };
 
 function icon(name) {
@@ -291,7 +292,7 @@ const TEMPLATES = [
   ['terminal', tr('Why tests are failing'), tr('Run the project\'s tests, find why they\'re failing, and explain it. Don\'t change files yet.')],
   ['git', tr('What changed'), tr('Show what changed in the repository since the last commit, and briefly describe the changes.')],
 ];
-const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'files.stat': 'file', 'files.find': 'search', 'files.write': 'file', 'files.edit': 'file', 'files.mkdir': 'folder', 'files.move': 'folder', 'files.copy': 'folder', 'files.delete': 'trash', 'git.status': 'git', 'git.diff': 'git', 'system.info': 'cpu', 'process.list': 'cpu', 'process.kill': 'ban', 'net.ports': 'link', 'net.http': 'globe', 'shell.exec': 'terminal', 'shell.bash': 'terminal', 'screen.capture': 'laptop', 'screen.windows': 'sidebar', 'input.mouse': 'cpu', 'input.type': 'cpu', 'input.key': 'cpu', 'app.open': 'bolt', 'system.volume': 'pulse', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph', 'web.search': 'globe', 'web.fetch': 'globe' };
+const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'files.stat': 'file', 'files.find': 'search', 'files.write': 'file', 'files.edit': 'file', 'files.mkdir': 'folder', 'files.move': 'folder', 'files.copy': 'folder', 'files.delete': 'trash', 'git.status': 'git', 'git.diff': 'git', 'system.info': 'cpu', 'process.list': 'cpu', 'process.kill': 'ban', 'net.ports': 'link', 'net.http': 'globe', 'shell.exec': 'terminal', 'shell.bash': 'terminal', 'screen.capture': 'laptop', 'screen.windows': 'sidebar', 'input.mouse': 'cpu', 'input.type': 'cpu', 'input.key': 'cpu', 'app.open': 'bolt', 'system.volume': 'pulse', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph', 'web.search': 'globe', 'web.fetch': 'globe', 'plan.update': 'list', 'agent.spawn': 'agents', 'agent.wait': 'agents' };
 // Plugin texts are either plain strings or {en, ru} maps.
 const txt = (v) => (typeof v === 'string' ? v : (v?.[lang] || v?.en || ''));
 // Plain text with bare https links turned into anchors; everything else stays text.
@@ -580,7 +581,7 @@ function ensureAppShell() {
 // ---------- composer ----------
 
 // The round button sends a message; while the agent works it becomes a pulsing stop, on a pause it resumes.
-function composer({ placeholder, chips, onSend, onStop, onResume }) {
+function composer({ placeholder, chips, above, onSend, onStop, onResume }) {
   const ta = h('textarea', { rows: 1, placeholder, 'aria-label': placeholder });
   const send = h('button', { class: 'send', disabled: true });
   const box = h('div', { class: 'composer' },
@@ -630,7 +631,7 @@ function composer({ placeholder, chips, onSend, onStop, onResume }) {
   });
   sync();
   return {
-    el: h('div', { class: 'composer-wrap' }, box),
+    el: h('div', { class: 'composer-wrap' }, above, box),
     textarea: ta,
     setText(text) { ta.value = text; grow(); sync(); ta.focus(); ta.setSelectionRange(text.length, text.length); },
     // mode: idle | running | paused; hint is the agent status shown while it works
@@ -724,6 +725,79 @@ function modelSwitch(initial, { onPick }) {
   });
   render();
   return { el: chip, value: () => model, set(value) { model = value || ''; render(); } };
+}
+
+// The agent's plan for the current task, pinned above the composer; folds by itself once every step is done.
+function planStrip(items = []) {
+  const list = h('div', { class: 'plan-list' });
+  const count = h('span', { class: 'plan-count' });
+  const el = h('div', { class: 'plan', hidden: true });
+  const head = h('button', { class: 'plan-head', 'aria-expanded': 'true', onclick: () => {
+    el.classList.toggle('folded');
+    head.setAttribute('aria-expanded', String(!el.classList.contains('folded')));
+  } }, icon('list'), h('span', { class: 'plan-title' }, tr('Plan')), count, icon('chevron'));
+  el.append(head, list);
+  const set = (next) => {
+    if (!next.length) { el.hidden = true; return; }
+    const done = next.filter((i) => i.status === 'done').length;
+    el.hidden = false;
+    count.textContent = `${done}/${next.length}`;
+    list.replaceChildren(...next.map((i) => h('div', { class: `plan-item ${i.status}` },
+      i.status === 'done' ? icon('check') : i.status === 'in_progress' ? h('span', { class: 'spinner' }) : h('span', { class: 'plan-box' }),
+      h('span', { class: 'plan-text' }, i.title))));
+    el.classList.toggle('folded', done === next.length);
+    head.setAttribute('aria-expanded', String(done !== next.length));
+  };
+  set(items);
+  return { el, set };
+}
+
+// Sub-agents of a chat: a counter chip next to the model, a modal with each agent's assignment, activity and report.
+function agentsPanel() {
+  const agents = new Map();
+  let list = null;
+  const chip = h('button', { class: 'chip chip-agents', hidden: true, 'aria-haspopup': 'dialog' });
+  const status = (a) => {
+    const [label, cls] = statusOf(a.status);
+    a.statusEl.className = `pill ${cls}`;
+    a.statusEl.replaceChildren(...[isRunning(a.status) ? h('span', { class: 'dot accent live' }) : null, label].filter(Boolean));
+  };
+  const panel = (a) => {
+    if (!a.panel) {
+      a.statusEl = h('span', { class: 'pill' });
+      a.panel = h('div', { class: 'agent' },
+        h('div', { class: 'agent-head' }, icon('agents'), h('span', { class: 'agent-label' }, a.label), a.model ? h('span', { class: 'agent-model' }, a.model) : null, a.statusEl),
+        h('details', { class: 'agent-task' }, h('summary', {}, tr('Assignment')), h('div', { class: 'agent-task-text' }, a.task)),
+        a.log, a.result);
+    }
+    status(a);
+    return a.panel;
+  };
+  const render = () => {
+    const all = [...agents.values()];
+    const running = all.filter((a) => isRunning(a.status)).length;
+    chip.hidden = !all.length;
+    chip.title = running ? tr('{0} agents, {1} running', all.length, running) : tp('{0} agent|{0} agents', all.length);
+    chip.setAttribute('aria-label', chip.title);
+    chip.replaceChildren(icon('agents'), h('span', { class: 'chip-label' }, String(all.length)), ...(running ? [h('span', { class: 'dot accent live' })] : []));
+  };
+  chip.addEventListener('click', () => {
+    list = h('div', { class: 'agents-list' }, [...agents.values()].map(panel));
+    openModal(h('div', { class: 'modal-head' }, h('h2', {}, tr('Sub-agents')), h('button', { class: 'icon-btn', 'aria-label': tr('Close'), onclick: closeLayer }, icon('x'))), list)
+      .classList.add('modal-wide', 'modal-agents');
+  });
+  return {
+    el: chip,
+    get: (id) => agents.get(id),
+    add(p) {
+      const a = { id: p.agent_id, label: p.label, task: p.task, model: p.model, status: 'NEW', log: h('div', { class: 'agent-log' }), result: h('div', { class: 'agent-result prose' }) };
+      agents.set(a.id, a);
+      render();
+      if (list?.isConnected) list.append(panel(a));
+      return a;
+    },
+    setStatus(a, value) { a.status = value; render(); if (a.panel) status(a); },
+  };
 }
 
 // ---------- new chat ----------
@@ -851,9 +925,12 @@ async function viewChat(taskId) {
   const modelCtl = modelSwitch(task.model, {
     onPick: (value) => post(`/v1/tasks/${taskId}/model`, { model: value }),
   });
+  const plan = planStrip(task.plan || []);
+  const agents = agentsPanel();
   const c = composer({
     placeholder: tr('Reply to the agent'),
-    chips: [modeCtl.el, modelCtl.el],
+    chips: [modeCtl.el, modelCtl.el, agents.el],
+    above: plan.el,
     onSend: (text) => post(`/v1/tasks/${taskId}/messages`, { input: text }),
     onStop: () => act('pause'),
     onResume: () => act('resume'),
@@ -1002,13 +1079,16 @@ async function viewChat(taskId) {
       case 'memory.save': return tr('Remembering {0}', a.title);
       case 'web.search': return tr('Searching the web for “{0}”', clip(a.query, 40));
       case 'web.fetch': return tr('Reading {0}', (() => { try { return new URL(a.url).host; } catch { return clip(a.url, 40); } })());
+      case 'plan.update': return tr('Updating the plan');
+      case 'agent.spawn': return tr('Starting agent “{0}”', a.label);
+      case 'agent.wait': return tr('Waiting for agents');
       default:
         if (tool.startsWith('mcp.')) { const [, server, name] = tool.split('.'); return tr('Calling {0}: {1}', server, name); }
         return a.command ? tr('Running {0}', clip(a.command, 56)) : tool;
     }
   }
 
-  function toolCard(id, tool, display) {
+  function toolCard(id, tool, display, into = logAdd) {
     let entry = tools.get(id);
     if (entry) return entry;
     const stateEl = h('span', { class: 'tool-state' }, h('span', { class: 'dot accent live' }), tr('running'));
@@ -1020,7 +1100,7 @@ async function viewChat(taskId) {
       head.setAttribute('aria-expanded', String(card.classList.contains('open')));
     } }, icon(TOOL_ICON[tool] || 'terminal'), h('span', { class: 'tool-display', title: `${tool}: ${display || ''}` }, short(display) || tool), stateEl);
     card.append(head, out, noteEl);
-    logAdd(card);
+    into(card);
     entry = { card, head, stateEl, out, noteEl };
     tools.set(id, entry);
     return entry;
@@ -1039,7 +1119,7 @@ async function viewChat(taskId) {
     }
   }
 
-  function approvalCard(p) {
+  function approvalCard(p, agent = null) {
     const tc = p.tool_call || {};
     const args = tc.arguments || {};
     const [riskLabel, riskKind] = RISK[tc.risk] || [tc.risk, ''];
@@ -1049,7 +1129,7 @@ async function viewChat(taskId) {
     const actions = h('div', { class: 'approval-actions' }, approve, reject);
     let confirmBox = null;
     const card = h('div', { class: `approval${tc.risk === 'destructive' ? ' risk-destructive' : ''}`, role: 'group', 'aria-label': tr('Approval request') },
-      h('div', { class: 'approval-top' }, h('span', { class: 'approval-title' }, tr('Your decision is needed')), h('span', { class: `pill ${riskKind}` }, riskLabel), timer),
+      h('div', { class: 'approval-top' }, h('span', { class: 'approval-title' }, tr('Your decision is needed')), agent ? h('span', { class: 'pill accent' }, icon('agents'), agent.label) : null, h('span', { class: `pill ${riskKind}` }, riskLabel), timer),
       h('pre', { class: 'approval-cmd' }, args.command ? `$ ${args.command}` : short(tc.display)),
       h('dl', { class: 'approval-meta' },
         tc.tool !== 'shell.exec' ? [h('dt', {}, tr('Tool')), h('dd', {}, tc.tool)] : null,
@@ -1081,7 +1161,7 @@ async function viewChat(taskId) {
     tick();
     const iv = setInterval(tick, 1000);
     viewCleanups.push(() => clearInterval(iv));
-    approvals.set(p.approval_id, { card, wrap, actions, iv, timer, confirmBox });
+    approvals.set(p.approval_id, { card, wrap, actions, iv, timer, confirmBox, agent });
   }
 
   function approvalDecided(p) {
@@ -1094,7 +1174,50 @@ async function viewChat(taskId) {
     const text = { approved: tr('You allowed it to run once'), rejected: tr('You rejected the action'), expired: tr('Time to decide ran out') }[p.decision] || p.decision;
     const note = p.note === 'full access enabled' ? tr('approved by turning on full access') : p.note;
     e.actions.replaceChildren(h('span', { class: 'approval-result' }, text, note ? `: ${note}` : ''));
-    if (work) { logAdd(e.card); e.wrap.remove(); }
+    if (e.agent) { e.agent.log.append(e.card); e.wrap.remove(); } else if (work) { logAdd(e.card); e.wrap.remove(); }
+  }
+
+  // Events of a sub-agent arrive mirrored into this chat's stream; they fill the agent's own log in the modal,
+  // while its approvals and a rolling line of its actions stay visible in the thread.
+  function handleAgent(id, event, p, ev, live) {
+    const a = agents.get(id);
+    if (!a) return;
+    const active = isRunning(task.status);
+    const into = (node) => a.log.append(node);
+    const anote = (ic, text, cls = '') => into(h('div', { class: `note ${cls}` }, icon(ic), h('span', {}, text)));
+    switch (event) {
+      case 'task.status':
+        agents.setStatus(a, p.status);
+        if (['PAUSED', 'CANCELED', 'FAILED', 'FAILED_RECOVERABLE'].includes(p.status)) anote('alert', `${statusOf(p.status)[0]}${p.reason ? `: ${reasonText(p.reason)}` : ''}`, p.status === 'FAILED' || p.status === 'FAILED_RECOVERABLE' ? 'error' : '');
+        break;
+      case 'llm.response':
+        if (p.text && p.tool_call) into(h('div', { class: 'work-thought prose', html: markdown(p.text) }));
+        break;
+      case 'tool_call.denied':
+        anote('ban', tr('Policy didn\'t allow {0}: {1}', p.tool, policyText(p.reason)));
+        break;
+      case 'tool_call.pending_approval':
+        if (active) { stamp(ev); say(tr('Agent “{0}” is waiting for your decision', a.label), live); }
+        approvalCard(p, a);
+        break;
+      case 'approval.decided':
+        approvalDecided(p);
+        break;
+      case 'tool_call.executing':
+        if (active) { stamp(ev); say(`${a.label}: ${actionText(p.tool, p.arguments, p.display)}`, live); }
+        toolCard(p.tool_call_id, p.tool, p.display, into);
+        break;
+      case 'tool_call.result':
+        toolResult(p);
+        break;
+      case 'task.final':
+        a.result.replaceChildren(h('div', { class: 'agent-result-title' }, tr('Report')), h('div', { class: 'prose', html: markdown(p.text) }), ...(p.image_artifact_id ? [shot(p.image_artifact_id, 'msg-shot')] : []));
+        break;
+      case 'task.error':
+        anote('alert', p.message, 'error');
+        break;
+      default:
+    }
   }
 
   function handle({ event, payload: p, created_at: createdAt }, live) {
@@ -1119,6 +1242,17 @@ async function viewChat(taskId) {
       case 'task.model':
         modelCtl.set(p.model);
         note('robot', tr('Model: {0}', p.model));
+        break;
+      case 'task.plan':
+        plan.set(p.items || []);
+        break;
+      case 'agent.spawned':
+        stamp(ev);
+        agents.add(p);
+        logAdd(h('div', { class: 'note' }, icon('agents'), h('span', {}, tr('Started agent “{0}”', p.label))));
+        break;
+      case 'agent.event':
+        handleAgent(p.agent_id, p.event, p.payload || {}, ev, live);
         break;
       case 'llm.request':
         stamp(ev);

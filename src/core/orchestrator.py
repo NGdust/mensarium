@@ -9,7 +9,7 @@ from typing import Any
 
 from mensarium import __version__
 from mensarium.agent_core.actions import ToolCallAction, parse_action
-from mensarium.agent_core.context import build_messages, build_system_prompt, has_images, strip_images
+from mensarium.agent_core.context import MAX_AGENTS, build_messages, build_system_prompt, has_images, strip_images
 from mensarium.agent_core.profile import AgentProfile
 from mensarium.contracts.llm import ChatRequest
 from mensarium.contracts.protocol import (
@@ -33,12 +33,13 @@ from mensarium.policy_engine.engine import Decision, evaluate
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import iso_in, now_iso, parse_iso, utcnow
 from mensarium.shared.versions import parse_version
-from mensarium.tool_runtime.registry import REGISTRY
+from mensarium.tool_runtime.registry import AGENT_TOOLS, PLAN_TOOLS, REGISTRY
 
 log = logging.getLogger(__name__)
 
 OBSERVATION_LIMIT = 12000
 ARTIFACT_THRESHOLD = 4000
+REPORT_LIMIT = 6000
 FULL_ACCESS_SINCE = (0, 3, 0)
 FULL_ACCESS_ERRORS = {
     "outdated": "full access is not available: the agent on this device is outdated, update it",
@@ -190,14 +191,16 @@ class Orchestrator:
         target = await self.repo.get_target(task["target_id"])
         if mode == "full" and (access := full_access(target or {})) != "allowed":
             raise TaskError(FULL_ACCESS_ERRORS[access])
+        family = {task_id} | {c["id"] for c in await self.repo.list_children(task_id)}
         if task["mode"] != mode:
-            await self.repo.update_task(task_id, {"mode": mode})
+            for member in family:
+                await self.repo.update_task(member, {"mode": mode})
             await self.repo.audit(self.workspace_id, "user", "task.mode", {"task_id": task_id, "mode": mode})
             await self.bus.emit(task_id, "task.mode", {"mode": mode})
         if mode == "full":
             for approval_id, waiter in list(self.approval_waiters.items()):
                 approval = await self.repo.get_approval(approval_id)
-                if approval and approval["task_id"] == task_id and not waiter.done():
+                if approval and approval["task_id"] in family and not waiter.done():
                     await self.decide(approval_id, "approve", "full access enabled", confirm=True)
         return await self._task(task_id)
 
@@ -220,16 +223,17 @@ class Orchestrator:
 
     async def delete(self, task_id: str) -> None:
         await self._task(task_id)
-        runner = self.runners.get(task_id)
-        if runner:
-            await self._control(task_id, "cancel")
-            try:
-                await asyncio.wait_for(asyncio.shield(runner), 15)
-            except TimeoutError:
-                runner.cancel()
-        for artifact_id in await self.repo.delete_task(task_id):
-            for path in self.artifacts_dir.glob(f"{artifact_id}.*"):
-                path.unlink(missing_ok=True)
+        for row in [*await self.repo.list_children(task_id), {"id": task_id}]:
+            runner = self.runners.get(row["id"])
+            if runner:
+                await self._control(row["id"], "cancel")
+                try:
+                    await asyncio.wait_for(asyncio.shield(runner), 15)
+                except TimeoutError:
+                    runner.cancel()
+            for artifact_id in await self.repo.delete_task(row["id"]):
+                for path in self.artifacts_dir.glob(f"{artifact_id}.*"):
+                    path.unlink(missing_ok=True)
         await self.repo.audit(self.workspace_id, "user", "task.deleted", {"task_id": task_id})
 
     async def decide(self, approval_id: str, decision: str, note: str | None, confirm: bool) -> None:
@@ -273,6 +277,9 @@ class Orchestrator:
 
     async def _control(self, task_id: str, action: str) -> None:
         await self._task(task_id)
+        for child in await self.repo.list_children(task_id):
+            if child["id"] in self.runners:
+                await self._control(child["id"], action)
         self.controls[task_id] = action
         if task_id in self.interrupts:
             self.interrupts[task_id].set()
@@ -303,16 +310,21 @@ class Orchestrator:
             raise Stop("PAUSED", "paused by user")
 
     async def _run(self, task_id: str) -> None:
+        resumable = False
         try:
             await self._set_status(task_id, "VALIDATING")
             task = await self._task(task_id)
+            if task.get("parent_id"):
+                self.bus.parents[task_id] = task["parent_id"]
             profile = await self.load_profile(task["profile_id"])
             await self._loop(task, profile)
         except Stop as s:
+            resumable = s.status in ("PAUSED", "FAILED_RECOVERABLE")
             await self.repo.expire_open_approvals(task_id)
             await self._set_status(task_id, s.status, s.reason)
             await self.repo.audit(self.workspace_id, "core", "task.stopped", {"task_id": task_id, "status": s.status})
         except Exception as e:
+            resumable = True
             log.exception("task crashed", extra={"task_id": task_id})
             await self.bus.emit(task_id, "task.error", {"message": f"internal error: {e}"})
             await self._set_status(task_id, "FAILED_RECOVERABLE", f"internal error: {e}")
@@ -320,6 +332,11 @@ class Orchestrator:
             self.controls.pop(task_id, None)
             self.interrupts.pop(task_id, None)
             self.running_requests.pop(task_id, None)
+            # sub-agents of a finished task have nobody to report to; a paused one collects them on resume
+            if not resumable:
+                for child in await self.repo.list_children(task_id):
+                    if child["id"] in self.runners:
+                        await self._control(child["id"], "cancel")
 
     async def _interruptible(self, task_id: str, coro: Any) -> Any:
         main = asyncio.ensure_future(coro)
@@ -351,6 +368,8 @@ class Orchestrator:
             hello = self.hub.hello(task["target_id"])
             policy = hello.policy if hello else TargetPolicy.model_validate(target["policy"] or {"roots": [], "command_allowlist": []})
             toolbox = await self.plugins.toolbox(profile, target)
+            if not task.get("parent_id"):
+                toolbox.add_tools({**PLAN_TOOLS, **AGENT_TOOLS})
             available = toolbox.available(target)
             if profile.allow_extensions:
                 toolbox.add_skills(self.skills.eligible(await self.skills.all(), target["platform"], available))
@@ -374,7 +393,9 @@ class Orchestrator:
                 model = self.provider.vision_model
             request = ChatRequest(
                 model=model,
-                system=build_system_prompt(profile, target["name"], target["platform"], policy, available, skills, memory, outdated),
+                system=build_system_prompt(
+                    profile, target["name"], target["platform"], policy, available, skills, memory, outdated, task.get("label")
+                ),
                 messages=messages,
                 temperature=profile.llm.temperature,
                 max_output_tokens=profile.llm.max_output_tokens,
@@ -790,6 +811,15 @@ class Orchestrator:
                 return self.skills.read(skill, args.get("path"))
             except SkillError as e:
                 raise TaskError(str(e)) from e
+        if tool == "plan.update":
+            await self.repo.update_task(task_id, {"plan": args["items"]})
+            await self.bus.emit(task_id, "task.plan", {"items": args["items"]})
+            done = sum(i["status"] == "done" for i in args["items"])
+            return f"Plan updated: {done}/{len(args['items'])} steps done."
+        if tool == "agent.spawn":
+            return await self._spawn_agent(task_id, args)
+        if tool == "agent.wait":
+            return await self._wait_agents(task_id, args["ids"])
         if tool == "plugins.find":
             return await self.plugins.agent_find((await self.catalog.load())[0], args["query"])
         if tool == "plugins.install":
@@ -798,6 +828,64 @@ class Orchestrator:
                 raise TaskError("the device of this task is gone")
             return await self.plugins.agent_install((await self.catalog.load())[0], args["id"], target)
         return await self.plugins.call_core(toolbox, toolbox.registry[tool], args)
+
+    # ---- sub-agents -------------------------------------------------------
+
+    async def _spawn_agent(self, task_id: str, args: dict[str, Any]) -> str:
+        task = await self._task(task_id)
+        children = await self.repo.list_children(task_id)
+        if sum(c["id"] in self.runners for c in children) >= MAX_AGENTS:
+            raise TaskError(f"at most {MAX_AGENTS} sub-agents run at once; collect reports with agent.wait first")
+        agent_id = new_id("agt")
+        now = now_iso()
+        model = args.get("model") or task.get("model")
+        await self.repo.create_task(
+            {
+                "id": agent_id,
+                "workspace_id": self.workspace_id,
+                "profile_id": task["profile_id"],
+                "target_id": task["target_id"],
+                "parent_id": task_id,
+                "label": args["label"],
+                "input": args["task"],
+                "status": "NEW",
+                "mode": task["mode"],
+                "model": model,
+                "budget": task.get("budget") or {},
+                "trace_id": task["trace_id"],
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        self.bus.parents[agent_id] = task_id
+        await self.repo.audit(self.workspace_id, "core", "agent.spawned", {"task_id": task_id, "agent_id": agent_id, "label": args["label"]})
+        await self.bus.emit(task_id, "agent.spawned", {"agent_id": agent_id, "label": args["label"], "task": args["task"], "model": model})
+        await self._add_user_message(agent_id, args["task"])
+        self._start(agent_id)
+        return f"Sub-agent {args['label']!r} started as {agent_id}. It works in parallel; call agent.wait to get its report."
+
+    async def _wait_agents(self, task_id: str, ids: list[str]) -> str:
+        children = await self.repo.list_children(task_id)
+        if not children:
+            raise TaskError("no sub-agents to wait for; start one with agent.spawn")
+        if ids:
+            known = {c["id"] for c in children}
+            if unknown := [i for i in ids if i not in known]:
+                raise TaskError(f"unknown sub-agent ids: {', '.join(unknown)}")
+            children = [c for c in children if c["id"] in ids]
+        for child in children:
+            if child["id"] not in self.runners and child["status"] in ("PAUSED", "FAILED_RECOVERABLE"):
+                self._start(child["id"])
+        if pending := [self.runners[c["id"]] for c in children if c["id"] in self.runners]:
+            await self._interruptible(task_id, asyncio.wait(pending))
+        reports = []
+        for child in children:
+            row = await self._task(child["id"])
+            text = row.get("result") or f"(no report: {row.get('status_reason') or row['status'].lower()})"
+            if len(text) > REPORT_LIMIT:
+                text = text[:REPORT_LIMIT] + "\n...[report truncated]"
+            reports.append(f"### {row['label']} ({row['id']}) - {row['status']}\n{text}")
+        return "[reports from sub-agents: their words, verify what matters]\n\n" + "\n\n".join(reports)
 
     @staticmethod
     def _format_result(result: ExecutionResult) -> tuple[str, bool]:

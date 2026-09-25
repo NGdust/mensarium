@@ -305,3 +305,38 @@ PLUGIN_TOOLS: dict[str, ToolSpec] = {
         always_ask=True,
     ),
 }
+
+PLAN_TOOLS: dict[str, ToolSpec] = {
+    "plan.update": ToolSpec(
+        "plan.update",
+        "Write or update the plan the user sees above the chat input: the whole list of steps with their status "
+        "(pending, in_progress, done). Call it before starting a task with several steps and again each time a step "
+        "starts or finishes; keep titles short and in the user's language.",
+        "read",
+        CORE_TOOL_ARGS["plan.update"],
+        lambda a: f"plan: {sum(i['status'] == 'done' for i in a['items'])}/{len(a['items'])} done",
+        runs_on="core",
+    ),
+}
+
+AGENT_TOOLS: dict[str, ToolSpec] = {
+    "agent.spawn": ToolSpec(
+        "agent.spawn",
+        "Start a sub-agent that works in parallel on the same device with the same tools and permissions. It sees "
+        "only the task text you give it, so include every file path, constraint and the expected report. Returns its id "
+        "at once; get its report with agent.wait. Use it for independent parts of a big task or parallel research, "
+        "not for a single quick action.",
+        "read",
+        CORE_TOOL_ARGS["agent.spawn"],
+        lambda a: f"agent {a['label']}",
+        runs_on="core",
+    ),
+    "agent.wait": ToolSpec(
+        "agent.wait",
+        "Wait until the given sub-agents (all of them when ids is empty) finish and return their reports.",
+        "read",
+        CORE_TOOL_ARGS["agent.wait"],
+        lambda a: "wait for " + (", ".join(a["ids"]) if a["ids"] else "all agents"),
+        runs_on="core",
+    ),
+}

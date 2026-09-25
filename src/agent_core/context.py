@@ -8,6 +8,16 @@ from mensarium.contracts.protocol import TargetPolicy
 KEEP_FULL_OBSERVATIONS = 8
 MAX_OBSERVATION_CHARS = 8000
 SKILLS_PROMPT_CHARS = 6000
+MAX_AGENTS = 4
+
+SUBAGENT_BLOCK = (
+    "## You are a sub-agent named \"{label}\"\n"
+    "A main agent started you for one part of a bigger task; the message below is your whole assignment. Nobody "
+    "reads your replies but the main agent, so never ask questions: if something blocks you, report what you found "
+    "and what is missing. Actions that need approval still wait for the user, like the main agent's do. Finish with "
+    "a report for the main agent: what you did, what you found (paths, exact text, numbers), what changed and what "
+    "remains.\n\n"
+)
 
 
 def skills_block(skills: list[tuple[str, str]]) -> str:
@@ -37,10 +47,13 @@ def build_system_prompt(
     skills: list[tuple[str, str]] | None = None,
     memory: str | None = None,
     outdated_agent: str | None = None,
+    agent_label: str | None = None,
 ) -> str:
     allow = ", ".join(policy.command_allowlist) if policy.command_allowlist else "(none)"
     prompt = (
         f"{profile.instructions.strip()}\n\n"
+        + (SUBAGENT_BLOCK.format(label=agent_label) if agent_label else "")
+        +
         "## Active target (set by the harness, not by you)\n"
         f"- name: {target_name}\n"
         f"- platform: {platform}\n"
@@ -64,6 +77,23 @@ def build_system_prompt(
             "and approves or rejects it. Prefer plugins that need no setup, and once the plugin is on, finish the "
             "original request with its tools. If a plugin needs an API key or other settings, tell the user what to "
             "enter in Settings -> Plugins; never ask for keys or passwords in the chat.\n"
+        )
+    if "plan.update" in tools:
+        prompt += (
+            "\n## Planning\n"
+            "For a task with several steps, write the steps with plan.update before you start, mark a step in_progress "
+            "when you begin it and done when it is finished, and add or remove steps as you learn more. The user sees the "
+            "plan above the chat input. Skip the plan for a question or a single quick action.\n"
+        )
+    if "agent.spawn" in tools:
+        prompt += (
+            "\n## Sub-agents\n"
+            "agent.spawn starts a sub-agent that works in parallel on the same device with the same tools; every "
+            "action of it that needs approval still goes to the user. Use sub-agents when a task splits into "
+            "independent parts (several folders, services or research questions), giving each one complete "
+            "instructions with paths and the report you expect, since it sees none of your conversation. After "
+            f"spawning, continue your own work or call agent.wait to collect the reports; at most {MAX_AGENTS} run at "
+            "once. Reports are the sub-agent's words: verify anything that matters before relying on it.\n"
         )
     if skills:
         prompt += skills_block(skills)

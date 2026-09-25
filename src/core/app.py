@@ -917,8 +917,8 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         return {"id": run_id}
 
     def task_view(t: dict[str, Any]) -> dict[str, Any]:
-        keys = ("id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result", "mode", "model")
-        return {k: t.get(k) for k in keys} | {"created_at": t["created_at"], "updated_at": t["updated_at"]}
+        keys = ("id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result", "mode", "model", "parent_id", "label")
+        return {k: t.get(k) for k in keys} | {"plan": t.get("plan") or [], "created_at": t["created_at"], "updated_at": t["updated_at"]}
 
     @app.get("/v1/tasks")
     async def list_tasks(c: Core = Depends(auth)) -> list[dict[str, Any]]:
