@@ -113,6 +113,7 @@ class DreamSettings(BaseModel):
     dreaming: bool | None = None
     hour: int | None = Field(None, ge=0, le=23)
     min_importance: int | None = Field(None, ge=1, le=10)
+    tz: str | None = Field(None, max_length=64)
 
 
 class InstallBody(BaseModel):

@@ -1584,6 +1584,8 @@ async function settingsMemory(shell) {
     async function load() {
       const d = await get('/v1/memory/dreams');
       const s = d.settings;
+      const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (zone && s.tz !== zone) { s.tz = zone; put({ tz: zone }); }
       clearTimeout(timer);
       timer = setTimeout(() => load().catch(() => {}), d.running ? 1500 : 20000);
       const sig = JSON.stringify(d);

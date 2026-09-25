@@ -4,6 +4,7 @@ import logging
 import re
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from mensarium.contracts.llm import ChatRequest, Message
 from mensarium.core.config import CoreConfig
@@ -16,7 +17,7 @@ from mensarium.shared.timeutil import now_iso
 
 log = logging.getLogger(__name__)
 
-DEFAULT_SETTINGS: dict[str, Any] = {"dreaming": True, "hour": 3, "min_importance": 6}
+DEFAULT_SETTINGS: dict[str, Any] = {"dreaming": True, "hour": 3, "min_importance": 6, "tz": None}
 MAX_CHATS = 40
 DIGEST_CHARS = 3500
 BATCH_CHARS = 14000
@@ -39,6 +40,34 @@ Reply with ONLY a JSON object:
 "tags": ["..."], "importance": 7, "sources": ["task_..."], "links": ["Other note title"]}], \
 "themes": ["short phrase"]}"""
 
+REM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "candidates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["fact", "preference", "project", "person", "device", "howto"]},
+                    "content": {"type": "string"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "importance": {"type": "integer"},
+                    "sources": {"type": "array", "items": {"type": "string"}},
+                    "links": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["title", "kind", "content", "importance"],
+            },
+        },
+        "themes": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["candidates", "themes"],
+}
+
+REPAIR_PROMPT = """You repair invalid JSON. The parser error and the broken text follow. Reply with the same data as \
+one valid JSON object only: escape quotes inside strings, drop trailing commas, close brackets. Do not add or \
+remove facts."""
+
 DIARY_PROMPT = """You are Mensarium's agent writing its dream diary after a night of memory consolidation. \
 Write 3-6 sentences in {language}, first person, calm and concrete: which memories you created or strengthened \
 and why they matter, what you let go. No emojis, no lists, no headings."""
@@ -46,6 +75,14 @@ and why they matter, what you let go. No emojis, no lists, no headings."""
 
 class DreamError(Exception):
     pass
+
+
+def _zone(name: str | None) -> Any:
+    """The schedule follows the owner's timezone reported by the web UI; the Core host's zone otherwise."""
+    try:
+        return ZoneInfo(name) if name else datetime.now().astimezone().tzinfo
+    except (ZoneInfoNotFoundError, ValueError):
+        return datetime.now().astimezone().tzinfo
 
 
 def parse_json(text: str) -> dict[str, Any]:
@@ -109,7 +146,7 @@ class Dreamer:
             await asyncio.sleep(60)
             try:
                 s = await self.settings()
-                now = datetime.now().astimezone()
+                now = datetime.now(_zone(s.get("tz")))
                 today = now.date().isoformat()
                 if not s["dreaming"] or now.hour != int(s["hour"]) or self.running:
                     continue
@@ -186,21 +223,33 @@ class Dreamer:
             text = text[:half] + "\n…\n" + text[-half:]
         return text
 
-    async def _ask(self, system: str, user: str, max_tokens: int) -> str:
+    async def _ask(self, system: str, user: str, max_tokens: int, schema: dict[str, Any] | None = None) -> str:
         pcfg = self.cfg.llm.providers[self.cfg.llm.active_provider]
-        resp = await self.provider.chat(
-            ChatRequest(
-                model=self.provider.default_model,
-                system=system,
-                messages=[Message(role="user", content=user)],
-                temperature=0.2,
-                max_output_tokens=max_tokens,
-                timeout_s=max(pcfg.timeout_s, 120),
-            ),
-            tools=[],
-            response_schema=None,
+        request = ChatRequest(
+            model=self.provider.default_model,
+            system=system,
+            messages=[Message(role="user", content=user)],
+            temperature=0.2,
+            max_output_tokens=max_tokens,
+            timeout_s=max(pcfg.timeout_s, 120),
         )
+        try:
+            resp = await self.provider.chat(request, tools=[], response_schema=schema)
+        except LLMError as e:
+            # providers without structured output reject response_format; plain text is parsed and repaired instead
+            if schema is None or "HTTP 400" not in str(e):
+                raise
+            resp = await self.provider.chat(request, tools=[], response_schema=None)
         return resp.text or ""
+
+    async def _ask_json(self, system: str, user: str, max_tokens: int) -> dict[str, Any]:
+        text = await self._ask(system, user, max_tokens, REM_SCHEMA)
+        try:
+            return parse_json(text)
+        except DreamError as e:
+            log.warning("dream reply is not valid JSON, asking the model to repair it", extra={"error": str(e)})
+            fixed = await self._ask(REPAIR_PROMPT, f"Parser error: {e}\n\n{text}", max_tokens, REM_SCHEMA)
+            return parse_json(fixed)
 
     async def _rem(self, digests: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
         """REM: the model proposes candidate memories with importance, links and themes."""
@@ -216,7 +265,7 @@ class Dreamer:
         candidates: list[dict[str, Any]] = []
         themes: list[str] = []
         for batch in batches:
-            data = parse_json(await self._ask(REM_PROMPT, f"## Existing memory\n{index}\n\n## Recent chats\n" + "\n\n".join(batch), 3000))
+            data = await self._ask_json(REM_PROMPT, f"## Existing memory\n{index}\n\n## Recent chats\n" + "\n\n".join(batch), 4000)
             candidates += [c for c in data.get("candidates", []) if isinstance(c, dict)]
             themes += [str(t) for t in data.get("themes", []) if isinstance(t, str)]
         return candidates, themes
