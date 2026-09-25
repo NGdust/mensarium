@@ -309,8 +309,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
   transition: border-color 0.2s;
 }
 .composer:focus-within { border-color: var(--accent-line); }
-.composer-input { display: flex; gap: 10px; align-items: flex-start; }
-.composer-input > .icon { color: var(--accent-strong); margin-top: 4px; }
+.composer-input { display: flex; align-items: flex-start; padding-left: 9px; }
 .composer textarea {
   display: block; flex: 1; resize: none; border: 0; background: transparent; padding: 2px 0 12px;
   font: 15.5px/1.5 var(--font); color: var(--text); min-height: 26px; max-height: 240px;

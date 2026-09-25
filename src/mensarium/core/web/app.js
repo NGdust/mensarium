@@ -68,7 +68,6 @@ const ICONS = {
   arrowUp: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   shield: '<path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"/><path d="m9 12 2 2 4-4"/>',
   bolt: '<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>',
-  sparkle: '<path d="M12 3c.6 4.2 2.8 6.4 7 7-4.2.6-6.4 2.8-7 7-.6-4.2-2.8-6.4-7-7 4.2-.6 6.4-2.8 7-7z"/>',
   pause: '<path d="M9 5v14M15 5v14"/>',
   play: '<path d="M7 5v14l12-7z"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
@@ -543,7 +542,7 @@ function composer({ placeholder, chips, onSend, onStop, onResume }) {
   const ta = h('textarea', { rows: 1, placeholder, 'aria-label': placeholder });
   const send = h('button', { class: 'send', disabled: true });
   const box = h('div', { class: 'composer' },
-    h('div', { class: 'composer-input' }, icon('sparkle'), ta),
+    h('div', { class: 'composer-input' }, ta),
     h('div', { class: 'composer-bar' }, chips, h('span', { class: 'spacer' }), send),
   );
   let mode = 'idle';
