@@ -252,7 +252,7 @@ const TEMPLATES = [
   ['search', tr('Fix a bug'), tr('Find the cause of the error and suggest a minimal fix: ')],
 ];
 const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'git.status': 'git', 'git.diff': 'git', 'shell.exec': 'terminal', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph' };
-// Marketplace texts are either plain strings or {en, ru} maps.
+// Plugin texts are either plain strings or {en, ru} maps.
 const txt = (v) => (typeof v === 'string' ? v : (v?.[lang] || v?.en || ''));
 const RESUMABLE = ['PAUSED', 'FAILED_RECOVERABLE'];
 
@@ -1093,7 +1093,7 @@ const SETTINGS = [
   ['model', 'robot', tr('Model')],
   ['devices', 'laptop', tr('Devices')],
   ['memory', 'graph', tr('Memory')],
-  ['marketplace', 'package', tr('Marketplace')],
+  ['plugins', 'package', tr('Plugins')],
   ['profiles', 'layers', tr('Profiles')],
   ['audit', 'list', tr('Activity log')],
 ];
@@ -1150,7 +1150,7 @@ const cmdValue = (cmd) => [h('code', {}, cmd), copyBtn(cmd)];
 async function viewSettings(key) {
   const shell = ensureSettingsShell();
   shell.setActive();
-  const views = { overview: settingsOverview, model: settingsModel, devices: settingsDevices, memory: settingsMemory, marketplace: settingsMarketplace, profiles: settingsProfiles, audit: settingsAudit };
+  const views = { overview: settingsOverview, model: settingsModel, devices: settingsDevices, memory: settingsMemory, plugins: settingsPlugins, marketplace: settingsPlugins, profiles: settingsProfiles, audit: settingsAudit };
   await (views[key] || settingsOverview)(shell);
 }
 
@@ -1297,7 +1297,7 @@ async function settingsDevices(shell) {
           }));
       })),
       extTools.length ? [
-        h('div', { class: 'device-sub' }, tr('Marketplace tools'), h('span', {}, tr('They run as commands, so “Run commands” must be enabled and the program must be in the allowed list.'))),
+        h('div', { class: 'device-sub' }, tr('Plugin tools'), h('span', {}, tr('They run as commands, so “Run commands” must be enabled and the program must be in the allowed list.'))),
         h('div', { class: 'tool-rows' }, extTools.map((tool) => h('div', { class: 'tool-row' },
           icon('terminal'),
           h('div', { class: 'row-text' }, h('div', { class: 'tool-row-title' }, tool.name, h('code', {}, tool.ext)), h('div', { class: 'row-desc' }, tool.description)),
@@ -1649,10 +1649,10 @@ const RISK_SHORT = { read: tr('read'), write: tr('changes'), execute: tr('run'),
 const extKind = (e) => [e.instructions ? tr('Skill') : null, e.tools.length ? tr('Tools: {0}', e.tools.length) : null].filter(Boolean);
 const extIcon = (e) => (e.instructions && e.tools.length ? 'layers' : e.instructions ? 'book' : 'terminal');
 
-async function settingsMarketplace(shell) {
+async function settingsPlugins(shell) {
   const grid = h('div', { class: 'market-grid' }, h('div', { class: 'empty' }, tr('Loading the catalog...')));
   const note = h('p', { class: 'market-note hidden' });
-  const search = h('input', { type: 'search', placeholder: tr('Search by name and description'), 'aria-label': tr('Search the Marketplace') });
+  const search = h('input', { type: 'search', placeholder: tr('Search by name and description'), 'aria-label': tr('Search plugins') });
   const FILTERS = [['all', tr('All')], ['skills', tr('Skills')], ['tools', tr('Tools')], ['installed', tr('Installed')]];
   let filter = localStorageGet('market-filter') || 'all';
   let items = [];
@@ -1667,7 +1667,7 @@ async function settingsMarketplace(shell) {
   }
   const install = (e) => act(() => post('/v1/extensions', { id: e.id }), e.installed ? tr('Updated: {0}', txt(e.name)) : tr('Installed: {0}', txt(e.name)));
   const remove = async (e) => {
-    if (!await confirmDialog({ title: tr('Delete “{0}”?', txt(e.name)), text: e.installed.source === 'custom' ? tr('This is your package, its contents will be removed from Core.') : tr('The agent will stop using it. You can install it again anytime.'), action: tr('Delete'), danger: true })) return;
+    if (!await confirmDialog({ title: tr('Delete “{0}”?', txt(e.name)), text: e.installed.source === 'custom' ? tr('This is your plugin, its contents will be removed from Core.') : tr('The agent will stop using it. You can install it again anytime.'), action: tr('Delete'), danger: true })) return;
     closeLayer();
     act(() => del(`/v1/extensions/${e.id}`), tr('Removed'));
   };
@@ -1685,7 +1685,7 @@ async function settingsMarketplace(shell) {
   function details(e) {
     openModal(
       h('div', { class: 'modal-head' }, h('h2', {}, txt(e.name)), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
-      h('div', { class: 'market-meta' }, [e.author, tr('version {0}', e.installed ? e.installed.version : e.version), e.installed?.source === 'custom' ? tr('your package') : null].filter(Boolean).join(' · ')),
+      h('div', { class: 'market-meta' }, [e.author, tr('version {0}', e.installed ? e.installed.version : e.version), e.installed?.source === 'custom' ? tr('your plugin') : null].filter(Boolean).join(' · ')),
       h('p', {}, txt(e.description) || txt(e.summary)),
       e.tools.length ? [h('div', { class: 'field-label' }, tr('Tools')), h('div', { class: 'market-tools' }, e.tools.map((t) => h('div', { class: 'market-tool' },
         h('div', { class: 'market-tool-head' }, h('code', {}, t.name), h('span', { class: 'pill' }, RISK_SHORT[t.risk] || t.risk)),
@@ -1698,7 +1698,7 @@ async function settingsMarketplace(shell) {
 
   function card(e) {
     return h('div', { class: `market-card${e.installed ? ' installed' : ''}`, role: 'button', tabindex: '0', onclick: () => details(e), onkeydown: (ev) => { if (ev.key === 'Enter') details(e); } },
-      h('div', { class: 'market-card-head' }, h('span', { class: 'market-icon' }, icon(extIcon(e))), h('div', { class: 'market-title' }, h('div', {}, txt(e.name)), h('div', { class: 'market-meta' }, [e.author, e.installed?.source === 'custom' ? tr('your package') : `v${e.version}`].filter(Boolean).join(' · ')))),
+      h('div', { class: 'market-card-head' }, h('span', { class: 'market-icon' }, icon(extIcon(e))), h('div', { class: 'market-title' }, h('div', {}, txt(e.name)), h('div', { class: 'market-meta' }, [e.author, e.installed?.source === 'custom' ? tr('your plugin') : `v${e.version}`].filter(Boolean).join(' · ')))),
       h('p', { class: 'market-summary' }, txt(e.summary)),
       h('div', { class: 'market-tags' }, extKind(e).map((k) => h('span', { class: 'pill tag-kind' }, k))),
       h('div', { class: 'market-foot' }, actions(e)));
@@ -1714,14 +1714,14 @@ async function settingsMarketplace(shell) {
   async function load() {
     const data = await get('/v1/marketplace');
     items = data.items;
-    note.textContent = data.error ? tr('The mensarium.com catalog is currently unavailable, showing packages bundled with this version of Mensarium.') : '';
+    note.textContent = data.error ? tr('The mensarium.com catalog is currently unavailable, showing plugins bundled with this version of Mensarium.') : '';
     note.classList.toggle('hidden', !data.error);
     renderFilters();
     render();
   }
 
   function addCustom() {
-    const ta = h('textarea', { class: 'market-yaml', rows: 14, spellcheck: 'false', 'aria-label': tr('Package manifest'),
+    const ta = h('textarea', { class: 'market-yaml', rows: 14, spellcheck: 'false', 'aria-label': tr('Plugin manifest'),
       placeholder: tr('id: my-skill\nname: {en: My skill, ru: Мой навык}\nversion: 1.0.0\nsummary: Short description of what it does\ninstructions: |\n  # How to work\n  1. ...') });
     const save = h('button', { class: 'btn btn-primary' }, tr('Install'));
     save.addEventListener('click', async () => {
@@ -1729,13 +1729,13 @@ async function settingsMarketplace(shell) {
       try {
         await api('/v1/extensions/custom', { method: 'POST', body: ta.value, headers: { 'Content-Type': 'text/plain' } });
         closeLayer();
-        toast(tr('Package installed'));
+        toast(tr('Plugin installed'));
         await load();
       } catch (err) { fail(err); } finally { save.disabled = false; }
     });
     openModal(
       h('div', { class: 'modal-head' }, h('h2', {}, tr('Custom skill or tool')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
-      h('p', {}, tr('Paste a YAML manifest. A skill is an instructions field with instructions for the agent, a tool is a tools list with a command in argv; you can include both. Same format as catalog packages.')),
+      h('p', {}, tr('Paste a YAML manifest. A skill is an instructions field with instructions for the agent, a tool is a tools list with a command in argv; you can include both. Same format as catalog plugins.')),
       ta,
       h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
     ).classList.add('modal-wide');
@@ -1743,7 +1743,7 @@ async function settingsMarketplace(shell) {
   }
 
   search.addEventListener('input', render);
-  page(shell, tr('Marketplace'), tr('Skills tell the agent how to do the work, tools give it ready-made commands. The agent sees what\'s installed starting from the next step; commands still go through approval and the device\'s allowed program lists.'),
+  page(shell, tr('Plugins'), tr('Skills tell the agent how to do the work, tools give it ready-made commands. The agent sees what\'s installed starting from the next step; commands still go through approval and the device\'s allowed program lists.'),
     h('button', { class: 'btn', onclick: addCustom }, icon('plus'), tr('Add your own')),
     h('div', { class: 'market-bar' }, filterBar, h('div', { class: 'settings-search market-search' }, icon('search'), search)),
     note,
@@ -1775,7 +1775,7 @@ async function settingsAudit(shell) {
     'task.deleted': tr('Chat deleted'), 'task.mode': tr('Access mode changed'), 'profile.imported': tr('Profile imported'),
     'task.model': tr('Chat model changed'), 'llm.default_model': tr('Default model changed'),
     'target.tool': tr('Device tool toggled'),
-    'extension.installed': tr('Package installed'), 'extension.toggled': tr('Package enabled or disabled'), 'extension.removed': tr('Package removed'),
+    'extension.installed': tr('Plugin installed'), 'extension.toggled': tr('Plugin enabled or disabled'), 'extension.removed': tr('Plugin removed'),
     'tool.core': tr('Core tool'),
     'memory.note_created': tr('Note created'), 'memory.note_updated': tr('Note edited'), 'memory.note_deleted': tr('Note deleted'),
     'target.update': tr('Device agent update'), 'core.update': tr('Core update'),
@@ -1790,7 +1790,7 @@ async function settingsAudit(shell) {
       p.title,
       p.id && !p.task_id && p.id,
       p.created != null && tr('new notes: {0}', p.created),
-      p.source === 'custom' && tr('custom package'),
+      p.source === 'custom' && tr('custom plugin'),
       p.status && (EXEC_STATUS[p.status] || statusOf(p.status)[0]),
       p.exit_code != null && tr('code {0}', p.exit_code),
       p.mode && (MODES[p.mode]?.label || p.mode),
