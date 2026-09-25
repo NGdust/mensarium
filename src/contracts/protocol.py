@@ -33,6 +33,7 @@ class TargetPolicy(BaseModel):
 class Capabilities(BaseModel):
     tools: list[str]
     shells: list[str] = []
+    desktop: dict[str, bool | None] = {}
     sandbox_modes: list[str] = ["workspace-only"]
     browser: dict[str, bool] = {"playwright": False}
     limits: TargetLimits = TargetLimits()
@@ -164,6 +165,7 @@ class ToolOutput(BaseModel):
     stderr: str = ""
     truncated: bool = False
     artifacts: list[str] = []
+    images: list[dict[str, Any]] = Field(default_factory=list, description="Screenshots: {mime, data (base64), width, height}")
 
 
 class ExecutionResult(BaseModel):

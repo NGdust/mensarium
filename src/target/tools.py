@@ -20,6 +20,7 @@ import httpx
 from mensarium import __version__
 from mensarium.contracts.protocol import ToolOutput
 from mensarium.contracts.tools import (
+    AppOpenArgs,
     FilesCopyArgs,
     FilesDeleteArgs,
     FilesEditArgs,
@@ -33,14 +34,21 @@ from mensarium.contracts.tools import (
     FilesWriteArgs,
     GitDiffArgs,
     GitStatusArgs,
+    InputKeyArgs,
+    InputMouseArgs,
+    InputTypeArgs,
     NetHttpArgs,
     ProcessKillArgs,
     ProcessListArgs,
+    ScreenCaptureArgs,
     ShellBashArgs,
     ShellExecArgs,
+    SystemVolumeArgs,
 )
 from mensarium.shared.redaction import SECRET_DIRS, SECRET_FILE_PATTERNS, is_secret_path, redact
+from mensarium.target import desktop
 from mensarium.target.config import TargetConfig
+from mensarium.target.desktop import DesktopError
 from mensarium.tool_runtime.mcp import McpError
 
 if TYPE_CHECKING:
@@ -99,11 +107,21 @@ class Executor:
             "net.http": self.net_http,
             "shell.exec": self.shell_exec,
             "shell.bash": self.shell_bash,
+            "screen.capture": self.screen_capture,
+            "screen.windows": self.screen_windows,
+            "input.mouse": self.input_mouse,
+            "input.type": self.input_type,
+            "input.key": self.input_key,
+            "app.open": self.app_open,
+            "system.volume": self.system_volume,
             "mcp.call": self.mcp_call,
         }.get(tool)
         if handler is None:
             raise ToolError(f"unsupported tool {tool!r}")
-        return await handler(args)
+        try:
+            return await handler(args)
+        except DesktopError as e:
+            raise ToolError(str(e)) from e
 
     async def files_list(self, raw: dict[str, Any]) -> ToolOutput:
         a = FilesListArgs.model_validate(raw)
@@ -514,6 +532,41 @@ class Executor:
         out, t1 = self._limit(redact(out))
         err, t2 = self._limit(redact(err))
         return ToolOutput(exit_code=code, stdout=out, stderr=err, truncated=t1 or t2)
+
+    # ---- desktop -----------------------------------------------------------------
+
+    async def screen_capture(self, raw: dict[str, Any]) -> ToolOutput:
+        a = ScreenCaptureArgs.model_validate(raw)
+        image = await desktop.capture(a.display, a.max_width)
+        size = f"{image['width']}x{image['height']}" if image.get("width") else "unknown size"
+        note = "" if desktop.permissions().get("screen") is not False else " Screen Recording is not granted to the agent on this device, so the image may show only the wallpaper." + desktop.ACCESSIBILITY_HINT
+        return ToolOutput(exit_code=0, stdout=f"screenshot of display {a.display}, {size}, coordinates on it map to screen points.{note}", images=[image])
+
+    async def screen_windows(self, raw: dict[str, Any]) -> ToolOutput:
+        text, truncated = self._limit(redact(await desktop.windows()))
+        return ToolOutput(exit_code=0, stdout=text, truncated=truncated)
+
+    async def input_mouse(self, raw: dict[str, Any]) -> ToolOutput:
+        a = InputMouseArgs.model_validate(raw)
+        return ToolOutput(exit_code=0, stdout=await desktop.mouse(a.action, a.x, a.y, a.scroll))
+
+    async def input_type(self, raw: dict[str, Any]) -> ToolOutput:
+        a = InputTypeArgs.model_validate(raw)
+        return ToolOutput(exit_code=0, stdout=await desktop.type_text(a.text))
+
+    async def input_key(self, raw: dict[str, Any]) -> ToolOutput:
+        a = InputKeyArgs.model_validate(raw)
+        return ToolOutput(exit_code=0, stdout=await desktop.key(a.keys))
+
+    async def app_open(self, raw: dict[str, Any]) -> ToolOutput:
+        a = AppOpenArgs.model_validate(raw)
+        return ToolOutput(exit_code=0, stdout=await desktop.open_target(a.target))
+
+    async def system_volume(self, raw: dict[str, Any]) -> ToolOutput:
+        a = SystemVolumeArgs.model_validate(raw)
+        if a.action == "set" and a.level is None:
+            raise ToolError("set needs `level` from 0 to 100")
+        return ToolOutput(exit_code=0, stdout=await desktop.volume(a.action, a.level))
 
     async def shell_exec(self, raw: dict[str, Any]) -> ToolOutput:
         a = ShellExecArgs.model_validate(raw)

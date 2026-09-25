@@ -1,6 +1,9 @@
 import re
 import secrets
+import shutil
 import socket
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -410,6 +413,28 @@ def setup_target(server: str | None, code: str | None, name: str | None, start_s
     _finish_target(paths, start_service)
 
 
+def _desktop_setup() -> None:
+    """Screen and input control need OS permissions and, on macOS, cliclick for mouse moves."""
+    if sys.platform == "darwin":
+        console.print(
+            "macOS now asks to allow [bold]Screen Recording[/bold] and [bold]Accessibility[/bold] for Python: allow both so the agent "
+            "can see the screen and use the mouse and keyboard. Later: [bold]mensarium target permissions[/bold]."
+        )
+        if not shutil.which("cliclick") and shutil.which("brew") and ask(
+            questionary.confirm("Install cliclick with Homebrew so the agent can move the mouse?", default=True, style=STYLE)
+        ):
+            with console.status("brew install cliclick..."):
+                result = subprocess.run(["brew", "install", "cliclick"], capture_output=True, text=True)
+            if result.returncode == 0:
+                ok("cliclick installed")
+            else:
+                warn(f"brew install cliclick failed: {result.stderr.strip()[-300:]}")
+        return
+    missing = [name for name in ("xdotool", "wmctrl", "scrot", "grim") if not shutil.which(name)]
+    if missing:
+        console.print("For screen and input control install: " + ", ".join(missing) + " (apt install xdotool wmctrl scrot; grim on Wayland).")
+
+
 def _finish_target(paths: TargetPaths, start_service: bool | None) -> None:
     cfg = load_target_config(paths)
     if start_service is None:
@@ -424,6 +449,7 @@ def _finish_target(paths: TargetPaths, start_service: bool | None) -> None:
             ok(f"Target Agent is running ({how})")
         else:
             warn(f"Target Agent may not be running; check {service.log_file('target')}")
+    _desktop_setup()
     summary(
         "Mensarium Target Agent is ready",
         [

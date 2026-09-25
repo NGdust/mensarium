@@ -36,6 +36,7 @@ from mensarium.contracts.protocol import (
 )
 from mensarium.shared.crypto import canonical_json, sha256_hex, sign, verify
 from mensarium.shared.timeutil import now_iso, parse_iso, utcnow
+from mensarium.target import desktop
 from mensarium.target.config import TargetConfig, TargetPaths
 from mensarium.target.mcp_host import McpHost
 from mensarium.target.tools import ExecTimeout, Executor, ToolError
@@ -47,7 +48,10 @@ TOOLS = [
     "files.write", "files.edit", "files.mkdir", "files.move", "files.copy", "files.delete",
     "git.status", "git.diff", "system.info", "process.list", "process.kill", "net.ports", "net.http", "shell.exec",
 ]  # fmt: skip
-APPROVAL_REQUIRED = {"files.write", "files.edit", "files.mkdir", "files.move", "files.copy", "files.delete", "process.kill", "net.http", "shell.exec", "shell.bash"}
+APPROVAL_REQUIRED = {
+    "files.write", "files.edit", "files.mkdir", "files.move", "files.copy", "files.delete", "process.kill", "net.http",
+    "shell.exec", "shell.bash", "screen.capture", "input.mouse", "input.type", "input.key", "app.open", "system.volume",
+}  # fmt: skip
 CLOCK_SKEW = timedelta(seconds=30)
 FATAL_CLOSE_CODES = {4401, 4403}
 
@@ -89,7 +93,15 @@ class TargetAgent:
         self.audit = AuditLog(paths)
         self.mcp = McpHost(cfg, self.executor.roots, paths.plugins)
         self.executor.mcp = self.mcp
-        self.tools = TOOLS + (["shell.bash"] if cfg.allow_shell else []) + (["mcp.call"] if cfg.allow_remote_plugins else [])
+        self.tools = (
+            TOOLS
+            + (["shell.bash"] if cfg.allow_shell else [])
+            + desktop.available_tools()
+            + (["mcp.call"] if cfg.allow_remote_plugins else [])
+        )
+        self.permissions = desktop.ensure_permissions(paths.permissions, __version__)
+        if any(v is False for v in self.permissions.values()):
+            log.warning("desktop permissions missing", extra={"permissions": self.permissions})
         self.policy = TargetPolicy(
             roots=[str(r) for r in self.executor.roots],
             command_allowlist=cfg.command_allowlist,
@@ -116,6 +128,7 @@ class TargetAgent:
             capabilities=Capabilities(
                 tools=self.tools,
                 shells=[os.path.basename(os.environ.get("SHELL", "sh"))],
+                desktop=desktop.permissions(),
                 limits=self.cfg.limits,
                 remote_update=self.cfg.allow_remote_update and updater().exists(),
             ),

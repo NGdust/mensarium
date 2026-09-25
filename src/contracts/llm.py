@@ -1,11 +1,11 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Message(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
-    content: str | None = None
+    content: str | list[dict[str, Any]] | None = Field(None, description="Text, or content parts (text and image_url) for images")
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None
 

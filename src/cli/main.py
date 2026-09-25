@@ -2,6 +2,7 @@ import asyncio
 import shutil
 import socket
 import subprocess
+import sys
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -337,6 +338,39 @@ def target_pair(
 def target_plugins_cmd() -> None:
     """Show the MCP servers the Core runs on this device."""
     target_plugins()
+
+
+@target_app.command("permissions")
+def target_permissions() -> None:
+    """Ask the OS again for the desktop permissions the agent needs (screen recording, accessibility)."""
+    import json
+
+    from mensarium.target import desktop
+
+    paths = TargetPaths()
+    if not paths.config.exists():
+        fail("this machine is not paired as a target")
+        raise typer.Exit(1)
+    console.print("Desktop tools on this device: " + (", ".join(desktop.available_tools()) or "none"))
+    if sys.platform == "darwin":
+        try:
+            paths.permissions.write_text(json.dumps({"reask": True}))
+        except OSError:
+            pass
+        if service.is_running("target"):
+            service.restart("target")
+            ok("The agent restarts and macOS asks to allow Screen Recording and Accessibility for Python. Allow both in the dialogs or in System Settings -> Privacy & Security.")
+        else:
+            desktop.request_permissions()
+            ok("macOS asked for Screen Recording and Accessibility; start the agent afterwards.")
+        if not shutil.which("cliclick"):
+            warn("Mouse moves need cliclick: brew install cliclick (clicks work without it).")
+        return
+    missing = [name for name in ("xdotool", "wmctrl", "grim", "scrot") if not shutil.which(name)]
+    perms = desktop.permissions()
+    ok(f"screen capture: {'ready' if perms.get('screen') else 'no tool'}, input control: {'ready' if perms.get('input') else 'no tool'}")
+    if missing:
+        warn("Missing tools: " + ", ".join(missing) + " (apt install xdotool wmctrl scrot, or grim on Wayland)")
 
 
 @target_app.command("run")

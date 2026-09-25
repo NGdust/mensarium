@@ -31,7 +31,7 @@ def domain_name(name: str) -> str:
 
 
 def _to_wire(m: Message) -> dict[str, Any]:
-    out: dict[str, Any] = {"role": m.role, "content": m.content or ""}
+    out: dict[str, Any] = {"role": m.role, "content": m.content if m.content is not None else ""}
     if m.tool_calls:
         out["tool_calls"] = [
             {

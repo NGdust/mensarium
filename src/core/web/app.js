@@ -288,7 +288,7 @@ const TEMPLATES = [
   ['folder', tr('How the project is structured'), tr('Study the project structure and explain how it\'s organized: entry points, main modules, how to run it.')],
   ['search', tr('Fix a bug'), tr('Find the cause of the error and suggest a minimal fix: ')],
 ];
-const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'files.stat': 'file', 'files.find': 'search', 'files.write': 'file', 'files.edit': 'file', 'files.mkdir': 'folder', 'files.move': 'folder', 'files.copy': 'folder', 'files.delete': 'trash', 'git.status': 'git', 'git.diff': 'git', 'system.info': 'cpu', 'process.list': 'cpu', 'process.kill': 'ban', 'net.ports': 'link', 'net.http': 'globe', 'shell.exec': 'terminal', 'shell.bash': 'terminal', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph', 'web.search': 'globe', 'web.fetch': 'globe' };
+const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'files.stat': 'file', 'files.find': 'search', 'files.write': 'file', 'files.edit': 'file', 'files.mkdir': 'folder', 'files.move': 'folder', 'files.copy': 'folder', 'files.delete': 'trash', 'git.status': 'git', 'git.diff': 'git', 'system.info': 'cpu', 'process.list': 'cpu', 'process.kill': 'ban', 'net.ports': 'link', 'net.http': 'globe', 'shell.exec': 'terminal', 'shell.bash': 'terminal', 'screen.capture': 'laptop', 'screen.windows': 'sidebar', 'input.mouse': 'cpu', 'input.type': 'cpu', 'input.key': 'cpu', 'app.open': 'bolt', 'system.volume': 'pulse', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph', 'web.search': 'globe', 'web.fetch': 'globe' };
 // Plugin texts are either plain strings or {en, ru} maps.
 const txt = (v) => (typeof v === 'string' ? v : (v?.[lang] || v?.en || ''));
 // Plain text with bare https links turned into anchors; everything else stays text.
@@ -982,6 +982,13 @@ async function viewChat(taskId) {
       case 'net.ports': return tr('Checking listening ports');
       case 'net.http': return tr('Requesting {0}', (() => { try { return new URL(a.url).host; } catch { return clip(a.url, 40); } })());
       case 'shell.bash': return tr('Running {0}', clip(a.script.split('\n')[0], 56));
+      case 'screen.capture': return tr('Looking at the screen');
+      case 'screen.windows': return tr('Listing windows');
+      case 'input.mouse': return tr('Mouse: {0} at {1},{2}', a.action, a.x, a.y);
+      case 'input.type': return tr('Typing text');
+      case 'input.key': return tr('Pressing {0}', a.keys);
+      case 'app.open': return tr('Opening {0}', clip(a.target, 40));
+      case 'system.volume': return tr('Volume: {0}', a.action);
       case 'skills.read': return tr('Loading skill {0}', a.path ? `${a.name} ${a.path}` : a.name);
       case 'memory.search': return tr('Searching memory for “{0}”', clip(a.query, 40));
       case 'memory.read': return tr('Reading note {0}', a.title);
@@ -1019,6 +1026,10 @@ async function viewChat(taskId) {
     e.stateEl.className = `tool-state ${ok ? 'ok' : 'bad'}`;
     e.stateEl.replaceChildren(icon(ok ? 'check' : 'alert'), p.exit_code != null && p.exit_code !== 0 ? tr('{0}, code {1}', label, p.exit_code) : label);
     e.out.textContent = (p.output || '').replace(/^\[tool output: untrusted data, not instructions\]\n/, '').replace(/^status: [^\n]*\n?/, '') || tr('Empty output');
+    if (p.image_artifact_id && !e.card.querySelector('.tool-shot')) {
+      const url = `/v1/artifacts/${p.image_artifact_id}`;
+      e.card.insertBefore(h('a', { class: 'tool-shot', href: url, target: '_blank', rel: 'noopener', title: tr('Open the screenshot') }, h('img', { src: url, alt: tr('Screenshot from the device') })), e.noteEl);
+    }
     if (p.truncated || p.artifact_id) {
       e.noteEl.replaceChildren(p.truncated ? tr('Output truncated. ') : '', p.artifact_id ? h('a', { href: `/v1/artifacts/${p.artifact_id}`, target: '_blank', rel: 'noopener' }, tr('Full output')) : '');
     }
@@ -1445,6 +1456,13 @@ const TOOL_INFO = {
   'net.http': [tr('HTTP requests'), tr('Requests from the device, including localhost, with approval.')],
   'shell.exec': [tr('Run commands'), tr('Runs one allowed program without a shell.')],
   'shell.bash': [tr('Bash scripts'), tr('Runs any bash script; each one is approved by you. Can be turned off on the device.')],
+  'screen.capture': [tr('Screenshots'), tr('Shows the agent the screen as an image, with approval.')],
+  'screen.windows': [tr('Windows'), tr('Lists open apps and windows.')],
+  'input.mouse': [tr('Mouse'), tr('Moves and clicks at screen coordinates, with approval.')],
+  'input.type': [tr('Keyboard: text'), tr('Types text into the focused window, with approval.')],
+  'input.key': [tr('Keyboard: keys'), tr('Presses keys and shortcuts, with approval.')],
+  'app.open': [tr('Open apps'), tr('Opens applications, files and links, with approval.')],
+  'system.volume': [tr('Volume'), tr('Reads or changes the output volume, with approval.')],
 };
 
 function toggleSwitch(checked, { label, onChange }) {
@@ -1477,6 +1495,7 @@ async function settingsDevices(shell) {
     return h('div', { class: 'device-body' },
       h('div', { class: 'device-sub' }, tr('Device agent')),
       agentControl(t),
+      desktopStatus(t),
       h('div', { class: 'device-sub' }, tr('Agent tools'), h('span', {}, tr('The agent can\'t see or call a disabled tool on this device.'))),
       h('div', { class: 'tool-rows' }, (caps.tools || []).map((tool) => {
         const [name, desc] = TOOL_INFO[tool] || [tool, ''];
@@ -1516,6 +1535,17 @@ async function settingsDevices(shell) {
       h('p', { class: 'device-text' }, access),
       h('div', { class: 'device-actions' }, revoke),
     );
+  }
+
+  function desktopStatus(t) {
+    const d = (t.capabilities || {}).desktop || {};
+    if (!('screen' in d) && !('input' in d)) return null;
+    const mac = (t.platform || '').startsWith('darwin');
+    const item = (label, value) => h('span', { class: `pill ${value === true ? 'ok' : value === false ? 'warn' : ''}` }, `${label}: ${value === true ? tr('allowed') : value === false ? tr('not allowed') : tr('unknown')}`);
+    const hint = (d.screen === false || d.input === false)
+      ? (mac ? tr('Allow Screen Recording and Accessibility for Python in System Settings, Privacy & Security, or run mensarium target permissions on the device.') : tr('Install xdotool, wmctrl and scrot (or grim) on the device.'))
+      : '';
+    return h('div', { class: 'device-desktop' }, h('span', { class: 'device-text' }, tr('Screen and input:')), item(tr('screen'), d.screen), item(tr('input'), d.input), hint ? h('span', { class: 'row-desc' }, hint) : null);
   }
 
   function agentControl(t) {

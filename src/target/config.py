@@ -43,6 +43,7 @@ class TargetPaths:
         self.key = self.root / "keys" / "target_ed25519.pem"
         self.audit = self.root / "audit.jsonl"
         self.plugins = self.root / "plugins.json"
+        self.permissions = self.root / "permissions.json"
         self.backups = self.root / "backups"
 
     def ensure(self) -> None:

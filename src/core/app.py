@@ -473,6 +473,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
                 "disabled_tools": t.get("disabled_tools") or [],
                 "remote_update": bool(caps.get("remote_update")) and t["id"] != c.local_target_id,
                 "missing_tools": missing_tools(caps.get("tools", [])),
+                "desktop": caps.get("desktop") or {},
             },
         }
 
@@ -990,6 +991,9 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         row = await c.repo.get_artifact(artifact_id)
         if not row:
             raise HTTPException(404, "artifact not found")
+        for suffix, media in ((".jpg", "image/jpeg"), (".png", "image/png")):
+            if (image := c.paths.artifacts / f"{artifact_id}{suffix}").exists():
+                return FileResponse(image, media_type=media)
         path = c.paths.artifacts / f"{artifact_id}.txt"
         return PlainTextResponse(path.read_text(errors="replace") if path.exists() else "")
 

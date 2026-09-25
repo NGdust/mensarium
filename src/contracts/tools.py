@@ -124,6 +124,39 @@ class ShellBashArgs(_Args):
     timeout_s: int = Field(120, ge=1, le=3600)
 
 
+class ScreenCaptureArgs(_Args):
+    display: int = Field(1, ge=1, le=8, description="Display number, 1 is the main one")
+    max_width: int = Field(1440, ge=640, le=3840, description="Downscale the screenshot to this width")
+
+
+class ScreenWindowsArgs(_Args):
+    pass
+
+
+class InputMouseArgs(_Args):
+    action: Literal["move", "click", "double_click", "right_click", "scroll"] = "click"
+    x: int = Field(ge=0, description="Screen x in points, as seen on the screenshot")
+    y: int = Field(ge=0, description="Screen y in points")
+    scroll: int = Field(0, ge=-100, le=100, description="Scroll lines for the scroll action: positive is down")
+
+
+class InputTypeArgs(_Args):
+    text: str = Field(min_length=1, max_length=5000, description="Text to type into the focused window")
+
+
+class InputKeyArgs(_Args):
+    keys: str = Field(min_length=1, max_length=60, description="Key or combination: enter, escape, cmd+shift+t, ctrl+c")
+
+
+class AppOpenArgs(_Args):
+    target: str = Field(min_length=1, max_length=2000, description="Application name, file path or URL")
+
+
+class SystemVolumeArgs(_Args):
+    action: Literal["get", "set", "mute", "unmute"] = "get"
+    level: int | None = Field(None, ge=0, le=100, description="Volume percent for the set action")
+
+
 class SkillsReadArgs(_Args):
     name: str = Field(min_length=1, description="Skill name from the available_skills list in the system prompt")
     path: str | None = Field(None, max_length=300, description="Optional file inside the skill folder to read instead, e.g. references/api.md")
@@ -150,6 +183,13 @@ TOOL_ARGS: dict[str, type[_Args]] = {
     "net.http": NetHttpArgs,
     "shell.exec": ShellExecArgs,
     "shell.bash": ShellBashArgs,
+    "screen.capture": ScreenCaptureArgs,
+    "screen.windows": ScreenWindowsArgs,
+    "input.mouse": InputMouseArgs,
+    "input.type": InputTypeArgs,
+    "input.key": InputKeyArgs,
+    "app.open": AppOpenArgs,
+    "system.volume": SystemVolumeArgs,
 }
 
 class MemorySearchArgs(_Args):

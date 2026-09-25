@@ -186,6 +186,56 @@ _SPECS = [
         lambda a: f"$ {a['script'] if len(a['script']) <= 200 else a['script'][:200] + '…'}  (cwd: {a['cwd']})"
         + (f"  [stdin: {len(a['stdin'])} bytes]" if a.get("stdin") else ""),
     ),
+    ToolSpec(
+        "screen.capture",
+        "Take a screenshot of the device's screen; you receive it as an image. Use it to see what the user sees, "
+        "to find coordinates before input.mouse and to verify the result after acting.",
+        "execute",
+        TOOL_ARGS["screen.capture"],
+        lambda a: f"screenshot of display {a['display']}",
+    ),
+    ToolSpec(
+        "screen.windows",
+        "List open applications and windows with their positions and sizes, and which one is in front.",
+        "read",
+        TOOL_ARGS["screen.windows"],
+        lambda a: "list windows",
+    ),
+    ToolSpec(
+        "input.mouse",
+        "Move, click, double-click, right-click or scroll at screen coordinates taken from a screenshot.",
+        "execute",
+        TOOL_ARGS["input.mouse"],
+        lambda a: f"mouse {a['action']} at {a['x']},{a['y']}" + (f" by {a['scroll']}" if a.get("scroll") else ""),
+    ),
+    ToolSpec(
+        "input.type",
+        "Type text into the focused window on the device.",
+        "execute",
+        TOOL_ARGS["input.type"],
+        lambda a: f"type {len(a['text'])} characters",
+    ),
+    ToolSpec(
+        "input.key",
+        "Press a key or combination on the device: enter, escape, cmd+shift+t, ctrl+c.",
+        "execute",
+        TOOL_ARGS["input.key"],
+        lambda a: f"press {a['keys']}",
+    ),
+    ToolSpec(
+        "app.open",
+        "Open an application, a file or a URL on the device.",
+        "execute",
+        TOOL_ARGS["app.open"],
+        lambda a: f"open {a['target']}",
+    ),
+    ToolSpec(
+        "system.volume",
+        "Read or change the output volume of the device, or mute and unmute it.",
+        "execute",
+        TOOL_ARGS["system.volume"],
+        lambda a: f"volume {a['action']}" + (f" {a['level']}%" if a.get("level") is not None else ""),
+    ),
 ]
 
 REGISTRY: dict[str, ToolSpec] = {s.name: s for s in _SPECS}
