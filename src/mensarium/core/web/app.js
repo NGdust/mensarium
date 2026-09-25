@@ -103,7 +103,7 @@ function icon(name) {
   return span.firstChild;
 }
 // kind -> [css size, animated]; message orbs stay still so a long thread costs nothing.
-const ORB_KINDS = { sm: [22, true], md: [72, true], lg: [184, true], '': [28, false], live: [28, true] };
+const ORB_KINDS = { sm: [20, true], md: [60, true], lg: [150, true], '': [26, false], live: [26, true] };
 const orb = (kind = '') => {
   const [size, animate] = ORB_KINDS[kind];
   return createOrb(size, { animate, live: kind === 'live', className: kind });
@@ -1600,7 +1600,7 @@ async function settingsMemory(shell) {
       const phaseIdx = current ? DREAM_PHASES.findIndex(([k]) => k === current.phase) : -1;
       box.replaceChildren(...[
         h('div', { class: `dream-card${d.running ? ' running' : ''}` },
-          createOrb(72, { animate: true, live: d.running, className: 'md' }),
+          createOrb(60, { animate: true, live: d.running, className: 'md' }),
           h('div', { class: 'dream-text' },
             h('h2', {}, tr('Dreaming')),
             h('p', {}, tr('At night the agent goes through new chats: in light sleep it gathers what you said and what it did, in REM it looks for what matters and connections to what it already knows, in deep sleep it consolidates into memory only what passed the importance threshold, and in the morning it leaves an entry in the diary.')),
