@@ -1,10 +1,12 @@
+import os
 import re
+import shutil
 from typing import Any
 
 from mensarium.core.config import CoreConfig, CorePaths, ProviderConfig, read_secret, save_config, write_secret
 from mensarium.llm_providers.base import LLMError
-from mensarium.llm_providers.factory import PROVIDER_KINDS, build_provider
-from mensarium.llm_providers.openai_compat import OpenAICompatibleProvider
+from mensarium.llm_providers.factory import PROVIDER_KINDS, AnyProvider, build_provider, is_cli
+from mensarium.llm_providers.local_cli import detect_local_clis_cached
 from mensarium.llm_providers.router import ProviderRouter
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,40}$")
@@ -30,7 +32,7 @@ class Providers:
     def kind(pid: str, p: ProviderConfig) -> str:
         return p.kind or pid
 
-    def _client(self, pid: str, p: ProviderConfig, api_key: str | None = None) -> OpenAICompatibleProvider:
+    def _client(self, pid: str, p: ProviderConfig, api_key: str | None = None) -> AnyProvider:
         return build_provider(
             pid,
             kind=self.kind(pid, p),
@@ -42,7 +44,7 @@ class Providers:
             vision_model=p.vision_model,
         )
 
-    def active_client(self) -> OpenAICompatibleProvider:
+    def active_client(self) -> AnyProvider:
         pid = self.cfg.llm.active_provider
         return self._client(pid, self.cfg.llm.providers[pid])
 
@@ -61,13 +63,19 @@ class Providers:
                     "vision_model": p.vision_model or "",
                     "has_key": bool(read_secret(self.paths, p.api_key_ref)),
                     "needs_key": bool(meta.get("needs_key")),
+                    "transport": meta.get("transport", "http"),
                     "timeout_s": p.timeout_s,
                     "max_retries": p.max_retries,
                     "active": pid == self.cfg.llm.active_provider,
                 }
             )
-        kinds = [{"kind": k, **v} for k, v in PROVIDER_KINDS.items()]
+        kinds = [{"kind": k, "transport": "http", **v} for k, v in PROVIDER_KINDS.items()]
         return {"active": self.cfg.llm.active_provider, "providers": providers, "kinds": kinds}
+
+    async def detected(self) -> list[dict[str, Any]]:
+        """Local agent CLIs on this host that are not connected as a provider yet."""
+        connected = {self.kind(pid, p) for pid, p in self.cfg.llm.providers.items()}
+        return [cli.view() for cli in await detect_local_clis_cached() if cli.kind not in connected]
 
     def save(
         self,
@@ -86,7 +94,10 @@ class Providers:
             raise ProviderError("provider id: lowercase letters, digits, - and _")
         if kind not in PROVIDER_KINDS:
             raise ProviderError(f"unknown provider kind {kind!r}")
-        if not base_url.startswith(("http://", "https://")):
+        if is_cli(kind):
+            if not (shutil.which(base_url) or os.access(base_url, os.X_OK)):
+                raise ProviderError(f"{base_url} is not an executable command on the Core host")
+        elif not base_url.startswith(("http://", "https://")):
             raise ProviderError("the address must start with http:// or https://")
         if not default_model.strip():
             raise ProviderError("choose a default model")
@@ -128,6 +139,13 @@ class Providers:
         """List the models with these settings; an empty key means the key already saved for `pid`."""
         if kind not in PROVIDER_KINDS:
             raise ProviderError(f"unknown provider kind {kind!r}")
+        if is_cli(kind):
+            probe_cli = build_provider(pid or kind, kind=kind, base_url=base_url, default_model="", api_key=None, timeout_s=15, max_retries=0)
+            health = await probe_cli.healthcheck()
+            await probe_cli.aclose()
+            if not health.ok:
+                raise ProviderError(health.detail)
+            return [m.id for m in await probe_cli.list_models()]
         stored = self.cfg.llm.providers.get(pid or "")
         key = api_key or (read_secret(self.paths, stored.api_key_ref) if stored else None)
         probe = ProviderConfig(kind=kind, base_url=base_url.rstrip("/"), default_model="", timeout_s=15, max_retries=0)

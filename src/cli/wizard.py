@@ -32,7 +32,8 @@ from mensarium.core.config import (
     save_config,
     write_secret,
 )
-from mensarium.llm_providers.factory import PROVIDER_KINDS
+from mensarium.llm_providers.factory import PROVIDER_KINDS, is_cli
+from mensarium.llm_providers.local_cli import detect_local_clis
 from mensarium.shared.crypto import fingerprint, load_or_create_private_key, public_key_b64
 
 STYLE = questionary.Style(
@@ -130,10 +131,20 @@ def setup_core(start_service: bool | None = None) -> None:
     ).rstrip("/")
 
     step(2, total, "LLM provider")
+    with console.status("Looking for Claude Code and Codex on this machine..."):
+        detected = {cli.kind: cli for cli in detect_local_clis()}
+    local_choices = [
+        questionary.Choice(
+            f"{cli.title} on this machine (v{cli.version or '?'}, {'logged in' if cli.logged_in else 'not logged in'}, no API key needed)",
+            cli.kind,
+        )
+        for cli in detected.values()
+    ]
     provider = ask(
         questionary.select(
             "Where does the model run?",
             choices=[
+                *local_choices,
                 questionary.Choice("Ollama Cloud (ollama.com, API key)", "ollama_cloud"),
                 questionary.Choice("Local Ollama (this machine or LAN)", "ollama_local"),
                 questionary.Choice("llama.cpp server", "llama_cpp"),
@@ -146,26 +157,33 @@ def setup_core(start_service: bool | None = None) -> None:
         )
     )
     kind = PROVIDER_KINDS[provider]
-    base_url = ask(questionary.text("Provider base URL:", default=str(kind["base_url"]), style=STYLE)).rstrip("/")
     api_key: str | None = None
     api_key_ref: str | None = None
-    secret_name = "ollama-api-key" if provider == "ollama_cloud" else f"provider-{provider}-key"
-    current = read_secret(paths, f"secret://{secret_name}") if existing else None
-    hint = " (leave empty to keep the current one)" if current else "" if kind["needs_key"] else " (leave empty if the server needs none)"
-    entered = ask(questionary.password(f"{kind['title']} API key{hint}:", style=STYLE)).strip()
-    api_key = entered or current
-    if kind["needs_key"] and not api_key:
-        fail(f"An API key is required for {kind['title']} ({kind['key_url']}).")
-        raise typer.Exit(1)
-    if api_key:
-        api_key_ref = f"secret://{secret_name}"
-
     models: list[str] = []
-    with console.status("Checking the provider and loading models..."):
-        try:
-            models = fetch_models(base_url, api_key)
-        except httpx.HTTPError as e:
-            warn(f"Could not load models: {e}")
+    if is_cli(provider):
+        cli = detected.get(provider)
+        base_url = cli.path if cli else ask(questionary.text(f"Path to the {kind['title']} command:", default=str(kind["base_url"]), style=STYLE))
+        if cli and cli.logged_in is False:
+            warn(f"{cli.title} is not logged in; run `{cli.path}` here and log in, otherwise the agent cannot think.")
+        models = cli.models if cli else []
+        kind = {**kind, "default_model": (cli.default_model if cli else kind["default_model"])}
+    else:
+        base_url = ask(questionary.text("Provider base URL:", default=str(kind["base_url"]), style=STYLE)).rstrip("/")
+        secret_name = "ollama-api-key" if provider == "ollama_cloud" else f"provider-{provider}-key"
+        current = read_secret(paths, f"secret://{secret_name}") if existing else None
+        hint = " (leave empty to keep the current one)" if current else "" if kind["needs_key"] else " (leave empty if the server needs none)"
+        entered = ask(questionary.password(f"{kind['title']} API key{hint}:", style=STYLE)).strip()
+        api_key = entered or current
+        if kind["needs_key"] and not api_key:
+            fail(f"An API key is required for {kind['title']} ({kind['key_url']}).")
+            raise typer.Exit(1)
+        if api_key:
+            api_key_ref = f"secret://{secret_name}"
+        with console.status("Checking the provider and loading models..."):
+            try:
+                models = fetch_models(base_url, api_key)
+            except httpx.HTTPError as e:
+                warn(f"Could not load models: {e}")
     if models:
         ok(f"Provider reachable, {len(models)} models available")
         default_model = str(kind["default_model"]) if kind["default_model"] in models else models[0]
@@ -197,8 +215,8 @@ def setup_core(start_service: bool | None = None) -> None:
                     base_url=base_url,
                     default_model=model,
                     api_key_ref=api_key_ref,
-                    timeout_s=90 if kind["needs_key"] else 180,
-                    max_retries=2 if kind["needs_key"] else 0,
+                    timeout_s=180 if (is_cli(provider) or not kind["needs_key"]) else 90,
+                    max_retries=1 if is_cli(provider) else 2 if kind["needs_key"] else 0,
                 )
             },
         ),

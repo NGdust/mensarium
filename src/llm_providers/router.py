@@ -2,7 +2,10 @@ import asyncio
 from typing import Any
 
 from mensarium.contracts.llm import ChatRequest, ModelInfo, ModelResponse, ProviderHealth, ToolDefinition
+from mensarium.llm_providers.cli_provider import CliProvider
 from mensarium.llm_providers.openai_compat import OpenAICompatibleProvider
+
+AnyProvider = OpenAICompatibleProvider | CliProvider
 
 RETIRE_AFTER_S = 600
 
@@ -10,7 +13,7 @@ RETIRE_AFTER_S = 600
 class ProviderRouter:
     """The active provider behind a stable object, so the provider can change while the Core runs."""
 
-    def __init__(self, provider: OpenAICompatibleProvider) -> None:
+    def __init__(self, provider: AnyProvider) -> None:
         self.current = provider
         self._retiring: set[asyncio.TimerHandle] = set()
 
@@ -34,7 +37,7 @@ class ProviderRouter:
     def vision_model(self) -> str | None:
         return self.current.vision_model
 
-    def swap(self, provider: OpenAICompatibleProvider) -> None:
+    def swap(self, provider: AnyProvider) -> None:
         """Requests already in flight finish on the old client, which is closed a while later."""
         old, self.current = self.current, provider
         loop = asyncio.get_running_loop()

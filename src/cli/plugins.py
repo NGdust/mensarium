@@ -28,7 +28,7 @@ def _api(method: str, path: str, body: Any = None, content: bytes | None = None)
     if not paths.config.exists():
         raise ApiError("the Core is not installed on this machine; run this on the Core host")
     cfg = load_config(paths)
-    token = read_secret(paths, "secret://admin-token") or ""
+    token = read_secret(paths, "secret://core-cli-token") or ""
     headers = {"Authorization": f"Bearer {token}"}
     if content is not None:
         headers["Content-Type"] = "text/plain"

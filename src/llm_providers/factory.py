@@ -1,6 +1,9 @@
+from mensarium.llm_providers.cli_provider import ClaudeCodeProvider, CliProvider, CodexCliProvider
 from mensarium.llm_providers.openai_compat import OpenAICompatibleProvider
 
-# All of them speak the OpenAI-compatible /v1 API; the kind only sets defaults and whether a key is needed.
+AnyProvider = OpenAICompatibleProvider | CliProvider
+
+# HTTP kinds speak the OpenAI-compatible /v1 API; CLI kinds run a local agent binary (`base_url` holds its path).
 PROVIDER_KINDS: dict[str, dict[str, str | bool]] = {
     "ollama_cloud": {"title": "Ollama Cloud", "base_url": "https://ollama.com/v1", "default_model": "gpt-oss:120b", "vision_model": "gemma4", "needs_key": True, "key_url": "https://ollama.com/settings/keys"},
     "ollama_local": {"title": "Ollama", "base_url": "http://127.0.0.1:11434/v1", "default_model": "qwen3:8b", "vision_model": "gemma4", "needs_key": False, "key_url": ""},
@@ -9,7 +12,14 @@ PROVIDER_KINDS: dict[str, dict[str, str | bool]] = {
     "openai": {"title": "OpenAI", "base_url": "https://api.openai.com/v1", "default_model": "gpt-4.1-mini", "needs_key": True, "key_url": "https://platform.openai.com/api-keys"},
     "openrouter": {"title": "OpenRouter", "base_url": "https://openrouter.ai/api/v1", "default_model": "openai/gpt-oss-120b", "needs_key": True, "key_url": "https://openrouter.ai/keys"},
     "openai_compatible": {"title": "OpenAI-compatible", "base_url": "http://127.0.0.1:8000/v1", "default_model": "", "needs_key": False, "key_url": ""},
+    "claude_code": {"title": "Claude Code (local)", "base_url": "claude", "default_model": "sonnet", "needs_key": False, "key_url": "", "transport": "cli"},
+    "codex_cli": {"title": "Codex CLI (local)", "base_url": "codex", "default_model": "", "needs_key": False, "key_url": "", "transport": "cli"},
 }
+CLI_KINDS = {"claude_code": ClaudeCodeProvider, "codex_cli": CodexCliProvider}
+
+
+def is_cli(kind: str) -> bool:
+    return kind in CLI_KINDS
 PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
     kind: {"base_url": str(v["base_url"]), "default_model": str(v["default_model"])} for kind, v in PROVIDER_KINDS.items()
 }
@@ -25,9 +35,11 @@ def build_provider(
     max_retries: int,
     kind: str | None = None,
     vision_model: str | None = None,
-) -> OpenAICompatibleProvider:
+) -> AnyProvider:
     if (kind or name) not in PROVIDER_KINDS:
         raise ValueError(f"unknown LLM provider kind {kind or name!r}")
+    if cls := CLI_KINDS.get(kind or name):
+        return cls(name, command=base_url, default_model=default_model, timeout_s=timeout_s, max_retries=max_retries)
     return OpenAICompatibleProvider(
         name=name,
         base_url=base_url,

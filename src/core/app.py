@@ -1,6 +1,8 @@
 import asyncio
+import hmac
 import json
 import re
+import secrets
 import shlex
 import shutil
 import time
@@ -28,7 +30,7 @@ from mensarium.core.automations import AutomationManager
 from mensarium.core.catalog import Catalog
 from mensarium.core.channels import ChannelError, ChannelManager
 from mensarium.core.client_hub import ClientHub, TargetUnavailable
-from mensarium.core.config import CoreConfig, CorePaths, load_config, save_config
+from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secret, save_config, write_secret
 from mensarium.core.db import Database
 from mensarium.core.dreaming import Dreamer, DreamError
 from mensarium.core.events import EventBus
@@ -62,6 +64,7 @@ class Core:
     providers: Providers
     workspace_id: str
     core_public_key: str
+    cli_token: str
     pair_failures: deque[float]
     catalog: Catalog
     plugins: PluginManager
@@ -217,6 +220,10 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         paths.ensure()
         cfg = load_config(paths)
+        cli_token = read_secret(paths, "secret://core-cli-token")
+        if not cli_token:
+            cli_token = secrets.token_urlsafe(24)
+            write_secret(paths, "core-cli-token", cli_token)
         providers = Providers(cfg, paths)
         provider = ProviderRouter(providers.active_client())
         providers.router = provider
@@ -264,6 +271,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             providers=providers,
             workspace_id=workspace_id,
             core_public_key=public_key_b64(key),
+            cli_token=cli_token,
             pair_failures=deque(maxlen=50),
             catalog=catalog,
             plugins=plugins,
@@ -293,10 +301,15 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         return request.app.state.core  # type: ignore[no-any-return]
 
     def auth(request: Request) -> Core:
-        """Only requests relayed by a paired client's gateway reach the API."""
-        if not request.scope.get(GATEWAY_SCOPE_KEY):
-            raise HTTPException(401, "authentication required")
-        return core(request)
+        """Requests relayed by a paired client's gateway, or the Core-host CLI on loopback with the local token."""
+        c = core(request)
+        if request.scope.get(GATEWAY_SCOPE_KEY):
+            return c
+        header = request.headers.get("authorization", "")
+        local = request.client is not None and request.client.host in ("127.0.0.1", "::1")
+        if local and header.lower().startswith("bearer ") and hmac.compare_digest(header[7:], c.cli_token):
+            return c
+        raise HTTPException(401, "authentication required")
 
     def task_error(e: TaskError) -> HTTPException:
         return HTTPException(404 if "not found" in str(e) else 409, str(e))
