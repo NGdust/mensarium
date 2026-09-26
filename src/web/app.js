@@ -131,6 +131,7 @@ const ICONS = {
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
   gauge: '<path d="M12 14 16 8"/><path d="M4 18a9 9 0 1 1 16 0"/><circle cx="12" cy="14" r="1"/>',
   alert: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
+  exclaim: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5h.01"/>',
   ban: '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
   check: '<path d="m5 12 5 5 9-10"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
@@ -3377,6 +3378,14 @@ async function viewProject(id) {
   let alive = true;
   viewCleanups.push(() => { alive = false; });
   const deleteBtn = h('button', { class: 'btn btn-danger', onclick: () => deleteProject(p, () => { alive = false; }) }, icon('trash'), tr('Delete'));
+  // Source details live in a modal behind the small exclamation-mark button in the page actions.
+  const infoBody = h('div', { class: 'rows' });
+  const fillInfo = (...rows) => { infoBody.replaceChildren(...rows.flat().filter(Boolean)); return null; };
+  const infoBtn = h('button', { class: 'icon-btn', title: tr('About the project'), 'aria-label': tr('About the project'), onclick: () => openModal(
+    h('div', { class: 'modal-head' }, h('h2', {}, tr('About the project')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
+    infoBody,
+    h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, tr('Close'))),
+  ) }, icon('exclaim'));
   let shown = '';
 
   const sync = async (btn) => {
@@ -3402,20 +3411,20 @@ async function viewProject(id) {
     newChatBtn.classList.toggle('hidden', !ready);
     const reread = busy || !p.source_online ? null
       : h('button', { class: 'icon-btn', title: p.git_url ? tr('Pull from origin and read again') : tr('Read the folder again'), 'aria-label': p.git_url ? tr('Pull from origin and read again') : tr('Read the folder again'), onclick: (e) => sync(e.currentTarget) }, icon('refresh'));
+    fillInfo(
+      row(tr('Device'), null, [h('span', { class: `dot${p.source_online ? ' ok' : ''}`, title: p.source_online ? null : tr('offline') }), p.source_name || p.source_target_id,
+        p.source_online ? null : h('span', { class: 'market-meta' }, tr('offline'))]),
+      p.git_url ? row(tr('Repository'), null, p.git_url, true) : null,
+      row(p.git_url ? tr('Clone') : tr('Folder'), null, p.source_path, true),
+      row(tr('Last read'), null, [relTime(p.last_sync_at), reread]),
+      ready && p.kind === 'repo' ? row(tr('Branch on the device'), null, p.default_branch || '—', true) : null,
+      skipped.length ? row(tr('Skipped large files'), `${tp('{0} file|{0} files', skipped.length)} · ${tr('over {0} MB each', p.file_limit_mb || DEFAULT_FILE_LIMIT_MB)}`, h('div', { class: 'skipped' }, [...skipped.slice(0, 20), skipped.length > 20 ? '…' : null].filter(Boolean).join('\n')), true) : null);
     body.replaceChildren(...[
       busy ? h('div', { class: 'note-banner busy', role: 'status' }, h('span', { class: 'spinner' }), h('span', {}, p.git_url && !p.snapshot_sha ? tr('Cloning the repository…') : tr('Reading the folder…'))) : null,
       !busy && p.status === 'error'
         ? h('div', { class: 'note-banner', role: 'alert' }, icon('alert'), h('span', {}, p.error || tr('Could not read the folder')),
           p.source_online ? h('button', { class: 'btn btn-sm', onclick: (e) => sync(e.currentTarget) }, icon('refresh'), tr('Retry')) : null)
         : null,
-      section(tr('Source'), null, h('div', { class: 'rows' },
-        row(tr('Device'), null, [h('span', { class: `dot${p.source_online ? ' ok' : ''}`, title: p.source_online ? null : tr('offline') }), p.source_name || p.source_target_id,
-          p.source_online ? null : h('span', { class: 'market-meta' }, tr('offline'))]),
-        p.git_url ? row(tr('Repository'), null, p.git_url, true) : null,
-        row(p.git_url ? tr('Clone') : tr('Folder'), null, p.source_path, true),
-        row(tr('Last read'), null, [relTime(p.last_sync_at), reread]),
-        ready && p.kind === 'repo' ? row(tr('Branch on the device'), null, p.default_branch || '—', true) : null,
-        skipped.length ? row(tr('Skipped large files'), `${tp('{0} file|{0} files', skipped.length)} · ${tr('over {0} MB each', p.file_limit_mb || DEFAULT_FILE_LIMIT_MB)}`, h('div', { class: 'skipped' }, [...skipped.slice(0, 20), skipped.length > 20 ? '…' : null].filter(Boolean).join('\n')), true) : null)),
       ready || chats.length
         ? section(tr('Chats'), null, chats.length
           ? h('div', { class: 'rows' }, chats.map(chatRow))
@@ -3439,7 +3448,7 @@ async function viewProject(id) {
     if (alive) show(next);
   };
 
-  page(shell, p.name, desc, [newChatBtn, deleteBtn], body);
+  page(shell, p.name, desc, [infoBtn, newChatBtn, deleteBtn], body);
   show(p);
   const iv = setInterval(() => load().catch(() => {}), 3000);
   viewCleanups.push(() => clearInterval(iv));

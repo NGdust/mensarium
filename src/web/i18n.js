@@ -870,6 +870,7 @@ const RU = {
   'Could not read the folder': 'Не удалось прочитать папку',
   'Read the folder again': 'Прочитать папку заново',
   'Retry': 'Повторить',
+  'About the project': 'О проекте',
   'Source': 'Источник',
   'Last read': 'Последнее чтение',
   'Branch on the device': 'Ветка на устройстве',
