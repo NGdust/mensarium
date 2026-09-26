@@ -52,7 +52,6 @@ class ChannelManager:
         self.workspace_id = workspace_id
         self.orchestrator = orchestrator
         self.bus = bus
-        self.default_target_id: str | None = None
         self.telegram: TelegramChannel | None = None
 
     # ---- lifecycle ----------------------------------------------------------
@@ -164,8 +163,6 @@ class ChannelManager:
     async def pick_target(self, cfg: TelegramConfig) -> str | None:
         if cfg.target_id:
             return cfg.target_id
-        if self.default_target_id:
-            return self.default_target_id
         for t in await self.repo.list_targets():
             if t["status"] != "revoked":
                 return str(t["id"])

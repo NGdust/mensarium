@@ -366,13 +366,12 @@ const policyText = (r) => {
 const reasonText = (r) => REASONS[r] || r;
 const statusOf = (s) => STATUS[s] || [s, '', false];
 const isRunning = (s) => statusOf(s)[2];
-const isLocal = (t) => t && t.id === state.system?.local_target_id;
 const isThisDevice = (t) => t && t.id === state.gateway?.target_id;
 const fullAccessOf = (t) => t?.capabilities?.full_access || 'disabled';
 const fullAccessBlock = (t) => (fullAccessOf(t) === 'outdated'
   ? tr('The device agent is outdated (v{0}). Update it in Settings → Devices.', t.agent_version)
   : tr('Disabled on the device: allow_full_access in its config.'));
-const devices = () => state.targets.filter((t) => t.status !== 'revoked').sort((a, b) => isLocal(b) - isLocal(a));
+const devices = () => state.targets.filter((t) => t.status !== 'revoked').sort((a, b) => isThisDevice(b) - isThisDevice(a));
 const taskTitle = (t) => ((t.input || '').split('\n')[0] || tr('Untitled')).slice(0, 80);
 
 // ---------- overlays ----------
@@ -474,8 +473,7 @@ function languageSwitch(compact = false) {
 function showLogin() {
   cleanupAll();
   state.shell = null;
-  const gw = Boolean(state.gateway);
-  const label = gw ? tr('Gateway token') : tr('Admin token');
+  const label = tr('Gateway token');
   const input = h('input', { type: 'password', placeholder: label, autocomplete: 'current-password', 'aria-label': label });
   const btn = h('button', { class: 'btn btn-primary' }, tr('Sign in'));
   const submit = async () => {
@@ -494,8 +492,7 @@ function showLogin() {
   $app.replaceChildren(h('div', { class: 'login' }, h('div', { class: 'login-lang' }, languageSwitch(true)), h('div', { class: 'login-card' },
     orb('md'),
     h('h1', {}, 'Mensarium'),
-    gw ? h('p', {}, tr('The token is issued by the command '), h('code', {}, 'mensarium client gateway token'), tr(' on this machine.'))
-      : h('p', {}, tr('The token is issued by the command '), h('code', {}, 'mensarium core token'), tr(' on the Core server.')),
+    h('p', {}, tr('The token is issued by the command '), h('code', {}, 'mensarium client gateway token'), tr(' on this machine.')),
     input, btn,
   )));
   input.focus();
@@ -861,7 +858,7 @@ async function viewNewChat() {
   const shell = ensureAppShell();
   shell.setActive(null);
   const online = devices().filter((t) => t.status === 'online');
-  let selected = online.find((t) => t.id === localStorageGet('target')) || online.find(isLocal) || online[0] || null;
+  let selected = online.find((t) => t.id === localStorageGet('target')) || online.find(isThisDevice) || online[0] || null;
 
   const chipLabel = h('span', { class: 'chip-label' });
   const chipDot = h('span', { class: 'dot' });
@@ -874,7 +871,7 @@ async function viewNewChat() {
     const items = devices().map((t) => h('button', {
       class: `menu-item${selected && t.id === selected.id ? ' selected' : ''}`, disabled: t.status !== 'online',
       onclick: () => { selected = t; localStorageSet('target', t.id); renderChip(); modeCtl.refresh(); hint.textContent = hintText(); banner.replaceChildren(outdatedBanner(selected) || ''); closeLayer(); },
-    }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.name, h('span', { class: 'popover-sub' }, isLocal(t) ? tr('Core server') : t.status === 'online' ? t.platform.split('-')[0] : tr('offline'))));
+    }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.name, h('span', { class: 'popover-sub' }, isThisDevice(t) ? tr('this device') : t.status === 'online' ? t.platform.split('-')[0] : tr('offline'))));
     items.push(h('div', { class: 'menu-sep' }), h('button', { class: 'menu-item', onclick: () => { closeLayer(); openPairing(); } }, icon('link'), tr('Pair a new device')));
     openPopover(targetChip, items);
   }
@@ -929,7 +926,7 @@ async function viewNewChat() {
 function outdatedBanner(t) {
   const s = state.system;
   const caps = t?.capabilities || {};
-  if (!t || !s || isLocal(t) || !t.agent_version || t.agent_version === s.version || !(caps.missing_tools || []).length) return null;
+  if (!t || !s || !t.agent_version || t.agent_version === s.version || !(caps.missing_tools || []).length) return null;
   const pending = state.updates.get(t.id);
   const text = h('span', {}, tr('The agent on “{0}” is version {1}, Core is {2}: some tools are unavailable until it updates.', t.name, t.agent_version, s.version));
   if (pending) return h('div', { class: 'note-banner' }, icon('refresh'), h('span', {}, tr('“{0}” is updating to {1}…', t.name, pending.version)));
@@ -1483,13 +1480,12 @@ async function settingsOverview(shell) {
   page(shell, tr('Overview'), tr('Where the main agent is reachable, and how to check that devices are talking to it.'), logout,
     h('div', { class: 'hero' }, orb('md'), h('div', { class: 'hero-text' }, h('h2', {}, 'Mensarium Core'), h('p', {}, tr('Version {0}', s.version))), coreUpdate),
     section(tr('Connection'), null, h('div', { class: 'rows' },
-      row(tr('Core address'), tr('Used by the browser and devices.'), cmdValue(url), true),
+      row(tr('Core address'), tr('Clients connect to it; the web UI runs on the clients.'), cmdValue(url), true),
       row(tr('Key fingerprint'), tr('Check it against what the installer showed on the device during pairing.'), s.core_key_fingerprint, true),
     )),
     section(tr('Maintenance'), tr('Commands run on the Core server.'), h('div', { class: 'rows' },
       row(tr('Update Mensarium'), tr('Downloads the latest version and restarts the service.'), cmdValue('mensarium update'), true),
-      state.gateway ? row(tr('Login token'), tr('Shows the gateway token; run it on this machine.'), cmdValue('mensarium client gateway token'), true)
-        : row(tr('Login token'), tr('Shows the admin token.'), cmdValue('mensarium core token'), true),
+      row(tr('Login token'), tr('Shows the gateway token; run it on this machine.'), cmdValue('mensarium client gateway token'), true),
     )),
     section(tr('Language'), tr('Interface language. The agent answers in the language you write to it.'), languageSwitch()),
     section(tr('Backup'), tr('An archive with the database, keys, secrets, and settings, encrypted with a password you set. The same archive is used to move Core to another server.'), h('div', { class: 'rows' },
@@ -1737,7 +1733,6 @@ async function settingsDevices(shell) {
     const caps = t.capabilities || {};
     const outdated = t.agent_version && s.version && t.agent_version !== s.version;
     const pending = state.updates.get(t.id);
-    if (isLocal(t)) return h('p', { class: 'device-text' }, tr('Version {0}. The built-in device updates along with Core.', t.agent_version));
     if (pending) return h('div', { class: 'status' }, h('span', { class: 'dot accent live' }), tr('Updating to {0}: the agent downloads the version from Core and restarts', pending.version));
     if (!outdated) return h('p', { class: 'device-text' }, tr('Version {0}, same as Core.', t.agent_version));
     if (!caps.remote_update) {
@@ -1782,7 +1777,6 @@ async function settingsDevices(shell) {
         icon('chevron'),
         h('div', { class: 'row-text' },
           h('div', { class: 'row-title' }, t.name,
-            isLocal(t) ? h('span', { class: 'pill accent', title: tr('The machine Core is installed on. Always connected.') }, 'Core') : null,
             isThisDevice(t) ? h('span', { class: 'pill', title: tr('The machine this web UI runs on.') }, tr('This device')) : null,
             t.gateway_online && !isThisDevice(t) ? h('span', { class: 'pill', title: tr('This device runs a gateway: the web UI is open there too.') }, tr('gateway')) : null,
             state.updates.has(t.id) ? h('span', { class: 'pill accent' }, tr('updating'))
@@ -1931,9 +1925,8 @@ async function settingsChannels(shell) {
       sections.push(section(tr('Bot token'), tr('Create a bot in @BotFather, copy its token and paste it here. The token stays on the Core server.'),
         h('div', { class: 'rows' }, h('div', { class: 'row' }, h('div', { class: 'row-text' }, h('div', { class: 'secret-field' }, input, btn))))));
     } else {
-      const local = data.devices.find((d) => d.id === data.local_target_id);
       const deviceSel = h('select', { 'aria-label': tr('Device'), onchange: () => save({ target_id: deviceSel.value }, tr('Saved')) },
-        h('option', { value: '', selected: !tg.target_id }, local ? tr('{0} (default)', local.name) : tr('First available device')),
+        h('option', { value: '', selected: !tg.target_id }, tr('First available device')),
         data.devices.map((d) => h('option', { value: d.id, selected: d.id === tg.target_id }, d.online ? d.name : `${d.name} · ${tr('offline')}`)));
       const modeSel = h('select', { 'aria-label': tr('Access mode'), onchange: () => save({ mode: modeSel.value }, tr('Saved')) },
         Object.entries(MODES).map(([k, m]) => h('option', { value: k, selected: k === tg.mode }, m.label)));
@@ -2879,7 +2872,7 @@ async function viewAutomationEditor(id) {
   };
 
   const devs = data.devices;
-  const fallback = devs.find((d) => d.id === data.local_target_id) || devs.find((d) => d.online) || devs[0];
+  const fallback = devs.find((d) => d.id === state.gateway?.target_id && d.online) || devs.find((d) => d.online) || devs[0];
   const device = h('select', { 'aria-label': tr('Device') },
     a && !devs.some((d) => d.id === a.target_id) ? h('option', { value: a.target_id, selected: true, disabled: true }, a.target_name || a.target_id) : null,
     devs.map((d) => h('option', { value: d.id, selected: d.id === (a?.target_id || fallback?.id) }, d.online ? d.name : `${d.name} · ${tr('offline')}`)));

@@ -17,7 +17,7 @@ from mensarium.cli.plugins import mcp_app, plugins_app, target_plugins
 from mensarium.cli.skills import skills_app
 from mensarium.cli.ui import console, fail, ok, summary, use_select_event_loop, warn
 from mensarium.client.config import ClientConfig, ClientPaths, load_client_config
-from mensarium.core.config import CorePaths, load_config, read_secret
+from mensarium.core.config import CorePaths, load_config
 from mensarium.shared.logging import setup_logging
 from mensarium.shared.paths import mensarium_home
 
@@ -205,16 +205,6 @@ def core_serve(
         log_config=None,
         ws_max_size=64 * 1024 * 1024,
     )
-
-
-@core_app.command("token")
-def core_token() -> None:
-    """Print the admin token for the web UI."""
-    token = read_secret(CorePaths(), "secret://admin-token")
-    if not token:
-        fail("Core is not configured")
-        raise typer.Exit(1)
-    console.print(token)
 
 
 @core_app.command("pair-code")

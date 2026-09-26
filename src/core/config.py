@@ -32,13 +32,6 @@ class ExecutionConfig(BaseModel):
     request_ttl_s: int = 120
 
 
-class LocalTargetConfig(BaseModel):
-    enabled: bool = True
-    roots: list[str] = Field(default_factory=lambda: ["~"])
-    allow_full_access: bool = True
-    allow_shell: bool = True
-
-
 class PluginsConfig(BaseModel):
     catalog_url: str | None = "https://mensarium.com/dist/plugins.json"
 
@@ -47,7 +40,6 @@ class CoreConfig(BaseModel):
     update_url: str = "https://mensarium.com"
     server: ServerConfig = Field(default_factory=ServerConfig)
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)
-    local_target: LocalTargetConfig = Field(default_factory=LocalTargetConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     log_level: str = "INFO"
@@ -73,7 +65,7 @@ class CorePaths:
 
 def load_config(paths: CorePaths) -> CoreConfig:
     if not paths.config.exists():
-        raise FileNotFoundError(f"Core is not configured: {paths.config} not found. Run `mensarium setup`.")
+        raise FileNotFoundError(f"Core is not configured: {paths.config} not found. Run `mensarium core`.")
     return CoreConfig.model_validate(yaml.safe_load(paths.config.read_text()) or {})
 
 

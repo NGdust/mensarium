@@ -1,26 +1,22 @@
 import asyncio
-import hmac
 import json
 import re
 import shlex
+import shutil
 import time
 from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from importlib import resources
-from pathlib import Path
 from typing import Any, Literal
 
 import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
 from mensarium import __version__
 from mensarium.agent_core.profile import AgentProfile, builtin_profiles
-from mensarium.client.agent import ClientAgent
 from mensarium.contracts.automations import AutomationCreate, AutomationError, AutomationPatch, Schedule
 from mensarium.contracts.gateway import GATEWAY_SCOPE_KEY
 from mensarium.contracts.plugins import Plugin
@@ -32,11 +28,10 @@ from mensarium.core.automations import AutomationManager
 from mensarium.core.catalog import Catalog
 from mensarium.core.channels import ChannelError, ChannelManager
 from mensarium.core.client_hub import ClientHub, TargetUnavailable
-from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secret, save_config
+from mensarium.core.config import CoreConfig, CorePaths, load_config, save_config
 from mensarium.core.db import Database
 from mensarium.core.dreaming import Dreamer, DreamError
 from mensarium.core.events import EventBus
-from mensarium.core.local_target import ensure_local_target, local_target_paths
 from mensarium.core.memory import KINDS, Memory, NoteError
 from mensarium.core.orchestrator import Orchestrator, TaskError, full_access, missing_tools
 from mensarium.core.plugins import PluginError, PluginManager
@@ -52,7 +47,6 @@ from mensarium.shared.versions import parse_version
 from mensarium.tool_runtime.registry import REGISTRY
 
 PAIRING_TTL_S = 600
-SESSION_COOKIE = "hd_session"
 
 
 @dataclass
@@ -68,9 +62,7 @@ class Core:
     providers: Providers
     workspace_id: str
     core_public_key: str
-    admin_token: str
     pair_failures: deque[float]
-    local_target_id: str | None
     catalog: Catalog
     plugins: PluginManager
     skills: SkillStore
@@ -80,8 +72,6 @@ class Core:
     automations: AutomationManager
 
 
-class LoginBody(BaseModel):
-    token: str
 
 
 class ChannelBody(BaseModel):
@@ -208,6 +198,18 @@ def _ws_url(public_url: str) -> str:
     return public_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1).rstrip("/") + "/v1/clients/ws"
 
 
+async def _retire_local_target(repo: Repo, paths: CorePaths) -> None:
+    """Pre-0.40 Cores registered their own host as a device; that device is gone, so revoke and clean it up."""
+    legacy = paths.root / "local-target"
+    config = legacy / "config.yaml"
+    if not config.exists():
+        return
+    legacy_id = (yaml.safe_load(config.read_text()) or {}).get("target_id")
+    if legacy_id and await repo.get_target(legacy_id):
+        await repo.update_target(legacy_id, {"status": "revoked", "revoked_at": now_iso()})
+    shutil.rmtree(legacy, ignore_errors=True)
+
+
 def create_app(paths: CorePaths | None = None) -> FastAPI:
     paths = paths or CorePaths()
 
@@ -215,9 +217,6 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         paths.ensure()
         cfg = load_config(paths)
-        admin_token = read_secret(paths, "secret://admin-token")
-        if not admin_token:
-            raise RuntimeError("admin token is missing; run `mensarium setup`")
         providers = Providers(cfg, paths)
         provider = ProviderRouter(providers.active_client())
         providers.router = provider
@@ -247,12 +246,8 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         await dreamer.recover()
         dream_scheduler = asyncio.create_task(dreamer.run_forever())
         await repo.audit(workspace_id, "core", "core.started", {"version": __version__})
-        local = await ensure_local_target(repo, paths, cfg, public_key_b64(key), workspace_id)
-        local_agent = None
-        if local:
-            local_agent = asyncio.create_task(ClientAgent(local[0], local_target_paths(paths), local[1]).run_forever())
+        await _retire_local_target(repo, paths)
         channels = ChannelManager(repo, paths, workspace_id, orchestrator, bus)
-        channels.default_target_id = local[0].target_id if local else None
         await channels.start()
         automations = AutomationManager(repo, workspace_id, orchestrator, channels, cfg.server.public_url)
         orchestrator.automations = automations
@@ -269,9 +264,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             providers=providers,
             workspace_id=workspace_id,
             core_public_key=public_key_b64(key),
-            admin_token=admin_token,
             pair_failures=deque(maxlen=50),
-            local_target_id=local[0].target_id if local else None,
             catalog=catalog,
             plugins=plugins,
             skills=skills,
@@ -291,38 +284,24 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             dream_scheduler.cancel()
             for dream in list(dreamer.tasks):
                 dream.cancel()
-            if local_agent:
-                local_agent.cancel()
             await provider.aclose()
             await db.close()
 
-    app = FastAPI(title="Mensarium Core", version=__version__, lifespan=lifespan, docs_url="/docs")
-    web_dir = Path(str(resources.files("mensarium.web")))
-    app.mount("/static", StaticFiles(directory=web_dir), name="static")
+    app = FastAPI(title="Mensarium Core", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
 
     def core(request: Request) -> Core:
         return request.app.state.core  # type: ignore[no-any-return]
 
     def auth(request: Request) -> Core:
-        c = core(request)
-        if request.scope.get(GATEWAY_SCOPE_KEY):
-            return c
-        token = request.cookies.get(SESSION_COOKIE) or ""
-        header = request.headers.get("authorization", "")
-        if header.lower().startswith("bearer "):
-            token = header[7:]
-        if not token or not hmac.compare_digest(token, c.admin_token):
+        """Only requests relayed by a paired client's gateway reach the API."""
+        if not request.scope.get(GATEWAY_SCOPE_KEY):
             raise HTTPException(401, "authentication required")
-        return c
+        return core(request)
 
     def task_error(e: TaskError) -> HTTPException:
         return HTTPException(404 if "not found" in str(e) else 409, str(e))
 
     # ---- public ---------------------------------------------------------------
-
-    @app.get("/", include_in_schema=False)
-    async def index() -> FileResponse:
-        return FileResponse(web_dir / "index.html")
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -349,19 +328,6 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             return await asyncio.to_thread(distribution.latest_manifest, __version__)
         except FileNotFoundError as e:
             raise HTTPException(404, str(e)) from e
-
-    @app.post("/v1/auth/login")
-    async def login(body: LoginBody, response: Response, c: Core = Depends(core)) -> dict[str, bool]:
-        if not hmac.compare_digest(body.token.strip(), c.admin_token):
-            await asyncio.sleep(1)
-            raise HTTPException(401, "invalid token")
-        response.set_cookie(SESSION_COOKIE, c.admin_token, httponly=True, samesite="strict", max_age=30 * 86400)
-        return {"ok": True}
-
-    @app.post("/v1/auth/logout")
-    async def logout(response: Response) -> dict[str, bool]:
-        response.delete_cookie(SESSION_COOKIE)
-        return {"ok": True}
 
     @app.post("/v1/targets/pair")
     async def pair(body: PairRequest, c: Core = Depends(core)) -> PairResponse:
@@ -418,7 +384,6 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             "workspace_id": c.workspace_id,
             "public_url": c.cfg.server.public_url,
             "core_key_fingerprint": fingerprint(c.core_public_key),
-            "local_target_id": c.local_target_id,
             "provider": {
                 "name": c.provider.name,
                 "base_url": c.provider.base_url,
@@ -505,7 +470,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
                 "allow_full_access": policy.get("allow_full_access", False),
                 "full_access": full_access(t),
                 "disabled_tools": t.get("disabled_tools") or [],
-                "remote_update": bool(caps.get("remote_update")) and t["id"] != c.local_target_id,
+                "remote_update": bool(caps.get("remote_update")),
                 "missing_tools": missing_tools(caps.get("tools", [])),
                 "desktop": caps.get("desktop") or {},
             },
@@ -553,8 +518,6 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         t = await c.repo.get_target(target_id)
         if not t or t["status"] == "revoked":
             raise HTTPException(404, "target not found")
-        if target_id == c.local_target_id:
-            raise HTTPException(409, "the Core device is updated together with the Core")
         if not (t.get("capabilities") or {}).get("remote_update"):
             raise HTTPException(409, "this agent cannot be updated remotely; run `mensarium update` on the device")
         try:
@@ -788,7 +751,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
 
     @app.get("/v1/channels")
     async def list_channels(c: Core = Depends(auth)) -> dict[str, Any]:
-        return {"items": [await c.channels.view()], "devices": await device_choices(c), "local_target_id": c.local_target_id}
+        return {"items": [await c.channels.view()], "devices": await device_choices(c)}
 
     @app.put("/v1/channels/telegram")
     async def configure_telegram(body: ChannelBody, c: Core = Depends(auth)) -> dict[str, Any]:
@@ -814,7 +777,6 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         return {
             "items": await c.automations.all(),
             "devices": await device_choices(c),
-            "local_target_id": c.local_target_id,
             "telegram_ready": bool(c.channels.telegram and c.channels.telegram.chat_id),
         }
 

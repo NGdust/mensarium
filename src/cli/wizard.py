@@ -1,5 +1,4 @@
 import re
-import secrets
 import shutil
 import socket
 import subprocess
@@ -20,7 +19,6 @@ from mensarium.core.config import (
     CoreConfig,
     CorePaths,
     LLMConfig,
-    LocalTargetConfig,
     ProviderConfig,
     ServerConfig,
     load_config,
@@ -78,7 +76,7 @@ def wait_healthy(url: str, timeout_s: float = 25) -> bool:
 
 def setup_core(start_service: bool | None = None) -> None:
     paths = CorePaths()
-    banner("Core setup: the main agent, web UI and LLM gateway")
+    banner("Core setup: the main agent and LLM gateway (the web UI runs on clients)")
     existing: CoreConfig | None = None
     if paths.config.exists():
         existing = load_config(paths)
@@ -93,12 +91,12 @@ def setup_core(start_service: bool | None = None) -> None:
             _finish_core(paths, existing, start_service)
             return
 
-    total = 4
+    total = 3
     step(1, total, "Network")
     port = int(
         ask(
             questionary.text(
-                "Port for the web UI and API:",
+                "Port for the API (clients connect here):",
                 default=str(existing.server.port if existing else 8787),
                 validate=lambda v: v.isdigit() and 0 < int(v) < 65536 or "Enter a port number",
                 style=STYLE,
@@ -118,7 +116,7 @@ def setup_core(start_service: bool | None = None) -> None:
     host_guess = lan_ip() if bind == "0.0.0.0" else "127.0.0.1"
     public_url = ask(
         questionary.text(
-            "URL clients and the browser will use to reach the Core:",
+            "URL clients will use to reach the Core:",
             default=f"http://{host_guess}:{port}",
             validate=lambda v: v.startswith(("http://", "https://")) or "Must start with http:// or https://",
             style=STYLE,
@@ -177,30 +175,14 @@ def setup_core(start_service: bool | None = None) -> None:
     else:
         model = ask(questionary.text("Default model:", default=str(kind["default_model"]), style=STYLE))
 
-    current_roots = ", ".join(existing.local_target.roots) if existing else "~"
-    local_roots = ask(
-        questionary.text(
-            "Folders on THIS machine the agent may work in (comma separated; this machine is always listed as a device):",
-            default=current_roots,
-            style=STYLE,
-        )
-    )
-
-    step(3, total, "Security")
     paths.ensure()
     if api_key and api_key_ref:
         write_secret(paths, api_key_ref.removeprefix("secret://"), api_key)
-    token = read_secret(paths, "secret://admin-token")
-    if not token or ask(questionary.confirm("Generate a new admin token?", default=False, style=STYLE)):
-        token = secrets.token_urlsafe(24)
-        write_secret(paths, "admin-token", token)
     key = load_or_create_private_key(paths.signing_key)
-    ok(f"Admin token stored in {paths.secrets}")
     ok(f"Core signing key fingerprint: {fingerprint(public_key_b64(key))}")
 
     cfg = CoreConfig(
         server=ServerConfig(host=bind, port=port, public_url=public_url),
-        local_target=LocalTargetConfig(roots=[r.strip() for r in local_roots.split(",") if r.strip()]),
         llm=LLMConfig(
             active_provider=provider,
             providers={
@@ -217,7 +199,7 @@ def setup_core(start_service: bool | None = None) -> None:
     )
     save_config(paths, cfg)
     ok(f"Configuration saved to {paths.config}")
-    step(4, total, "Service")
+    step(3, total, "Service")
     _finish_core(paths, cfg, start_service)
 
 
@@ -238,19 +220,17 @@ def _finish_core(paths: CorePaths, cfg: CoreConfig, start_service: bool | None) 
         else:
             fail(f"Core did not become healthy; see logs: {service.log_file('core')}")
             raise typer.Exit(1)
-    token = read_secret(paths, "secret://admin-token") or ""
     summary(
         "Mensarium Core is ready",
         [
-            ("Web UI", cfg.server.public_url),
-            ("Admin token", token),
+            ("Core URL", cfg.server.public_url),
             ("Provider", f"{cfg.llm.active_provider} / {cfg.llm.providers[cfg.llm.active_provider].default_model}"),
             ("Data", str(paths.root)),
             ("Logs", str(service.log_file("core"))),
         ],
         footer=(
-            "Add a client machine: open the web UI -> Devices -> Pair new device,\n"
-            "or run `mensarium core pair-code` here and paste the command on the client."
+            "The web UI opens on a client: install one with `curl -fsSL https://mensarium.com/install.sh | sh`,\n"
+            "create a code with `mensarium core pair-code` here and run `mensarium client` there."
             + ("" if start_service else "\nStart manually: mensarium core serve")
         ),
     )
