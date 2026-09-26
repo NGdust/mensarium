@@ -33,6 +33,10 @@ SECRET_GLOBS = [f"**/{pat}" for pat in SECRET_EXCLUDES] + [f"**/{d}/**" for d in
 SECRET_PATHSPECS = [f":(exclude,glob){g}" for g in SECRET_GLOBS]
 GIT_TIMEOUT = 600
 NO_GIT = "git is not installed on this device"
+NO_ACCESS = (
+    "no access to the repository: it is private or does not exist. For a private repository use the ssh address "
+    "(git@github.com:user/repo.git) with an ssh key set up on this machine, or a credential helper for https"
+)
 SAFE_ID = re.compile(r"[A-Za-z0-9_-]+")
 
 
@@ -211,7 +215,10 @@ class ProjectHost:
         code, out, err = await self._call("clone", "--quiet", "--", git_url, str(dst), cwd=dst.parent)
         if code != 0:
             shutil.rmtree(dst, ignore_errors=True)
-            raise ToolError((err or out).strip().splitlines()[-1][:500] if (err or out).strip() else f"git clone failed with code {code}")
+            text = (err or out).strip()
+            if "could not read Username" in text or "Authentication failed" in text or "Permission denied" in text:
+                raise ToolError(NO_ACCESS)
+            raise ToolError(text.splitlines()[-1][:500] if text else f"git clone failed with code {code}")
 
     # ---- ops --------------------------------------------------------------------
 

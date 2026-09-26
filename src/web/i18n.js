@@ -859,7 +859,7 @@ const RU = {
   'on one of your devices': 'на одном из устройств',
   'cloned on the Core host': 'клон на хосте Core',
   'Repository address': 'Адрес репозитория',
-  'Cloned on the Core host ({0}) with the git access set up there; secret files are left out of chat copies, but anything committed to the history stays visible to the agent.': 'Клонируется на хост Core ({0}) с тем доступом к git, что настроен там; секретные файлы в копии чатов не попадают, но всё, что закоммичено в историю, агенту видно.',
+  'Cloned on the Core host ({0}) with the git access set up there: a private repository needs its ssh address (git@github.com:user/repo.git) and an ssh key on that machine. Secret files are left out of chat copies, but anything committed to the history stays visible to the agent.': 'Клонируется на хост Core ({0}) с тем доступом к git, что настроен там: для приватного репозитория нужен ssh-адрес (git@github.com:user/repo.git) и ssh-ключ на этой машине. Секретные файлы в копии чатов не попадают, но всё, что закоммичено в историю, агенту видно.',
   'The Core device is offline or its git is missing; install git on the Core host.': 'Устройство Core не в сети или на нём нет git; установите git на хост Core.',
   'The Core has no device of its own; enable it in the Core config.': 'У Core нет своего устройства; включите его в конфиге Core.',
   'Cloning…': 'Клонирую…',

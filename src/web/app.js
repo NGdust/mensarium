@@ -3322,7 +3322,7 @@ async function viewProjectNew() {
       h('div', { class: 'browser' }, h('div', { class: 'browser-bar' }, up, pathEl, use), errorEl, list)),
     chosenBox);
   const gitNote = coreDevice && gitReady()
-    ? h('div', { class: 'row-desc' }, tr('Cloned on the Core host ({0}) with the git access set up there; secret files are left out of chat copies, but anything committed to the history stays visible to the agent.', coreDevice.name))
+    ? h('div', { class: 'row-desc' }, tr('Cloned on the Core host ({0}) with the git access set up there: a private repository needs its ssh address (git@github.com:user/repo.git) and an ssh key on that machine. Secret files are left out of chat copies, but anything committed to the history stays visible to the agent.', coreDevice.name))
     : h('p', { class: 'browser-error', role: 'alert' }, coreDevice ? tr('The Core device is offline or its git is missing; install git on the Core host.') : tr('The Core has no device of its own; enable it in the Core config.'));
   const gitForm = h('div', { class: 'plugin-form' }, field(tr('Repository address'), url), gitNote);
   const modeBox = h('div', {});
