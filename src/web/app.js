@@ -492,7 +492,8 @@ function untilText(iso) {
   const m = Math.round(ms / 60000);
   if (m < 60) return tr('resets in {0} min', m);
   const hours = Math.floor(m / 60);
-  if (hours < 48) return tr('resets in {0} h {1} min', hours, m % 60);
+  if (hours < 24) return tr('resets in {0} h {1} min', hours, m % 60);
+  if (hours < 24 * 14) return tr('resets in {0} d {1} h', Math.floor(hours / 24), hours % 24);
   return tr('resets {0}', new Date(iso).toLocaleString(locale, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }));
 }
 
@@ -541,17 +542,14 @@ function limitBanner() {
   const hot = hotWindows(p, d);
   if (!p || !hot.length) return null;
   const worst = hot.reduce((a, b) => (b.used_percent > a.used_percent ? b : a));
-  return h('div', { class: `note-banner limit-banner${worst.used_percent >= 90 ? ' danger' : ''}` }, icon('gauge'),
-    h('span', {}, h('strong', {}, p.title), ': ', hot.map((w) => `${windowLabel(w)} ${Math.round(w.used_percent)}%` + (w.resets_at ? `, ${untilText(w.resets_at)}` : '')).join(' · ')),
-    h('button', { class: 'btn btn-sm', onclick: limitsModal }, tr('Details')));
+  const parts = hot.map((w) => [tr('{0}: {1}% used', windowLabel(w), Math.round(w.used_percent)), w.resets_at ? untilText(w.resets_at) : null].filter(Boolean).join(' · '));
+  return h('div', { class: `limit-strip${worst.used_percent >= 90 ? ' danger' : ''}`, role: 'status' }, icon('gauge'),
+    h('span', { title: p.title }, parts.join(' · ')),
+    h('button', { class: 'link-btn', onclick: limitsModal }, tr('View usage')));
 }
 
 function renderLimitBanners() {
-  for (const box of document.querySelectorAll('.welcome-banner, .thread-banner')) {
-    box.querySelector('.limit-banner')?.remove();
-    const b = limitBanner();
-    if (b) box.append(b);
-  }
+  for (const box of document.querySelectorAll('.composer-notice')) box.replaceChildren(limitBanner() || '');
 }
 
 // ---------- login ----------
@@ -722,7 +720,9 @@ function ensureAppShell() {
 function composer({ placeholder, chips, above, onSend, onStop, onResume }) {
   const ta = h('textarea', { rows: 1, placeholder, 'aria-label': placeholder });
   const send = h('button', { class: 'send', disabled: true });
+  const notice = h('div', { class: 'composer-notice' }, limitBanner() || '');
   const box = h('div', { class: 'composer' },
+    notice,
     h('div', { class: 'composer-input' }, ta),
     h('div', { class: 'composer-bar' }, chips, h('span', { class: 'spacer' }), send),
   );
@@ -958,7 +958,7 @@ async function viewNewChat() {
   function pickTarget() {
     const items = devices().map((t) => h('button', {
       class: `menu-item${selected && t.id === selected.id ? ' selected' : ''}`, disabled: t.status !== 'online',
-      onclick: () => { selected = t; localStorageSet('target', t.id); renderChip(); modeCtl.refresh(); hint.textContent = hintText(); banner.replaceChildren(outdatedBanner(selected) || '', limitBanner() || ''); closeLayer(); },
+      onclick: () => { selected = t; localStorageSet('target', t.id); renderChip(); modeCtl.refresh(); hint.textContent = hintText(); banner.replaceChildren(outdatedBanner(selected) || ''); closeLayer(); },
     }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.name, h('span', { class: 'popover-sub' }, isThisDevice(t) ? tr('this device') : t.status === 'online' ? t.platform.split('-')[0] : tr('offline'))));
     items.push(h('div', { class: 'menu-sep' }), h('button', { class: 'menu-item', onclick: () => { closeLayer(); openPairing(); } }, icon('link'), tr('Pair a new device')));
     openPopover(targetChip, items);
@@ -967,7 +967,7 @@ async function viewNewChat() {
 
   const hint = h('p', { class: 'welcome-hint' });
   if (!state.system) { try { state.system = await get('/v1/system'); } catch { /* shown without version info */ } }
-  const banner = h('div', { class: 'welcome-banner' }, outdatedBanner(selected) || '', limitBanner() || '');
+  const banner = h('div', { class: 'welcome-banner' }, outdatedBanner(selected) || '');
   const hintText = (mode = modeCtl.effective()) => {
     if (!online.length) return tr('All devices are currently offline. Run mensarium client run on the machine you need.');
     return mode === 'full'
@@ -1083,7 +1083,7 @@ async function viewChat(taskId) {
       [h('span', { class: 'crumb-device' }, icon('laptop'), task.target_name || tr('device'), h('span', { class: 'sep' }, '/')), h('span', { class: 'current', title: task.input }, taskTitle(task))],
       [btnDelete]),
     thread,
-    h('div', { class: 'thread-banner' }, banner || '', limitBanner() || ''),
+    h('div', { class: 'thread-banner' }, banner || ''),
     c.el,
   );
 

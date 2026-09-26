@@ -12,7 +12,7 @@ PROVIDER_KINDS: dict[str, dict[str, str | bool]] = {
     "openai": {"title": "OpenAI", "base_url": "https://api.openai.com/v1", "default_model": "gpt-4.1-mini", "needs_key": True, "key_url": "https://platform.openai.com/api-keys"},
     "openrouter": {"title": "OpenRouter", "base_url": "https://openrouter.ai/api/v1", "default_model": "openai/gpt-oss-120b", "needs_key": True, "key_url": "https://openrouter.ai/keys"},
     "openai_compatible": {"title": "OpenAI-compatible", "base_url": "http://127.0.0.1:8000/v1", "default_model": "", "needs_key": False, "key_url": ""},
-    "claude_code": {"title": "Claude Code (local)", "base_url": "claude", "default_model": "sonnet", "needs_key": False, "key_url": "", "transport": "cli"},
+    "claude_code": {"title": "Claude Code (local)", "base_url": "claude", "default_model": "claude-sonnet-5", "needs_key": False, "key_url": "", "transport": "cli"},
     "codex_cli": {"title": "Codex CLI (local)", "base_url": "codex", "default_model": "", "needs_key": False, "key_url": "", "transport": "cli"},
 }
 CLI_KINDS = {"claude_code": ClaudeCodeProvider, "codex_cli": CodexCliProvider}

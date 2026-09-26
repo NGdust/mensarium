@@ -25,7 +25,14 @@ from mensarium.contracts.llm import (
     ToolDefinition,
 )
 from mensarium.llm_providers.base import LLMError
-from mensarium.llm_providers.local_cli import CLAUDE_MODELS, CODEX_MODELS, codex_config_model
+from mensarium.llm_providers.local_cli import (
+    CLAUDE_MODELS,
+    CLAUDE_PROBE_MODEL,
+    CODEX_MODELS,
+    codex_config_model,
+    codex_models,
+    codex_rpc,
+)
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import now_iso
 
@@ -293,7 +300,7 @@ class ClaudeCodeProvider(CliProvider):
 
     async def fetch_limits(self) -> list[LimitWindow] | None:
         """A tiny haiku call: Claude Code only reports its windows alongside a real request."""
-        await self._call("haiku", "Answer with the single word: pong", "pong", 120)
+        await self._call(CLAUDE_PROBE_MODEL, "Answer with the single word: pong", "pong", 120)
         return self.limits
 
 
@@ -304,8 +311,11 @@ class CodexCliProvider(CliProvider):
 
     def __init__(self, name: str, command: str, default_model: str, timeout_s: int = 180, max_retries: int = 1) -> None:
         super().__init__(name, command, default_model or codex_config_model() or CODEX_MODELS[0], timeout_s, max_retries)
-        configured = codex_config_model()
-        self.models = list(dict.fromkeys([configured, *CODEX_MODELS])) if configured else list(CODEX_MODELS)
+        self.models = list(CODEX_MODELS)
+
+    async def list_models(self) -> list[ModelInfo]:
+        self.models = await asyncio.to_thread(codex_models, self.command)
+        return [ModelInfo(id=m) for m in self.models]
 
     def login_status(self) -> tuple[bool, str]:
         import subprocess
@@ -320,41 +330,11 @@ class CodexCliProvider(CliProvider):
         return False, "not logged in: run `codex login` on the Core host"
 
     async def fetch_limits(self) -> list[LimitWindow] | None:
-        """`codex app-server` over stdio: initialize, then account/rateLimits/read; no model call, no quota spent."""
-        lines = "\n".join(json.dumps(m) for m in (
-            {"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "mensarium", "version": "1"}}},
-            {"method": "initialized"},
-            {"id": 2, "method": "account/rateLimits/read"},
-        )) + "\n"
-        proc = await asyncio.create_subprocess_exec(
-            self.command, "app-server", "--stdio", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL, cwd=self.workdir(),
-        )
-        assert proc.stdin and proc.stdout
-        proc.stdin.write(lines.encode())
-        await proc.stdin.drain()
-        result: dict[str, Any] | None = None
+        """`codex app-server` over stdio: account/rateLimits/read; no model call, no quota spent."""
         try:
-            async with asyncio.timeout(30):
-                while result is None:
-                    raw = await proc.stdout.readline()
-                    if not raw:
-                        break
-                    try:
-                        msg = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-                    if msg.get("id") == 2:
-                        if msg.get("error"):
-                            raise LLMError(f"codex rate limits: {msg['error'].get('message', msg['error'])}")
-                        result = msg.get("result") or {}
-        except TimeoutError:
-            raise LLMError("codex app-server did not answer") from None
-        finally:
-            proc.kill()
-            await proc.wait()
-        if result is None:
-            raise LLMError("codex app-server closed without an answer")
+            result = await asyncio.to_thread(codex_rpc, self.command, "account/rateLimits/read", None, self.workdir())
+        except (OSError, RuntimeError) as e:
+            raise LLMError(f"codex rate limits: {e}") from e
         snap = result.get("rateLimits") or {}
         windows = []
         for w in (snap.get("primary"), snap.get("secondary")):

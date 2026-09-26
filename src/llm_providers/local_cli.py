@@ -11,8 +11,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-CLAUDE_MODELS = ["sonnet", "opus", "haiku"]
+CLAUDE_MODELS = ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"]
+CLAUDE_DEFAULT_MODEL = "claude-sonnet-5"
+CLAUDE_PROBE_MODEL = "claude-haiku-4-5"
 CODEX_MODELS = ["gpt-5-codex", "gpt-5"]
+RPC_TIMEOUT_S = 30
 CANDIDATE_DIRS = (
     "~/.local/bin", "~/.claude/local", "~/.claude/bin", "/opt/homebrew/bin", "/usr/local/bin", "~/.npm-global/bin",
     "~/.volta/bin", "~/.bun/bin", "~/.cargo/bin",
@@ -58,6 +61,58 @@ def _run(*cmd: str, timeout: float = 10) -> tuple[int, str]:
     return r.returncode, (r.stdout + r.stderr).strip()
 
 
+def codex_rpc(command: str, method: str, params: dict[str, Any] | None = None, cwd: str | None = None) -> dict[str, Any]:
+    """One request to `codex app-server` over stdio (JSONL): initialize, initialized, then the method. Blocking."""
+    import select
+
+    messages = [
+        {"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "mensarium", "version": "1"}}},
+        {"method": "initialized"},
+        {"id": 2, "method": method, "params": params or {}},
+    ]
+    proc = subprocess.Popen(
+        [command, "app-server", "--stdio"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, cwd=cwd
+    )
+    assert proc.stdin and proc.stdout
+    try:
+        for m in messages:
+            proc.stdin.write(json.dumps(m) + "\n")
+        proc.stdin.flush()
+        deadline = time.monotonic() + RPC_TIMEOUT_S
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([proc.stdout], [], [], 1)
+            if not ready:
+                continue
+            line = proc.stdout.readline()
+            if not line:
+                break
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("id") == 2:
+                if msg.get("error"):
+                    raise RuntimeError(str(msg["error"].get("message") or msg["error"]))
+                result: dict[str, Any] = msg.get("result") or {}
+                return result
+        raise RuntimeError("codex app-server did not answer")
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def codex_models(command: str) -> list[str]:
+    """Models the logged-in Codex account can use, from the app-server; the config default first."""
+    try:
+        data = codex_rpc(command, "model/list").get("data") or []
+        models = [str(m.get("id") or m.get("model")) for m in data if not m.get("hidden") and (m.get("id") or m.get("model"))]
+    except (OSError, RuntimeError):
+        models = []
+    default = codex_config_model()
+    ordered = ([default] if default else []) + models + (CODEX_MODELS if not models else [])
+    return list(dict.fromkeys(ordered))
+
+
 def codex_config_model() -> str:
     cfg = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "config.toml"
     if cfg.exists():
@@ -68,7 +123,7 @@ def codex_config_model() -> str:
 
 
 def _claude(path: str) -> LocalCli:
-    cli = LocalCli(kind="claude_code", title="Claude Code", path=path, models=list(CLAUDE_MODELS), default_model="sonnet")
+    cli = LocalCli(kind="claude_code", title="Claude Code", path=path, models=list(CLAUDE_MODELS), default_model=CLAUDE_DEFAULT_MODEL)
     code, out = _run(path, "--version")
     cli.version = out.split()[0] if code == 0 and out else ""
     code, out = _run(path, "auth", "status")
@@ -83,9 +138,8 @@ def _claude(path: str) -> LocalCli:
 
 
 def _codex(path: str) -> LocalCli:
-    default = codex_config_model()
-    models = [default, *CODEX_MODELS] if default else list(CODEX_MODELS)
-    cli = LocalCli(kind="codex_cli", title="Codex CLI", path=path, models=list(dict.fromkeys(models)), default_model=models[0])
+    models = codex_models(path)
+    cli = LocalCli(kind="codex_cli", title="Codex CLI", path=path, models=models, default_model=models[0])
     code, out = _run(path, "--version")
     cli.version = out.replace("codex-cli", "").strip().split()[0] if code == 0 and out else ""
     code, out = _run(path, "login", "status")
