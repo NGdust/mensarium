@@ -13,7 +13,13 @@ import typer
 
 from mensarium.cli import service
 from mensarium.cli.ui import banner, console, fail, ok, step, summary, warn
-from mensarium.client.config import DEFAULT_COMMAND_ALLOWLIST, ClientPaths, load_client_config
+from mensarium.client.config import (
+    DEFAULT_COMMAND_ALLOWLIST,
+    ClientConfig,
+    ClientPaths,
+    load_client_config,
+    save_client_config,
+)
 from mensarium.client.pairing import PairingError, pair
 from mensarium.core.config import (
     CoreConfig,
@@ -262,7 +268,8 @@ def setup_client(server: str | None, code: str | None, name: str | None, start_s
             )
         )
         if action.startswith("Keep"):
-            _finish_client(paths, start_service)
+            configure_client_roles(paths, current)
+            finish_client(paths, start_service)
             return
 
     total = 4
@@ -390,7 +397,49 @@ def setup_client(server: str | None, code: str | None, name: str | None, start_s
     ok(f"Core key fingerprint: {cfg.core_fingerprint} (compare with Settings in the web UI)")
 
     step(4, total, "Service")
-    _finish_client(paths, start_service)
+    configure_client_roles(paths, cfg)
+    finish_client(paths, start_service)
+
+
+def configure_client_roles(paths: ClientPaths, cfg: ClientConfig) -> ClientConfig:
+    """What this client does: run the agent's tools here (worker) and/or serve the web UI here (gateway)."""
+    cfg.worker.enabled = ask(
+        questionary.confirm("Let the agent work on this machine (run tools here)?", default=cfg.worker.enabled, style=STYLE)
+    )
+    cfg.gateway.enabled = ask(questionary.confirm("Open the web UI on this machine (gateway)?", default=True, style=STYLE))
+    if cfg.gateway.enabled:
+        cfg.gateway.port = int(
+            ask(
+                questionary.text(
+                    "Gateway port:",
+                    default=str(cfg.gateway.port),
+                    validate=lambda v: v.isdigit() and 0 < int(v) < 65536 or "Enter a port number",
+                    style=STYLE,
+                )
+            )
+        )
+        cfg.gateway.host = ask(
+            questionary.select(
+                "Who may open the web UI?",
+                choices=[
+                    questionary.Choice("Only this machine (localhost)", "127.0.0.1"),
+                    questionary.Choice("Other machines too (they log in with the gateway token)", "0.0.0.0"),
+                ],
+                default=cfg.gateway.host if cfg.gateway.host in ("127.0.0.1", "0.0.0.0") else "127.0.0.1",
+                style=STYLE,
+            )
+        )
+        if cfg.gateway.host == "0.0.0.0":
+            hosts = ask(
+                questionary.text(
+                    "Addresses the browser will use (host:port, comma separated):",
+                    default=", ".join(cfg.gateway.allowed_hosts) or f"{lan_ip()}:{cfg.gateway.port}",
+                    style=STYLE,
+                )
+            )
+            cfg.gateway.allowed_hosts = [h.strip() for h in hosts.split(",") if h.strip()]
+    save_client_config(paths, cfg)
+    return cfg
 
 
 def _desktop_setup() -> None:
@@ -415,35 +464,87 @@ def _desktop_setup() -> None:
         console.print("For screen and input control install: " + ", ".join(missing) + " (apt install xdotool wmctrl scrot; grim on Wayland).")
 
 
-def _finish_client(paths: ClientPaths, start_service: bool | None) -> None:
+def _gateway_url(cfg: ClientConfig) -> str:
+    host = f"127.0.0.1:{cfg.gateway.port}" if cfg.gateway.host in ("127.0.0.1", "0.0.0.0", "localhost") else f"{cfg.gateway.host}:{cfg.gateway.port}"
+    return f"http://{host}"
+
+
+def finish_client(paths: ClientPaths, start_service: bool | None) -> None:
+    from mensarium.client.gateway import auth
+
     cfg = load_client_config(paths)
     if start_service is None:
-        start_service = ask(
-            questionary.confirm("Run the client as a background service?", default=True, style=STYLE)
-        )
+        start_service = ask(questionary.confirm("Run the client as background services?", default=True, style=STYLE))
+    units: list[tuple[service.Unit, bool]] = [("client", cfg.worker.enabled), ("gateway", cfg.gateway.enabled)]
     if start_service:
-        with console.status("Starting the client..."):
-            how = service.install("client")
-            time.sleep(2)
-        if service.is_running("client"):
-            ok(f"Client is running ({how})")
-        else:
-            warn(f"Client may not be running; check {service.log_file('client')}")
-    _desktop_setup()
+        for unit, enabled in units:
+            if enabled:
+                with console.status(f"Starting the {unit}..."):
+                    how = service.install(unit)
+                    time.sleep(2)
+                if service.is_running(unit):
+                    ok(f"{unit} is running ({how})")
+                else:
+                    warn(f"{unit} may not be running; check {service.log_file(unit)}")
+            elif service.is_installed(unit):
+                service.uninstall(unit)
+                ok(f"{unit} service removed")
+    if cfg.worker.enabled:
+        _desktop_setup()
+    rows = [
+        ("Name", cfg.name),
+        ("Client ID", cfg.target_id),
+        ("Core", cfg.server),
+        ("Worker", "enabled" if cfg.worker.enabled else "disabled"),
+        ("Roots", ", ".join(cfg.roots)),
+        ("Programs", ", ".join(cfg.command_allowlist)),
+        ("Full access", "allowed" if cfg.allow_full_access else "disabled"),
+        ("Bash scripts", "allowed" if cfg.allow_shell else "disabled"),
+        ("Gateway", f"{_gateway_url(cfg)} ({'all interfaces' if cfg.gateway.host == '0.0.0.0' else 'this machine only'})" if cfg.gateway.enabled else "disabled"),
+        ("Logs", str(service.log_file("client").parent)),
+    ]
+    footer = "The device appears as online in the web UI within a few seconds."
+    if cfg.gateway.enabled:
+        footer = (
+            f"Open the web UI: {_gateway_url(cfg)}/login?link={auth.write_link(paths)} (one-time link)\n"
+            "Later: mensarium client gateway open, token: mensarium client gateway token"
+        )
+    if not start_service:
+        footer += "\nStart manually: mensarium client run" + (", mensarium client gateway run" if cfg.gateway.enabled else "")
+    summary("Mensarium client is ready", rows, footer=footer)
+
+
+def core_status() -> None:
+    paths = CorePaths()
+    cfg = load_config(paths)
+    healthy = wait_healthy(f"http://127.0.0.1:{cfg.server.port}", timeout_s=2)
     summary(
-        "Mensarium client is ready",
+        "Mensarium Core",
         [
-            ("Name", cfg.name),
-            ("Client ID", cfg.target_id),
-            ("Core", cfg.server),
-            ("Roots", ", ".join(cfg.roots)),
-            ("Programs", ", ".join(cfg.command_allowlist)),
-            ("Full access", "allowed" if cfg.allow_full_access else "disabled"),
-            ("Remote update", "allowed" if cfg.allow_remote_update else "disabled"),
-            ("Plugins from Core", "allowed" if cfg.allow_remote_plugins else "disabled"),
-            ("Bash scripts", "allowed" if cfg.allow_shell else "disabled"),
-            ("Logs", str(service.log_file("client"))),
+            ("Core", "running" if healthy else "not responding"),
+            ("Core URL", cfg.server.public_url),
+            ("Provider", f"{cfg.llm.active_provider} / {cfg.llm.providers[cfg.llm.active_provider].default_model}"),
+            ("Service", ("running" if service.is_running("core") else "stopped") if service.is_installed("core") else "not installed"),
+            ("Data", str(paths.root)),
         ],
-        footer="The device appears as online in the Core web UI within a few seconds."
-        + ("" if start_service else "\nStart manually: mensarium client run"),
+        footer="Pair a client: mensarium core pair-code\nReconfigure: mensarium core setup\nAll commands: mensarium core --help",
+    )
+
+
+def client_status() -> None:
+    paths = ClientPaths()
+    cfg = load_client_config(paths)
+    unit_state = lambda unit: ("running" if service.is_running(unit) else "stopped") if service.is_installed(unit) else "not installed"  # noqa: E731
+    rows = [
+        ("Name", cfg.name),
+        ("Client ID", cfg.target_id),
+        ("Core", cfg.server),
+        ("Worker", unit_state("client") if cfg.worker.enabled else "disabled"),
+        ("Gateway", f"{_gateway_url(cfg)}, {unit_state('gateway')}" if cfg.gateway.enabled else "disabled"),
+    ]
+    summary(
+        "Mensarium client",
+        rows,
+        footer=("Open the web UI: mensarium client gateway open\n" if cfg.gateway.enabled else "")
+        + "Reconfigure: mensarium client setup\nAll commands: mensarium client --help",
     )

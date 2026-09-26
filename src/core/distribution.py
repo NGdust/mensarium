@@ -24,11 +24,12 @@ def source_dir() -> Path | None:
 
 
 def install_script(server_url: str) -> str:
+    """install.sh that fetches the package from this Core, so clients get the Core's own version."""
     src = source_dir()
     if src is None:
         raise FileNotFoundError("install.sh not found")
-    text = re.sub(r'(?m)^MENSARIUM_SOURCE_DEFAULT=".*"$', 'MENSARIUM_SOURCE_DEFAULT=""', (src / "install.sh").read_text())
-    return text.replace('MENSARIUM_SERVER_DEFAULT=""', f'MENSARIUM_SERVER_DEFAULT="{server_url}"', 1)
+    text = (src / "install.sh").read_text()
+    return re.sub(r'(?m)^MENSARIUM_SOURCE_DEFAULT=".*"$', f'MENSARIUM_SOURCE_DEFAULT="{server_url.rstrip("/")}/dist/mensarium.tar.gz"', text, count=1)
 
 
 def _skip(info: tarfile.TarInfo) -> tarfile.TarInfo | None:

@@ -490,7 +490,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         return {
             "code": code,
             "expires_at": expires,
-            "install_command": f"curl -fsSL {url}/install.sh | sh -s -- --code {code}",
+            "install_command": f"curl -fsSL {url}/install.sh | sh",
             "pair_command": f"mensarium client pair --server {url} --code {code}",
         }
 

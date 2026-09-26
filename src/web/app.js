@@ -445,9 +445,9 @@ async function openPairing() {
     h('p', {}, tr('Run the command on the machine you want to connect. The code is one-time.')),
     h('div', { class: 'pair-code' }, data.code),
     h('div', { class: 'pair-timer' }, tr('Valid for '), timer),
-    h('div', { class: 'field-label' }, tr('Install and connect')),
+    h('div', { class: 'field-label' }, tr('Install Mensarium (skip if installed)')),
     line(data.install_command),
-    h('div', { class: 'field-label' }, tr('If Mensarium is already installed')),
+    h('div', { class: 'field-label' }, tr('Then pair, worker and web UI are asked next')),
     line(`${data.pair_command} --root ~/Projects`),
   );
   const expires = new Date(data.expires_at).getTime();

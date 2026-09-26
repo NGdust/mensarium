@@ -22,8 +22,8 @@ from mensarium.shared.logging import setup_logging
 from mensarium.shared.paths import mensarium_home
 
 app = typer.Typer(help="Mensarium: portable agent harness (Core + clients)", no_args_is_help=True)
-core_app = typer.Typer(help="Main agent (Core) commands", no_args_is_help=True)
-client_app = typer.Typer(help="Client commands: this machine as a device of the Core", no_args_is_help=True)
+core_app = typer.Typer(help="Core: the agent's brain on a server. Without a subcommand: set it up or show its state", invoke_without_command=True)
+client_app = typer.Typer(help="Client: this machine as a device of the Core, with the web UI. Without a subcommand: set it up or show its state", invoke_without_command=True)
 gateway_app = typer.Typer(help="Web UI of this client: served locally, talks to the Core over the client connection", no_args_is_help=True)
 service_app = typer.Typer(help="Background service management", no_args_is_help=True)
 client_app.add_typer(gateway_app, name="gateway")
@@ -91,40 +91,6 @@ def update(
 
 
 @app.command()
-def setup(
-    role: Annotated[str | None, typer.Option(help="core or client")] = None,
-    server: Annotated[str | None, typer.Option(help="Core URL (client only)")] = None,
-    code: Annotated[str | None, typer.Option(help="Pairing code (client only)")] = None,
-    name: Annotated[str | None, typer.Option(help="Client name")] = None,
-    service_: Annotated[bool | None, typer.Option("--service/--no-service", help="Install background service")] = None,
-) -> None:
-    """Interactive installer for the Core or a client."""
-    use_select_event_loop()
-    from mensarium.cli import wizard
-
-    if role is None:
-        role = "client" if (server or code) else None
-    if role is None:
-        role = wizard.ask(
-            questionary.select(
-                "What do you want to set up on this machine?",
-                choices=[
-                    questionary.Choice("Core - main agent with web UI (install once)", "core"),
-                    questionary.Choice("Client - a machine the agent can work on", "client"),
-                ],
-                style=wizard.STYLE,
-            )
-        )
-    if role == "core":
-        wizard.setup_core(service_)
-    elif role in ("client", "target"):
-        wizard.setup_client(server, code, name, service_)
-    else:
-        fail("role must be core or client")
-        raise typer.Exit(2)
-
-
-@app.command()
 def status() -> None:
     """Show what is installed and running on this machine."""
     rows: list[tuple[str, str]] = [("Home", str(mensarium_home())), ("Service backend", service.backend())]
@@ -154,7 +120,7 @@ def status() -> None:
                 ("Gateway URL", f"http://{'127.0.0.1' if tcfg.gateway.host in ('127.0.0.1', '0.0.0.0') else tcfg.gateway.host}:{tcfg.gateway.port}"),
             ]
     if len(rows) == 2:
-        rows.append(("Status", "nothing configured; run `mensarium setup`"))
+        rows.append(("Status", "nothing configured; run `mensarium core` or `mensarium client`"))
     summary("Mensarium status", rows)
 
 
@@ -179,6 +145,30 @@ def uninstall(
 
 
 # ---- core -------------------------------------------------------------------
+
+
+@core_app.callback()
+def core_root(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
+    use_select_event_loop()
+    from mensarium.cli import wizard
+
+    if CorePaths().config.exists():
+        wizard.core_status()
+    else:
+        wizard.setup_core(None)
+
+
+@core_app.command("setup")
+def core_setup(
+    service_: Annotated[bool | None, typer.Option("--service/--no-service", help="Install the background service")] = None,
+) -> None:
+    """Configure (or reconfigure) the Core on this machine."""
+    use_select_event_loop()
+    from mensarium.cli import wizard
+
+    wizard.setup_core(service_)
 
 
 @core_app.command("serve")
@@ -232,10 +222,10 @@ def core_pair_code() -> None:
     asyncio.run(run())
     url = cfg.server.public_url
     summary("Pairing code (valid 10 minutes, one use)", [("Code", code)])
-    console.print("Install and pair on the client machine:")
-    console.print(f"  curl -fsSL {url}/install.sh | sh -s -- --code {code}", soft_wrap=True, highlight=False)
-    console.print("Already installed there:")
+    console.print("On the client machine, install Mensarium (skip if installed) and pair:")
+    console.print(f"  curl -fsSL {url}/install.sh | sh", soft_wrap=True, highlight=False)
     console.print(f"  mensarium client pair --server {url} --code {code} --root <dir>", soft_wrap=True, highlight=False)
+    console.print("Or run `mensarium client` there and answer the questions.")
 
 
 @core_app.command("backup")
@@ -281,13 +271,40 @@ def core_restore(bundle: Path) -> None:
         raise typer.Exit(1) from e
     ok("Core data restored" + (f"; previous data kept in {previous}" if previous else ""))
     cfg = load_config(CorePaths())
-    warn(f"Core URL in the bundle: {cfg.server.public_url}. If this host has a different address, run `mensarium setup --role core` -> Reconfigure, then re-pair clients.")
+    warn(f"Core URL in the bundle: {cfg.server.public_url}. If this host has a different address, run `mensarium core setup` -> Reconfigure, then re-pair clients.")
     if was_installed:
         service.install("core")
         ok("Core service restarted")
 
 
 # ---- client -----------------------------------------------------------------
+
+
+@client_app.callback()
+def client_root(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
+    use_select_event_loop()
+    from mensarium.cli import wizard
+
+    if ClientPaths().config.exists():
+        wizard.client_status()
+    else:
+        wizard.setup_client(None, None, None, None)
+
+
+@client_app.command("setup")
+def client_setup(
+    server: Annotated[str | None, typer.Option(help="Core URL")] = None,
+    code: Annotated[str | None, typer.Option(help="Pairing code from the Core")] = None,
+    name: Annotated[str | None, typer.Option(help="Client name")] = None,
+    service_: Annotated[bool | None, typer.Option("--service/--no-service", help="Install the background services")] = None,
+) -> None:
+    """Configure (or reconfigure) this client: pairing, folders, worker and gateway."""
+    use_select_event_loop()
+    from mensarium.cli import wizard
+
+    wizard.setup_client(server, code, name, service_)
 
 
 @client_app.command("pair")
@@ -324,11 +341,18 @@ def client_pair(
         fail(str(e))
         raise typer.Exit(1) from e
     ok(f"Paired as {cfg.name} ({cfg.target_id}); core fingerprint {cfg.core_fingerprint}")
+    if sys.stdin.isatty():
+        use_select_event_loop()
+        from mensarium.cli import wizard
+
+        wizard.configure_client_roles(ClientPaths(), cfg)
+        wizard.finish_client(ClientPaths(), None)
+        return
     if service.is_installed("client"):
         service.restart("client")
         ok("Client service restarted")
     else:
-        console.print("Start the agent with `mensarium client run` or `mensarium service install client`.")
+        console.print("Worker and gateway settings: `mensarium client setup`; start with `mensarium service install client`.")
 
 
 @client_app.command("plugins")

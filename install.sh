@@ -1,22 +1,16 @@
 #!/bin/sh
-# Mensarium installer: sets up the Core (main agent) or a client.
-#   curl -fsSL http://<core>:8787/install.sh | sh -s -- --code WOLF-SKY-4821
+# Mensarium installer: installs the `mensarium` command; `mensarium core` or `mensarium client` configures the machine.
+#   curl -fsSL https://mensarium.com/install.sh | sh
 #   sh install.sh                      (from a source checkout)
 #   sh install.sh uninstall
 set -eu
 
-MENSARIUM_SERVER_DEFAULT=""
 MENSARIUM_HOME="${MENSARIUM_HOME:-$HOME/.mensarium}"
 MENSARIUM_SOURCE_DEFAULT=""
 MENSARIUM_SOURCE="${MENSARIUM_SOURCE:-$MENSARIUM_SOURCE_DEFAULT}"
 BIN_DIR="${MENSARIUM_BIN_DIR:-$HOME/.local/bin}"
 PYTHON_VERSION="3.12"
 
-ROLE=""
-SERVER="$MENSARIUM_SERVER_DEFAULT"
-CODE=""
-NAME=""
-SERVICE_FLAG=""
 ACTION="install"
 
 if [ -t 1 ]; then
@@ -39,23 +33,15 @@ Usage: install.sh [options]
        install.sh uninstall
 
 Options:
-  --role core|client   What to install (asked interactively if omitted)
-  --server URL         Core URL (client)
-  --code CODE          Pairing code from the Core (client)
-  --name NAME          Client name
   --source PATH|URL    Source checkout, .tar.gz URL or git URL
-  --no-service         Do not install a background service
+
+After installing, run `mensarium core` on a server or `mensarium client` on a machine the agent should work on.
 EOF
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --role) ROLE="$2"; [ "$ROLE" = target ] && ROLE=client; shift 2 ;;
-    --server) SERVER="$2"; shift 2 ;;
-    --code) CODE="$2"; shift 2 ;;
-    --name) NAME="$2"; shift 2 ;;
     --source) MENSARIUM_SOURCE="$2"; shift 2 ;;
-    --no-service) SERVICE_FLAG="--no-service"; shift ;;
     uninstall) ACTION="uninstall"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
@@ -151,8 +137,6 @@ stage_source() {
       *.git|git@*) git clone --depth 1 "$MENSARIUM_SOURCE" "$tmp/x/repo" ;;
       *) fetch "$MENSARIUM_SOURCE" "$tmp/src.tar.gz" && tar -xzf "$tmp/src.tar.gz" -C "$tmp/x" ;;
     esac
-  else
-    fetch "${SERVER%/}/dist/mensarium.tar.gz" "$tmp/src.tar.gz" && tar -xzf "$tmp/src.tar.gz" -C "$tmp/x"
   fi
   pkg="$(find "$tmp/x" -maxdepth 2 -name pyproject.toml | head -n 1)"
   [ -n "$pkg" ] || { echo "source has no pyproject.toml"; exit 1; }
@@ -168,16 +152,12 @@ stage_source() {
 if [ -z "$MENSARIUM_SOURCE" ] && [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/pyproject.toml" ] && [ -f "$SCRIPT_DIR/src/__init__.py" ]; then
   MENSARIUM_SOURCE="$SCRIPT_DIR"
 fi
-if [ -z "$MENSARIUM_SOURCE" ] && [ -z "$SERVER" ]; then
-  die "no source: run from a checkout, pass --server <core url>, or set MENSARIUM_SOURCE=<git or tar.gz url>"
+if [ -z "$MENSARIUM_SOURCE" ]; then
+  die "no source: run from a checkout, pass --source, or set MENSARIUM_SOURCE=<git or tar.gz url>"
 fi
 mkdir -p "$MENSARIUM_HOME"
 chmod 700 "$MENSARIUM_HOME"
-if [ -n "$MENSARIUM_SOURCE" ]; then
-  run_step "Fetching Mensarium source" stage_source
-else
-  run_step "Downloading Mensarium from ${SERVER%/}" stage_source
-fi
+run_step "Fetching Mensarium source" stage_source
 
 # ---- uv + python ------------------------------------------------------------
 UV="$(command -v uv 2>/dev/null || true)"
@@ -212,16 +192,8 @@ case ":$PATH:" in
 esac
 rm -f "$LOG"
 
-# ---- interactive setup ------------------------------------------------------
-set -- setup
-[ -n "$ROLE" ] && set -- "$@" --role "$ROLE"
-[ -n "$SERVER" ] && set -- "$@" --server "$SERVER"
-[ -n "$CODE" ] && set -- "$@" --code "$CODE"
-[ -n "$NAME" ] && set -- "$@" --name "$NAME"
-[ -n "$SERVICE_FLAG" ] && set -- "$@" "$SERVICE_FLAG"
-
 say ""
-if ( : </dev/tty ) 2>/dev/null; then
-  MENSARIUM_HOME="$MENSARIUM_HOME" exec "$VENV/bin/mensarium" "$@" </dev/tty
-fi
-say "  No terminal for the interactive setup. Configure later with: ${B}mensarium setup${R}"
+say "  Next step on this machine:"
+say "    ${B}mensarium core${R}     run the Core here (a server: the agent's brain, no web UI)"
+say "    ${B}mensarium client${R}   connect this machine to a Core (the agent works here, the web UI opens here)"
+say ""
