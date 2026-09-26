@@ -2,6 +2,13 @@
 
 Версии по схеме `MAJOR.MINOR.PATCH`. Источник версии — `src/__init__.py`, релиз помечается git-тегом `vX.Y.Z`.
 
+## 0.39.0
+
+- Gateway: веб-интерфейс теперь может работать на машине клиента. Клиент держит к Core второе соединение (`session: gateway`), локальный сервер gateway раздаёт UI на `127.0.0.1:8790` и перекладывает запросы браузера в кадры `api.request` / `api.response` / `api.chunk` / `api.end` / `api.cancel`, которые Core разворачивает в своё же приложение без сети. Вход по локальному токену `mensarium client gateway token`, одноразовая ссылка `mensarium client gateway open`; чужие `Host` и `Origin` отклоняются.
+- Команды `mensarium client gateway run|token|open|status`, сервисный юнит `gateway`; в конфиге клиента секции `worker.enabled` и `gateway` (`enabled`, `host`, `port`, `allowed_hosts`). `mensarium update` перезапускает и gateway.
+- Core: эндпоинт `/v1/clients/ws` (старый `/v1/targets/ws` пока остаётся), хаб различает сессии worker и gateway, отзыв устройства закрывает обе. Статика UI переехала в пакет `mensarium.web`; UI на самом Core и admin-токен пока работают как раньше.
+- UI: баннер «Core не в сети» с автоматическим восстановлением, метка «Это устройство» и значок gateway на странице устройств, текст входа под токен gateway.
+
 ## 0.38.0
 
 - Target Agent переименован в client: команды `mensarium client pair|run|permissions|plugins`, сервис `client`, каталог `~/.mensarium/client` (старый `target/` и ключ переносятся сами при первом запуске). Старая группа `mensarium target` осталась скрытым алиасом на один релиз, сервис `mensarium-target` / `com.mensarium.target` заменяется на `client` при `mensarium update`.
