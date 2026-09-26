@@ -1,10 +1,12 @@
 import asyncio
 import json
 import logging
+from datetime import timedelta
 from typing import Any
 
 import httpx
 
+from mensarium.contracts.limits import LimitWindow
 from mensarium.contracts.llm import (
     ChatRequest,
     Message,
@@ -16,10 +18,27 @@ from mensarium.contracts.llm import (
     ToolDefinition,
 )
 from mensarium.llm_providers.base import LLMError
+from mensarium.shared.timeutil import now_iso, utcnow
 
 log = logging.getLogger(__name__)
 
 RETRY_STATUS = {429, 500, 502, 503, 504}
+
+
+def _parse_duration(text: str) -> float | None:
+    """OpenAI reset headers look like "1s", "6m0s", "1h2m3.5s"."""
+    if not text:
+        return None
+    total, num = 0.0, ""
+    for ch in text:
+        if ch.isdigit() or ch == ".":
+            num += ch
+        elif ch in "hms" and num:
+            total += float(num) * {"h": 3600, "m": 60, "s": 1}[ch]
+            num = ""
+        else:
+            return None
+    return total if not num else None
 
 
 def wire_name(name: str) -> str:
@@ -67,8 +86,12 @@ class OpenAICompatibleProvider:
         self.max_retries = max_retries
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self._client = httpx.AsyncClient(base_url=self.base_url, headers=headers, timeout=timeout_s)
+        self.limits: list[LimitWindow] | None = None
+        self.limits_at: str | None = None
+        self.limits_source = ""
+        self._model_limits: dict[str, list[LimitWindow]] = {}
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    async def _request(self, method: str, path: str, model: str | None = None, **kwargs: Any) -> dict[str, Any]:
         attempt = 0
         while True:
             try:
@@ -77,6 +100,8 @@ class OpenAICompatibleProvider:
                 if attempt >= self.max_retries:
                     raise LLMError(f"transport error: {e}") from e
             else:
+                if model and "x-ratelimit-limit-tokens" in resp.headers:
+                    self._note_headers(model, resp.headers)
                 if resp.status_code < 400:
                     return resp.json()
                 if resp.status_code not in RETRY_STATUS or attempt >= self.max_retries:
@@ -120,8 +145,41 @@ class OpenAICompatibleProvider:
             ]
         if response_schema:
             body["response_format"] = {"type": "json_schema", "json_schema": {"name": "out", "schema": response_schema}}
-        data = await self._request("POST", "/chat/completions", json=body, timeout=request.timeout_s)
+        data = await self._request("POST", "/chat/completions", model=request.model, json=body, timeout=request.timeout_s)
         return self._parse(data)
+
+    def _note_headers(self, model: str, headers: httpx.Headers) -> None:
+        """OpenAI-style x-ratelimit-* headers: per-model requests and tokens per window, reset given as "6m0s"."""
+        windows = []
+        for what in ("requests", "tokens"):
+            limit, remaining = headers.get(f"x-ratelimit-limit-{what}"), headers.get(f"x-ratelimit-remaining-{what}")
+            if not limit or remaining is None or not limit.isdigit():
+                continue
+            total, left = int(limit), int(remaining) if remaining.isdigit() else 0
+            reset_s = _parse_duration(headers.get(f"x-ratelimit-reset-{what}", ""))
+            windows.append(LimitWindow(
+                label=f"{what} per minute", model=model,
+                used_percent=round((total - left) / total * 100, 1) if total else 0.0,
+                resets_at=(utcnow() + timedelta(seconds=reset_s)).isoformat() if reset_s is not None else None,
+                detail=f"{total - left:,} of {total:,}".replace(",", " "),
+            ))
+        if windows:
+            self._model_limits[model] = windows
+            self.limits = [w for ws in self._model_limits.values() for w in ws]
+            self.limits_at, self.limits_source = now_iso(), "x-ratelimit headers"
+
+    async def fetch_limits(self) -> list[LimitWindow] | None:
+        """OpenRouter exposes the key's credit usage; other HTTP providers only report limits on real calls."""
+        if "openrouter.ai" not in self.base_url:
+            return None
+        data = (await self._request("GET", "/key")).get("data") or {}
+        usage, limit = float(data.get("usage") or 0), data.get("limit")
+        window = LimitWindow(
+            label="credits", used_percent=round(usage / float(limit) * 100, 1) if limit else 0.0,
+            detail=f"${usage:.2f} of ${float(limit):.2f}" if limit else f"${usage:.2f} spent, no limit set",
+        )
+        self.limits, self.limits_at, self.limits_source = [window], now_iso(), "openrouter /key"
+        return self.limits
 
     @staticmethod
     def _parse(data: dict[str, Any]) -> ModelResponse:

@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Callable
 from typing import Any
 
 from mensarium.contracts.llm import ChatRequest, ModelInfo, ModelResponse, ProviderHealth, ToolDefinition
@@ -16,6 +17,7 @@ class ProviderRouter:
     def __init__(self, provider: AnyProvider) -> None:
         self.current = provider
         self._retiring: set[asyncio.TimerHandle] = set()
+        self.on_chat: Callable[[AnyProvider], None] | None = None
 
     @property
     def name(self) -> str:
@@ -50,7 +52,12 @@ class ProviderRouter:
     async def chat(
         self, request: ChatRequest, *, tools: list[ToolDefinition], response_schema: dict[str, Any] | None = None
     ) -> ModelResponse:
-        return await self.current.chat(request, tools=tools, response_schema=response_schema)
+        provider = self.current
+        try:
+            return await provider.chat(request, tools=tools, response_schema=response_schema)
+        finally:
+            if self.on_chat:
+                self.on_chat(provider)
 
     async def healthcheck(self) -> ProviderHealth:
         return await self.current.healthcheck()

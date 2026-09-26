@@ -34,6 +34,7 @@ from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secre
 from mensarium.core.db import Database
 from mensarium.core.dreaming import Dreamer, DreamError
 from mensarium.core.events import EventBus
+from mensarium.core.limits import LimitsStore
 from mensarium.core.memory import KINDS, Memory, NoteError
 from mensarium.core.orchestrator import Orchestrator, TaskError, full_access, missing_tools
 from mensarium.core.plugins import PluginError, PluginManager
@@ -73,6 +74,7 @@ class Core:
     dreamer: Dreamer
     channels: ChannelManager
     automations: AutomationManager
+    limits: LimitsStore
 
 
 
@@ -108,6 +110,10 @@ class ProviderBody(BaseModel):
     timeout_s: int = Field(90, ge=5, le=600)
     max_retries: int = Field(2, ge=0, le=5)
     vision_model: str | None = Field(None, max_length=200)
+
+
+class LimitsRefreshBody(BaseModel):
+    provider_id: str | None = None
 
 
 class ProviderTestBody(BaseModel):
@@ -227,6 +233,8 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         providers = Providers(cfg, paths)
         provider = ProviderRouter(providers.active_client())
         providers.router = provider
+        limits = LimitsStore(providers, provider)
+        limits.start()
         db = Database(paths.db)
         await db.connect()
         repo = Repo(db)
@@ -280,10 +288,12 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             dreamer=dreamer,
             channels=channels,
             automations=automations,
+            limits=limits,
         )
         try:
             yield
         finally:
+            limits.stop()
             await automations.stop()
             await channels.stop()
             for runner in list(orchestrator.runners.values()):
@@ -446,6 +456,17 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             raise provider_error(e) from e
         await c.repo.audit(c.workspace_id, "user", "provider.activated", {"id": provider_id})
         return c.providers.view()
+
+    @app.get("/v1/limits")
+    async def limits_view(c: Core = Depends(auth)) -> dict[str, Any]:
+        return c.limits.view()
+
+    @app.post("/v1/limits/refresh")
+    async def limits_refresh(body: LimitsRefreshBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        if body.provider_id and body.provider_id not in c.cfg.llm.providers:
+            raise HTTPException(404, "provider not found")
+        await c.limits.refresh(body.provider_id)
+        return c.limits.view()
 
     @app.post("/v1/providers/test")
     async def test_provider(body: ProviderTestBody, c: Core = Depends(auth)) -> dict[str, Any]:

@@ -9,9 +9,11 @@ import logging
 import os
 import shutil
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from mensarium.contracts.limits import LimitWindow
 from mensarium.contracts.llm import (
     ChatRequest,
     Message,
@@ -25,6 +27,7 @@ from mensarium.contracts.llm import (
 from mensarium.llm_providers.base import LLMError
 from mensarium.llm_providers.local_cli import CLAUDE_MODELS, CODEX_MODELS, codex_config_model
 from mensarium.shared.ids import new_id
+from mensarium.shared.timeutil import now_iso
 
 log = logging.getLogger(__name__)
 
@@ -149,6 +152,9 @@ class CliProvider:
         self.timeout_s = timeout_s
         self.max_retries = max_retries
         self.vision_model: str | None = None
+        self.limits: list[LimitWindow] | None = None
+        self.limits_at: str | None = None
+        self.limits_source = ""
         self._workdir: str | None = None
 
     @property
@@ -204,6 +210,13 @@ class CliProvider:
     async def _call(self, model: str, system: str, prompt: str, timeout_s: int) -> ModelResponse:
         raise NotImplementedError
 
+    async def fetch_limits(self) -> list[LimitWindow] | None:
+        """Ask the CLI for its usage windows without a model call; None when the CLI has no such source."""
+        return None
+
+    def _set_limits(self, windows: list[LimitWindow], source: str) -> None:
+        self.limits, self.limits_at, self.limits_source = windows, now_iso(), source
+
     async def aclose(self) -> None:
         if self._workdir:
             shutil.rmtree(self._workdir, ignore_errors=True)
@@ -231,15 +244,24 @@ class ClaudeCodeProvider(CliProvider):
     async def _call(self, model: str, system: str, prompt: str, timeout_s: int) -> ModelResponse:
         # No --json-schema: it registers a tool, and with any tool present the model starts calling our action names
         # as functions. With no tools at all it can only write text, which holds the JSON object.
+        # stream-json (not json) because the stream carries `rate_limit_event` with the subscription windows.
         args = [
-            "-p", "--output-format", "json", "--no-session-persistence", "--tools", "", "--setting-sources", "",
+            "-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--tools", "", "--setting-sources", "",
             "--strict-mcp-config", "--max-turns", "2", "--model", model, "--system-prompt", system,
         ]  # fmt: skip
         code, out, err = await self._exec(args, prompt, timeout_s)
-        try:
-            data = json.loads(out[out.index("{") :])
-        except (ValueError, json.JSONDecodeError) as e:
-            raise LLMError(f"claude returned no JSON (exit {code}): {(err or out)[:400]}") from e
+        data: dict[str, Any] = {}
+        for line in out.splitlines():
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if ev.get("type") == "result":
+                data = ev
+            elif ev.get("type") == "rate_limit_event":
+                self._note_rate_limits(ev.get("rate_limit_info") or {})
+        if not data:
+            raise LLMError(f"claude returned no result (exit {code}): {(err or out)[-400:]}")
         if data.get("is_error"):
             raise LLMError(f"claude error: {str(data.get('result'))[:400]}")
         answer = data.get("structured_output")
@@ -253,6 +275,26 @@ class ClaudeCodeProvider(CliProvider):
         )
         resp.raw_provider_response = {k: data.get(k) for k in ("session_id", "num_turns", "total_cost_usd", "modelUsage")}
         return resp
+
+
+    def _note_rate_limits(self, info: dict[str, Any]) -> None:
+        windows = []
+        labels = {"five_hour": "5 hours", "seven_day": "7 days"}
+        for key, w in (info.get("unifiedWindows") or {}).items():
+            if not isinstance(w, dict) or w.get("utilization") is None:
+                continue
+            reset = w.get("resetsAt")
+            windows.append(LimitWindow(
+                label=labels.get(key, key), used_percent=round(float(w["utilization"]) * 100, 1),
+                resets_at=datetime.fromtimestamp(int(reset), tz=UTC).isoformat() if reset else None,
+            ))
+        if windows:
+            self._set_limits(windows, "claude rate_limit_event")
+
+    async def fetch_limits(self) -> list[LimitWindow] | None:
+        """A tiny haiku call: Claude Code only reports its windows alongside a real request."""
+        await self._call("haiku", "Answer with the single word: pong", "pong", 120)
+        return self.limits
 
 
 class CodexCliProvider(CliProvider):
@@ -276,6 +318,58 @@ class CodexCliProvider(CliProvider):
         if r.returncode == 0 and "logged in" in out.lower():
             return True, out.splitlines()[0]
         return False, "not logged in: run `codex login` on the Core host"
+
+    async def fetch_limits(self) -> list[LimitWindow] | None:
+        """`codex app-server` over stdio: initialize, then account/rateLimits/read; no model call, no quota spent."""
+        lines = "\n".join(json.dumps(m) for m in (
+            {"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "mensarium", "version": "1"}}},
+            {"method": "initialized"},
+            {"id": 2, "method": "account/rateLimits/read"},
+        )) + "\n"
+        proc = await asyncio.create_subprocess_exec(
+            self.command, "app-server", "--stdio", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL, cwd=self.workdir(),
+        )
+        assert proc.stdin and proc.stdout
+        proc.stdin.write(lines.encode())
+        await proc.stdin.drain()
+        result: dict[str, Any] | None = None
+        try:
+            async with asyncio.timeout(30):
+                while result is None:
+                    raw = await proc.stdout.readline()
+                    if not raw:
+                        break
+                    try:
+                        msg = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if msg.get("id") == 2:
+                        if msg.get("error"):
+                            raise LLMError(f"codex rate limits: {msg['error'].get('message', msg['error'])}")
+                        result = msg.get("result") or {}
+        except TimeoutError:
+            raise LLMError("codex app-server did not answer") from None
+        finally:
+            proc.kill()
+            await proc.wait()
+        if result is None:
+            raise LLMError("codex app-server closed without an answer")
+        snap = result.get("rateLimits") or {}
+        windows = []
+        for w in (snap.get("primary"), snap.get("secondary")):
+            if not isinstance(w, dict) or w.get("usedPercent") is None:
+                continue
+            mins = w.get("windowDurationMins") or 0
+            label = "7 days" if mins >= 10080 else f"{mins // 60} hours" if mins >= 60 else f"{mins} min" if mins else "window"
+            reset = w.get("resetsAt")
+            windows.append(LimitWindow(
+                label=label, used_percent=float(w["usedPercent"]),
+                resets_at=datetime.fromtimestamp(int(reset), tz=UTC).isoformat() if reset else None,
+                detail=str(snap.get("planType") or ""),
+            ))
+        self._set_limits(windows, "codex app-server")
+        return windows
 
     async def _call(self, model: str, system: str, prompt: str, timeout_s: int) -> ModelResponse:
         workdir = Path(self.workdir())

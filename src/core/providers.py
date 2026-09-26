@@ -48,6 +48,9 @@ class Providers:
         pid = self.cfg.llm.active_provider
         return self._client(pid, self.cfg.llm.providers[pid])
 
+    def client(self, pid: str) -> AnyProvider:
+        return self._client(pid, self.cfg.llm.providers[pid])
+
     def view(self) -> dict[str, Any]:
         providers = []
         for pid, p in self.cfg.llm.providers.items():

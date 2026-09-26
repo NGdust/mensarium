@@ -8,7 +8,7 @@ const $app = document.getElementById('app');
 const $toasts = document.getElementById('toasts');
 const $layer = document.getElementById('layer');
 
-const state = { system: null, gateway: null, coreOffline: false, targets: [], tasks: [], shell: null, lastChat: '#/', updates: new Map() };
+const state = { system: null, gateway: null, coreOffline: false, limits: null, targets: [], tasks: [], shell: null, lastChat: '#/', updates: new Map() };
 let viewCleanups = [];
 let shellCleanups = [];
 
@@ -129,6 +129,7 @@ const ICONS = {
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
+  gauge: '<path d="M12 14 16 8"/><path d="M4 18a9 9 0 1 1 16 0"/><circle cx="12" cy="14" r="1"/>',
   alert: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
   ban: '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
   check: '<path d="m5 12 5 5 9-10"/>',
@@ -468,6 +469,91 @@ function languageSwitch(compact = false) {
     }, compact ? code.toUpperCase() : name)));
 }
 
+// ---------- usage limits ----------
+
+async function loadLimits() {
+  try { state.limits = await get('/v1/limits'); } catch { return state.limits; }
+  renderLimitBanners();
+  state.limitsRender?.();
+  return state.limits;
+}
+
+async function refreshLimits(providerId, btn) {
+  if (btn) btn.disabled = true;
+  try { state.limits = await post('/v1/limits/refresh', providerId ? { provider_id: providerId } : {}); renderLimitBanners(); state.limitsRender?.(); }
+  catch (err) { fail(err); }
+  finally { if (btn) btn.disabled = false; }
+}
+
+function untilText(iso) {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (Number.isNaN(ms)) return '';
+  if (ms <= 0) return tr('resets now');
+  const m = Math.round(ms / 60000);
+  if (m < 60) return tr('resets in {0} min', m);
+  const hours = Math.floor(m / 60);
+  if (hours < 48) return tr('resets in {0} h {1} min', hours, m % 60);
+  return tr('resets {0}', new Date(iso).toLocaleString(locale, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }));
+}
+
+const windowLabel = (w) => ({ '5 hours': tr('5-hour window'), '7 days': tr('weekly window'), 'credits': tr('credits'), 'requests per minute': tr('requests per minute'), 'tokens per minute': tr('tokens per minute') }[w.label] || w.label);
+const hotWindows = (p, d = state.limits) => (p?.windows || []).filter((w) => w.used_percent >= (d?.threshold || 0.75) * 100);
+
+function meter(w, threshold) {
+  const pct = Math.min(100, Math.max(0, w.used_percent));
+  const level = pct >= 90 ? 'danger' : pct >= threshold * 100 ? 'warn' : '';
+  return h('div', { class: `limit-row ${level}` },
+    h('div', { class: 'limit-label' }, h('span', {}, windowLabel(w), w.model ? h('code', { class: 'provider-id' }, modelLabel(w.model)) : null), h('span', { class: 'limit-pct' }, `${Math.round(pct)}%`)),
+    h('div', { class: 'meter', role: 'progressbar', 'aria-valuenow': String(Math.round(pct)), 'aria-valuemin': '0', 'aria-valuemax': '100' }, h('div', { class: 'meter-fill', style: `width:${pct}%` })),
+    h('div', { class: 'row-desc' }, [w.detail, w.resets_at ? untilText(w.resets_at) : null].filter(Boolean).join(' · ')));
+}
+
+function limitsBody() {
+  const d = state.limits;
+  if (!d) return [h('div', { class: 'empty rows' }, tr('Limits are not loaded yet.'))];
+  if (!d.providers.length) return [h('div', { class: 'empty rows' }, tr('No providers yet.'))];
+  return d.providers.map((p) => h('div', { class: 'limit-provider' },
+    h('div', { class: 'limit-provider-head' },
+      h('strong', {}, p.title, p.provider_id !== p.kind ? h('code', { class: 'provider-id' }, p.provider_id) : null, p.active ? h('span', { class: 'pill accent' }, tr('active')) : null),
+      h('span', { class: 'spacer' }),
+      p.checked_at ? h('span', { class: 'market-meta', title: p.source }, tr('checked {0}', relTime(p.checked_at))) : null,
+      p.supported ? h('button', { class: 'icon-btn', title: tr('Refresh'), 'aria-label': tr('Refresh'), onclick: (e) => refreshLimits(p.provider_id, e.currentTarget) }, icon('refresh')) : null),
+    p.windows.length ? p.windows.map((w) => meter(w, d.threshold)) : h('p', { class: 'row-desc' }, p.error ? tr('Error: {0}', p.error) : p.note || (p.supported ? tr('No data yet.') : tr('This provider does not report limits.')))));
+}
+
+function limitsModal() {
+  const body = h('div', { class: 'limits-list' });
+  const render = () => body.replaceChildren(...limitsBody());
+  render();
+  state.limitsRender = () => { if (body.isConnected) render(); };
+  openModal(
+    h('div', { class: 'modal-head' }, h('h2', {}, tr('Usage limits')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
+    h('p', { class: 'row-desc' }, tr('Claude Code reports its windows only alongside real requests, so refreshing it makes a tiny haiku call.')),
+    body,
+    h('div', { class: 'modal-actions' }, h('span', { class: 'spacer' }), h('button', { class: 'btn', onclick: (e) => refreshLimits(null, e.currentTarget) }, icon('refresh'), tr('Refresh all')), h('button', { class: 'btn btn-primary', onclick: closeLayer }, tr('Close'))),
+  ).classList.add('modal-wide');
+  loadLimits();
+}
+
+function limitBanner() {
+  const d = state.limits;
+  const p = d?.providers.find((x) => x.provider_id === d.active);
+  const hot = hotWindows(p, d);
+  if (!p || !hot.length) return null;
+  const worst = hot.reduce((a, b) => (b.used_percent > a.used_percent ? b : a));
+  return h('div', { class: `note-banner limit-banner${worst.used_percent >= 90 ? ' danger' : ''}` }, icon('gauge'),
+    h('span', {}, h('strong', {}, p.title), ': ', hot.map((w) => `${windowLabel(w)} ${Math.round(w.used_percent)}%` + (w.resets_at ? `, ${untilText(w.resets_at)}` : '')).join(' · ')),
+    h('button', { class: 'btn btn-sm', onclick: limitsModal }, tr('Details')));
+}
+
+function renderLimitBanners() {
+  for (const box of document.querySelectorAll('.welcome-banner, .thread-banner')) {
+    box.querySelector('.limit-banner')?.remove();
+    const b = limitBanner();
+    if (b) box.append(b);
+  }
+}
+
 // ---------- login ----------
 
 function showLogin() {
@@ -566,7 +652,9 @@ function ensureAppShell() {
     newChat,
     h('div', { class: 'nav-label' }, tr('Chats')),
     sessions,
-    h('div', { class: 'sidebar-foot' }, devicesLink, h('a', { class: 'nav-item', href: '#/settings/overview' }, icon('sliders'), tr('Settings'))),
+    h('div', { class: 'sidebar-foot' }, devicesLink, h('div', { class: 'sidebar-foot-row' },
+      h('a', { class: 'nav-item', href: '#/settings/overview' }, icon('sliders'), tr('Settings')),
+      h('button', { class: 'icon-btn limits-btn', title: tr('Usage limits'), 'aria-label': tr('Usage limits'), onclick: limitsModal }, icon('gauge')))),
   ]);
 
   const collapsed = new Set(JSON.parse(localStorageGet('collapsed') || '[]'));
@@ -870,7 +958,7 @@ async function viewNewChat() {
   function pickTarget() {
     const items = devices().map((t) => h('button', {
       class: `menu-item${selected && t.id === selected.id ? ' selected' : ''}`, disabled: t.status !== 'online',
-      onclick: () => { selected = t; localStorageSet('target', t.id); renderChip(); modeCtl.refresh(); hint.textContent = hintText(); banner.replaceChildren(outdatedBanner(selected) || ''); closeLayer(); },
+      onclick: () => { selected = t; localStorageSet('target', t.id); renderChip(); modeCtl.refresh(); hint.textContent = hintText(); banner.replaceChildren(outdatedBanner(selected) || '', limitBanner() || ''); closeLayer(); },
     }, h('span', { class: `dot${t.status === 'online' ? ' ok' : ''}` }), t.name, h('span', { class: 'popover-sub' }, isThisDevice(t) ? tr('this device') : t.status === 'online' ? t.platform.split('-')[0] : tr('offline'))));
     items.push(h('div', { class: 'menu-sep' }), h('button', { class: 'menu-item', onclick: () => { closeLayer(); openPairing(); } }, icon('link'), tr('Pair a new device')));
     openPopover(targetChip, items);
@@ -879,7 +967,7 @@ async function viewNewChat() {
 
   const hint = h('p', { class: 'welcome-hint' });
   if (!state.system) { try { state.system = await get('/v1/system'); } catch { /* shown without version info */ } }
-  const banner = h('div', { class: 'welcome-banner' }, outdatedBanner(selected) || '');
+  const banner = h('div', { class: 'welcome-banner' }, outdatedBanner(selected) || '', limitBanner() || '');
   const hintText = (mode = modeCtl.effective()) => {
     if (!online.length) return tr('All devices are currently offline. Run mensarium client run on the machine you need.');
     return mode === 'full'
@@ -995,7 +1083,7 @@ async function viewChat(taskId) {
       [h('span', { class: 'crumb-device' }, icon('laptop'), task.target_name || tr('device'), h('span', { class: 'sep' }, '/')), h('span', { class: 'current', title: task.input }, taskTitle(task))],
       [btnDelete]),
     thread,
-    h('div', { class: 'thread-banner' }, banner || ''),
+    h('div', { class: 'thread-banner' }, banner || '', limitBanner() || ''),
     c.el,
   );
 
@@ -1477,8 +1565,16 @@ async function settingsOverview(shell) {
       } catch (err) { fail(err); e.target.disabled = false; }
     } }, icon('refresh'), tr('Update')));
   }).catch(() => {});
+  await loadLimits();
+  const limitsBox = h('div', { class: 'limits-list' });
+  const renderLimits = () => limitsBox.replaceChildren(...limitsBody());
+  renderLimits();
+  state.limitsRender = () => { if (limitsBox.isConnected) renderLimits(); };
   page(shell, tr('Overview'), tr('Where the main agent is reachable, and how to check that devices are talking to it.'), logout,
     h('div', { class: 'hero' }, orb('md'), h('div', { class: 'hero-text' }, h('h2', {}, 'Mensarium Core'), h('p', {}, tr('Version {0}', s.version))), coreUpdate),
+    section(tr('Usage limits'), tr('How much of each connected provider\'s quota is used. The active provider warns above the chat input from {0}%.', Math.round((state.limits?.threshold || 0.75) * 100)),
+      h('div', { class: 'limits-head' }, h('span', { class: 'spacer' }), h('button', { class: 'btn btn-sm', onclick: (e) => refreshLimits(null, e.currentTarget) }, icon('refresh'), tr('Refresh'))),
+      limitsBox),
     section(tr('Connection'), null, h('div', { class: 'rows' },
       row(tr('Core address'), tr('Clients connect to it; the web UI runs on the clients.'), cmdValue(url), true),
       row(tr('Key fingerprint'), tr('Check it against what the installer showed on the device during pairing.'), s.core_key_fingerprint, true),
@@ -3058,12 +3154,15 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+let limitsTimer = null;
 async function boot() {
+  if (!limitsTimer) limitsTimer = setInterval(() => loadLimits(), 60000);
   if (state.gateway === null) await loadGateway();
   if (state.gateway && !state.gateway.online) { setCoreOffline(true); }
   try {
     state.system = await get('/v1/system');
     setCoreOffline(false);
+    loadLimits();
     await refreshData();
   } catch (err) {
     if (err instanceof AuthError) { showLogin(); return; }
