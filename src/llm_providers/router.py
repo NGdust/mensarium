@@ -12,10 +12,13 @@ RETIRE_AFTER_S = 600
 
 
 class ProviderRouter:
-    """The active provider behind a stable object, so the provider can change while the Core runs."""
+    """The default provider behind a stable object, so it can change while the Core runs,
+    plus lazily built clients of the other providers for chats that picked them."""
 
-    def __init__(self, provider: AnyProvider) -> None:
+    def __init__(self, provider: AnyProvider, build: Callable[[str], AnyProvider]) -> None:
         self.current = provider
+        self.build = build
+        self.others: dict[str, AnyProvider] = {}
         self._retiring: set[asyncio.TimerHandle] = set()
         self.on_chat: Callable[[AnyProvider], None] | None = None
 
@@ -39,20 +42,41 @@ class ProviderRouter:
     def vision_model(self) -> str | None:
         return self.current.vision_model
 
-    def swap(self, provider: AnyProvider) -> None:
-        """Requests already in flight finish on the old client, which is closed a while later."""
-        old, self.current = self.current, provider
+    def get(self, pid: str | None = None) -> AnyProvider:
+        if not pid or pid == self.current.name:
+            return self.current
+        if pid not in self.others:
+            self.others[pid] = self.build(pid)
+        return self.others[pid]
+
+    def _retire(self, old: AnyProvider) -> None:
         loop = asyncio.get_running_loop()
         handle = loop.call_later(RETIRE_AFTER_S, lambda: asyncio.ensure_future(old.aclose()))
         self._retiring.add(handle)
+
+    def swap(self, provider: AnyProvider) -> None:
+        """Requests already in flight finish on the old client, which is closed a while later."""
+        old, self.current = self.current, provider
+        self._retire(old)
+        self.drop(provider.name)
+
+    def drop(self, pid: str) -> None:
+        """Forget a non-default client after its settings changed or it was removed."""
+        if old := self.others.pop(pid, None):
+            self._retire(old)
 
     async def list_models(self) -> list[ModelInfo]:
         return await self.current.list_models()
 
     async def chat(
-        self, request: ChatRequest, *, tools: list[ToolDefinition], response_schema: dict[str, Any] | None = None
+        self,
+        request: ChatRequest,
+        *,
+        tools: list[ToolDefinition],
+        response_schema: dict[str, Any] | None = None,
+        provider_id: str | None = None,
     ) -> ModelResponse:
-        provider = self.current
+        provider = self.get(provider_id)
         try:
             return await provider.chat(request, tools=tools, response_schema=response_schema)
         finally:
@@ -66,3 +90,5 @@ class ProviderRouter:
         for handle in self._retiring:
             handle.cancel()
         await self.current.aclose()
+        for other in self.others.values():
+            await other.aclose()

@@ -237,7 +237,7 @@ class AutomationManager:
 
     async def update(self, automation_id: str, patch: AutomationPatch) -> dict[str, Any]:
         row = await self._row(automation_id)
-        values = {k: v for k, v in patch.model_dump(exclude_unset=True).items() if v is not None or k == "model"}
+        values = {k: v for k, v in patch.model_dump(exclude_unset=True).items() if v is not None or k in ("model", "provider")}
         if "target_id" in values:
             await self._check_target(values["target_id"])
         schedule = Schedule.model_validate(values.get("schedule", row["schedule"]))
@@ -340,7 +340,7 @@ class AutomationManager:
         error: str | None = None
         try:
             task = await self.orchestrator.create_task(
-                PROFILE, row["target_id"], row["prompt"], row["mode"], row.get("model"), automation_id=row["id"]
+                PROFILE, row["target_id"], row["prompt"], row["mode"], row.get("model"), automation_id=row["id"], provider=row.get("provider")
             )
             await self.repo.update_run(run_id, {"task_id": task["id"]})
             final = await self._wait(row, task["id"])

@@ -458,6 +458,9 @@ a.chip:hover { text-decoration: none; }
 .model-list { max-height: min(320px, 50vh); overflow-y: auto; }
 .mi-model { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12.5px var(--mono); }
 .popover-empty { padding: 10px; color: var(--muted); font-size: 13px; }
+.menu-group { display: flex; align-items: center; gap: 6px; padding: 10px 10px 4px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.menu-group:first-child { padding-top: 4px; }
+.menu-group .provider-id { text-transform: none; letter-spacing: 0; }
 
 /* plan above the composer */
 .plan { max-width: var(--chat-w); margin: 0 auto 8px; border-radius: 14px; border: 1px solid var(--line); background: rgba(22, 20, 28, 0.6); overflow: hidden; }

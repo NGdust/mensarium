@@ -17,16 +17,21 @@ class ProviderError(Exception):
 
 
 class Providers:
-    """LLM providers in the Core config: add, change, remove, pick the active one; keys live in Core secrets."""
+    """LLM providers in the Core config: add, change, remove, keep the default one; keys live in Core secrets.
+    `llm.active_provider` is the default: the provider of the model last picked for a new chat."""
 
     def __init__(self, cfg: CoreConfig, paths: CorePaths) -> None:
         self.cfg = cfg
         self.paths = paths
         self.router: ProviderRouter | None = None
 
-    def _switch(self) -> None:
-        if self.router:
+    def _switch(self, pid: str) -> None:
+        if not self.router:
+            return
+        if pid == self.cfg.llm.active_provider:
             self.router.swap(self.active_client())
+        else:
+            self.router.drop(pid)
 
     @staticmethod
     def kind(pid: str, p: ProviderConfig) -> str:
@@ -117,26 +122,38 @@ class Providers:
             kind=kind, base_url=base_url.rstrip("/"), default_model=default_model.strip(), api_key_ref=ref,
             timeout_s=timeout_s, max_retries=max_retries, vision_model=(vision_model or "").strip() or None,
         )
+        if self.cfg.llm.active_provider not in self.cfg.llm.providers:
+            self.cfg.llm.active_provider = pid
         save_config(self.paths, self.cfg)
-        if pid == self.cfg.llm.active_provider:
-            self._switch()
+        self._switch(pid)
 
     def remove(self, pid: str) -> None:
         if pid not in self.cfg.llm.providers:
             raise ProviderError("provider not found")
-        if pid == self.cfg.llm.active_provider:
-            raise ProviderError("this provider is active; make another one active first")
+        if len(self.cfg.llm.providers) == 1:
+            raise ProviderError("this is the only provider; add another one first")
         ref = self.cfg.llm.providers.pop(pid).api_key_ref
         if ref and not any(p.api_key_ref == ref for p in self.cfg.llm.providers.values()):
             (self.paths.secrets / ref.removeprefix("secret://")).unlink(missing_ok=True)
+        if pid == self.cfg.llm.active_provider:
+            self.cfg.llm.active_provider = next(iter(self.cfg.llm.providers))
+            self._switch(self.cfg.llm.active_provider)
         save_config(self.paths, self.cfg)
+        if self.router:
+            self.router.drop(pid)
 
-    def activate(self, pid: str) -> None:
+    def set_default(self, pid: str, model: str) -> None:
+        """The model picked for a new chat becomes the default for the next chats and background work."""
         if pid not in self.cfg.llm.providers:
             raise ProviderError("provider not found")
+        switched = pid != self.cfg.llm.active_provider
         self.cfg.llm.active_provider = pid
+        self.cfg.llm.providers[pid].default_model = model
         save_config(self.paths, self.cfg)
-        self._switch()
+        if switched:
+            self._switch(pid)
+        elif self.router:
+            self.router.default_model = model
 
     async def test(self, kind: str, base_url: str, api_key: str | None, pid: str | None) -> list[str]:
         """List the models with these settings; an empty key means the key already saved for `pid`."""

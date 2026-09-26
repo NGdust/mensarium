@@ -12,10 +12,7 @@ class ProfileLLM(BaseModel):
 
 
 class ProfileLimits(BaseModel):
-    max_steps: int = 30
-    max_tool_calls: int = 30
     max_output_chars: int = 24000
-    max_wall_time_s: int = 1800
 
 
 class ProfileApproval(BaseModel):

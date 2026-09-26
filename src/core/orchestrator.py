@@ -30,7 +30,8 @@ from mensarium.core.memory import Memory, NoteError
 from mensarium.core.plugins import PluginError, PluginManager, Toolbox
 from mensarium.core.repo import TERMINAL_STATUSES, Repo
 from mensarium.core.skills import SkillStore
-from mensarium.llm_providers.base import LLMError, LLMProvider
+from mensarium.llm_providers.base import LLMError
+from mensarium.llm_providers.router import ProviderRouter
 from mensarium.policy_engine.engine import Decision, evaluate
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import iso_in, now_iso, parse_iso, utcnow
@@ -105,7 +106,7 @@ class Orchestrator:
         repo: Repo,
         hub: ClientHub,
         bus: EventBus,
-        provider: LLMProvider,
+        provider: ProviderRouter,
         cfg: CoreConfig,
         workspace_id: str,
         artifacts_dir: Path,
@@ -138,6 +139,8 @@ class Orchestrator:
 
     async def recover_after_restart(self) -> None:
         for task in await self.repo.list_active_tasks():
+            if task.get("parent_id"):
+                self.bus.parents[task["id"]] = task["parent_id"]
             await self.repo.update_task(task["id"], {"status": "PAUSED", "status_reason": "core restarted"})
             await self.bus.emit(task["id"], "task.status", {"status": "PAUSED", "reason": "core restarted"})
         await self.repo.expire_open_approvals()
@@ -151,6 +154,7 @@ class Orchestrator:
         model: str | None = None,
         automation_id: str | None = None,
         project_id: str | None = None,
+        provider: str | None = None,
     ) -> dict[str, Any]:
         profile = await self.load_profile(profile_id)
         target = await self.repo.get_target(target_id)
@@ -184,6 +188,7 @@ class Orchestrator:
                 "status": "NEW",
                 "mode": mode,
                 "model": model,
+                "provider": provider,
                 "automation_id": automation_id,
                 "project_id": project_id,
                 "branch": branch_name(task_id, text) if project else None,
@@ -235,12 +240,13 @@ class Orchestrator:
                     await self.decide(approval_id, "approve", "full access enabled", confirm=True)
         return await self._task(task_id)
 
-    async def set_model(self, task_id: str, model: str) -> dict[str, Any]:
+    async def set_model(self, task_id: str, model: str, provider: str | None = None) -> dict[str, Any]:
         task = await self._task(task_id)
-        if task.get("model") != model:
-            await self.repo.update_task(task_id, {"model": model})
-            await self.repo.audit(self.workspace_id, "user", "task.model", {"task_id": task_id, "model": model})
-            await self.bus.emit(task_id, "task.model", {"model": model})
+        provider = provider or task.get("provider")
+        if task.get("model") != model or task.get("provider") != provider:
+            await self.repo.update_task(task_id, {"model": model, "provider": provider})
+            await self.repo.audit(self.workspace_id, "user", "task.model", {"task_id": task_id, "provider": provider, "model": model})
+            await self.bus.emit(task_id, "task.model", {"model": model, "provider": provider})
         return await self._task(task_id)
 
     async def resume(self, task_id: str) -> dict[str, Any]:
@@ -355,7 +361,7 @@ class Orchestrator:
             raise Stop("PAUSED", "paused by user")
 
     async def _run(self, task_id: str) -> None:
-        resumable = False
+        paused = False
         try:
             await self._set_status(task_id, "VALIDATING")
             task = await self._task(task_id)
@@ -367,12 +373,11 @@ class Orchestrator:
                 task = await self._task(task_id)
             await self._loop(task, profile)
         except Stop as s:
-            resumable = s.status in ("PAUSED", "FAILED_RECOVERABLE")
+            paused = s.status == "PAUSED"
             await self.repo.expire_open_approvals(task_id)
             await self._set_status(task_id, s.status, s.reason)
             await self.repo.audit(self.workspace_id, "core", "task.stopped", {"task_id": task_id, "status": s.status})
         except Exception as e:
-            resumable = True
             log.exception("task crashed", extra={"task_id": task_id})
             await self.bus.emit(task_id, "task.error", {"message": f"internal error: {e}"})
             await self._set_status(task_id, "FAILED_RECOVERABLE", f"internal error: {e}")
@@ -381,8 +386,8 @@ class Orchestrator:
             self.interrupts.pop(task_id, None)
             self.running_requests.pop(task_id, None)
             self.workdirs.pop(task_id, None)
-            # sub-agents of a finished task have nobody to report to; a paused one collects them on resume
-            if not resumable:
+            # sub-agents of a finished or crashed task have nobody to report to; a paused one collects them on resume
+            if not paused:
                 for child in await self.repo.list_children(task_id):
                     if child["id"] in self.runners:
                         await self._control(child["id"], "cancel")
@@ -455,16 +460,16 @@ class Orchestrator:
 
     async def _loop(self, task: dict[str, Any], profile: AgentProfile) -> None:
         task_id = task["id"]
-        started = time.monotonic()
-        llm_steps = tool_calls = 0
+        llm_steps = 0
 
         while True:
             self._check_control(task_id)
-            model = (await self._task(task_id)).get("model") or profile.llm.model or self.provider.default_model
-            if time.monotonic() - started > profile.limits.max_wall_time_s:
-                raise Stop("FAILED", "wall time budget exhausted")
-            if llm_steps >= profile.limits.max_steps:
-                raise Stop("FAILED", "step budget exhausted")
+            current = await self._task(task_id)
+            pid, model = current.get("provider"), current.get("model")
+            if pid and pid not in self.cfg.llm.providers:
+                pid = model = None  # the chat's provider was removed: fall back to the default one
+            client = self.provider.get(pid)
+            model = model or profile.llm.model or client.default_model
 
             target = await self.repo.get_target(task["target_id"])
             if not target or target["status"] == "revoked":
@@ -514,8 +519,8 @@ class Orchestrator:
             llm_steps += 1
             steps = await self.repo.list_steps(task_id)
             messages = build_messages(steps, profile.llm.max_context_tokens, await self._recent_images(steps))
-            if has_images(messages) and self.provider.vision_model:
-                model = self.provider.vision_model
+            if has_images(messages) and client.vision_model:
+                model = client.vision_model
             request = ChatRequest(
                 model=model,
                 system=build_system_prompt(
@@ -534,7 +539,7 @@ class Orchestrator:
                 messages=messages,
                 temperature=profile.llm.temperature,
                 max_output_tokens=profile.llm.max_output_tokens,
-                timeout_s=self.cfg.llm.providers[self.cfg.llm.active_provider].timeout_s,
+                timeout_s=self.cfg.llm.providers[client.name].timeout_s,
                 metadata={"task_id": task_id, "trace_id": task["trace_id"]},
             )
             await self.bus.emit(task_id, "llm.request", {"step": llm_steps})
@@ -543,7 +548,7 @@ class Orchestrator:
                 resp = await self._interruptible(
                     task_id,
                 self.provider.chat(
-                    request, tools=[toolbox.registry[t].definition() for t in available], response_schema=None
+                    request, tools=[toolbox.registry[t].definition() for t in available], response_schema=None, provider_id=pid
                 ),
                 )
             except LLMError as e:
@@ -554,7 +559,7 @@ class Orchestrator:
                     try:
                         resp = await self._interruptible(
                             task_id,
-                            self.provider.chat(request, tools=[toolbox.registry[t].definition() for t in available], response_schema=None),
+                            self.provider.chat(request, tools=[toolbox.registry[t].definition() for t in available], response_schema=None, provider_id=pid),
                         )
                     except LLMError as e2:
                         await self.bus.emit(task_id, "task.error", {"message": f"LLM call failed: {e2}"})
@@ -571,7 +576,7 @@ class Orchestrator:
                 {
                     "output": {"text": action.text, "tool_calls": action.assistant_tool_calls()},
                     "latency_ms": latency,
-                    "provider": self.provider.name,
+                    "provider": client.name,
                     "model_id": model,
                     "params": {"temperature": request.temperature, "max_output_tokens": request.max_output_tokens},
                     "usage": usage,
@@ -600,9 +605,6 @@ class Orchestrator:
 
             for extra in action.extra_calls:
                 await self._observe(task_id, extra, "Not executed: only one tool call per step is allowed.", "skipped")
-            tool_calls += 1
-            if tool_calls > profile.limits.max_tool_calls:
-                raise Stop("FAILED", "tool call budget exhausted")
             assert action.call is not None
             await self._handle_tool_call(task, profile, toolbox, target, policy, llm_step_id, action.call, project)
 
@@ -1020,6 +1022,7 @@ class Orchestrator:
                         "target_id": task["target_id"],
                         "mode": task["mode"],
                         "model": task.get("model"),
+                        "provider": task.get("provider"),
                     }
                 )
                 v = await self.automations.create(body, created_by="agent")
@@ -1052,6 +1055,7 @@ class Orchestrator:
                 "status": "NEW",
                 "mode": task["mode"],
                 "model": model,
+                "provider": task.get("provider"),
                 "project_id": task.get("project_id"),
                 "branch": task.get("branch"),
                 "base_ref": task.get("base_ref"),

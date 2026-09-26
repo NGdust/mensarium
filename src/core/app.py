@@ -37,7 +37,7 @@ from mensarium.core.automations import AutomationManager
 from mensarium.core.catalog import Catalog
 from mensarium.core.channels import ChannelError, ChannelManager
 from mensarium.core.client_hub import ClientHub, TargetUnavailable
-from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secret, save_config, write_secret
+from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secret, write_secret
 from mensarium.core.db import Database
 from mensarium.core.device import ensure_device
 from mensarium.core.dreaming import Dreamer, DreamError
@@ -59,6 +59,7 @@ from mensarium.shared.versions import parse_version
 from mensarium.tool_runtime.registry import REGISTRY
 
 PAIRING_TTL_S = 600
+MODELS_TIMEOUT_S = 20
 
 
 @dataclass
@@ -106,6 +107,7 @@ class TaskCreate(BaseModel):
     profile_id: str = "coding-agent-v1"
     mode: AccessMode = "ask"
     model: str | None = Field(None, min_length=1, max_length=200)
+    provider: str | None = Field(None, min_length=1, max_length=100)
     project_id: str | None = Field(None, max_length=100)
 
 
@@ -115,6 +117,7 @@ class ModeBody(BaseModel):
 
 class ModelBody(BaseModel):
     model: str = Field(min_length=1, max_length=200)
+    provider: str | None = Field(None, min_length=1, max_length=100)
 
 
 class ProviderBody(BaseModel):
@@ -246,7 +249,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             cli_token = secrets.token_urlsafe(24)
             write_secret(paths, "core-cli-token", cli_token)
         providers = Providers(cfg, paths)
-        provider = ProviderRouter(providers.active_client())
+        provider = ProviderRouter(providers.active_client(), providers.client)
         providers.router = provider
         limits = LimitsStore(providers, provider)
         limits.start()
@@ -498,11 +501,13 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
 
     @app.put("/v1/system/model")
     async def set_default_model(body: ModelBody, c: Core = Depends(auth)) -> dict[str, str]:
-        c.cfg.llm.providers[c.cfg.llm.active_provider].default_model = body.model
-        await asyncio.to_thread(save_config, c.paths, c.cfg)
-        c.provider.default_model = body.model
-        await c.repo.audit(c.workspace_id, "user", "llm.default_model", {"model": body.model})
-        return {"model": body.model}
+        pid = body.provider or c.cfg.llm.active_provider
+        try:
+            c.providers.set_default(pid, body.model)
+        except ProviderError as e:
+            raise provider_error(e) from e
+        await c.repo.audit(c.workspace_id, "user", "llm.default_model", {"provider": pid, "model": body.model})
+        return {"provider": pid, "model": body.model}
 
     def provider_error(e: ProviderError) -> HTTPException:
         return HTTPException(404 if "not found" in str(e) else 409, str(e))
@@ -529,15 +534,6 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         await c.repo.audit(c.workspace_id, "user", "provider.removed", {"id": provider_id})
         return c.providers.view()
 
-    @app.post("/v1/providers/{provider_id}/activate")
-    async def activate_provider(provider_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
-        try:
-            c.providers.activate(provider_id)
-        except ProviderError as e:
-            raise provider_error(e) from e
-        await c.repo.audit(c.workspace_id, "user", "provider.activated", {"id": provider_id})
-        return c.providers.view()
-
     @app.get("/v1/limits")
     async def limits_view(c: Core = Depends(auth)) -> dict[str, Any]:
         return c.limits.view()
@@ -557,11 +553,18 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             return {"ok": False, "error": str(e)}
 
     @app.get("/v1/models")
-    async def models(c: Core = Depends(auth)) -> list[dict[str, str]]:
-        try:
-            return [m.model_dump() for m in await c.provider.list_models()]
-        except Exception as e:
-            raise HTTPException(502, f"provider error: {e}") from e
+    async def models(c: Core = Depends(auth)) -> list[dict[str, Any]]:
+        """Models of every provider, grouped; a provider that fails to answer comes back with its error."""
+
+        async def group(p: dict[str, Any]) -> dict[str, Any]:
+            out = {"provider_id": p["id"], "kind": p["kind"], "title": p["title"], "default_model": p["default_model"], "default": p["active"], "models": [], "error": None}
+            try:
+                out["models"] = [m.model_dump() for m in await asyncio.wait_for(c.provider.get(p["id"]).list_models(), MODELS_TIMEOUT_S)]
+            except Exception as e:
+                out["error"] = str(e) or type(e).__name__
+            return out
+
+        return list(await asyncio.gather(*(group(p) for p in c.providers.view()["providers"])))
 
     def target_view(c: Core, t: dict[str, Any]) -> dict[str, Any]:
         status = t["status"] if t["status"] == "revoked" else ("online" if c.hub.is_online(t["id"]) else "offline")
@@ -1099,7 +1102,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
 
     def task_view(t: dict[str, Any]) -> dict[str, Any]:
         keys = (
-            "id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result", "mode", "model", "parent_id", "label",
+            "id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result", "mode", "model", "provider", "parent_id", "label",
             "automation_id", "project_id", "branch", "base_sha", "head_sha",
         )
         return {k: t.get(k) for k in keys} | {"plan": t.get("plan") or [], "created_at": t["created_at"], "updated_at": t["updated_at"]}
@@ -1163,7 +1166,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         try:
             return task_view(
                 await c.orchestrator.create_task(
-                    body.profile_id, body.target_id, body.input, body.mode, body.model, project_id=body.project_id
+                    body.profile_id, body.target_id, body.input, body.mode, body.model, project_id=body.project_id, provider=body.provider
                 )
             )
         except TaskError as e:
@@ -1186,7 +1189,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     @app.post("/v1/tasks/{task_id}/model")
     async def set_task_model(task_id: str, body: ModelBody, c: Core = Depends(auth)) -> dict[str, Any]:
         try:
-            return task_view(await c.orchestrator.set_model(task_id, body.model))
+            return task_view(await c.orchestrator.set_model(task_id, body.model, body.provider))
         except TaskError as e:
             raise task_error(e) from e
 

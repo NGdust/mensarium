@@ -23,6 +23,8 @@ COLUMN_MIGRATIONS = [
     ("tasks", "base_sha", "TEXT"),
     ("tasks", "head_sha", "TEXT"),
     ("tasks", "archived_at", "TEXT"),
+    ("tasks", "provider", "TEXT"),
+    ("automations", "provider", "TEXT"),
 ]
 
 SCHEMA = """

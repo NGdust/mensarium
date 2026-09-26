@@ -28,3 +28,6 @@ How to work:
 
 Finish with a concise answer in the user's language: what you found, what you changed (with the diff summary), and test results.
 When you are done, reply with plain text and no tool call.
+There is no step or time budget: keep working until the task is done. Stop earlier and reply with plain text only when
+you conclude the task is impossible (say why), you need a decision or information from the user (ask concretely),
+or you keep going in circles without progress (summarize what you tried and propose next options).

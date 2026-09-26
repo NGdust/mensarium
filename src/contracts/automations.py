@@ -74,6 +74,7 @@ class AutomationCreate(BaseModel):
     target_id: str
     mode: AccessMode = "ask"
     model: str | None = None
+    provider: str | None = None
     timeout_s: int = Field(3600, ge=60, le=86_400)
     notify: bool = True
     delete_after_run: bool = False
@@ -87,6 +88,7 @@ class AutomationPatch(BaseModel):
     target_id: str | None = None
     mode: AccessMode | None = None
     model: str | None = None
+    provider: str | None = None
     timeout_s: int | None = Field(None, ge=60, le=86_400)
     notify: bool | None = None
     delete_after_run: bool | None = None

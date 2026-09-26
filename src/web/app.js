@@ -528,7 +528,7 @@ function limitsBody() {
   if (!d.providers.length) return [h('div', { class: 'empty rows' }, tr('No providers yet.'))];
   return d.providers.map((p) => h('div', { class: 'limit-provider' },
     h('div', { class: 'limit-provider-head' },
-      h('strong', {}, p.title, p.provider_id !== p.kind ? h('code', { class: 'provider-id' }, p.provider_id) : null, p.active ? h('span', { class: 'pill accent' }, tr('active')) : null),
+      h('strong', {}, p.title, p.provider_id !== p.kind ? h('code', { class: 'provider-id' }, p.provider_id) : null),
       h('span', { class: 'spacer' }),
       p.checked_at ? h('span', { class: 'market-meta', title: p.source }, tr('checked {0}', relTime(p.checked_at))) : null,
       p.supported ? h('button', { class: `icon-btn${state.limitsBusy.has(p.provider_id) ? ' spinning' : ''}`, title: tr('Refresh'), 'aria-label': tr('Refresh'), disabled: state.limitsBusy.has(p.provider_id), onclick: () => refreshLimits(p.provider_id) }, icon('refresh')) : null),
@@ -851,6 +851,7 @@ function modeSwitch(initial, { target, onPick }) {
 
 // Chip + searchable popover to pick the LLM model; an empty value means the Core default.
 const defaultModel = () => state.system?.provider?.model || '';
+const defaultProvider = () => state.system?.provider?.name || '';
 const MODEL_NOTES = { 'mistral-large-3:675b': () => tr('uncensored') };
 const modelLabel = (id) => (MODEL_NOTES[id] ? `${id} · ${MODEL_NOTES[id]()}` : id);
 function loadModels() {
@@ -858,13 +859,14 @@ function loadModels() {
   return state.models;
 }
 
+// One list of every provider's models, grouped by provider; a pick sets both the provider and the model.
 function modelSwitch(initial, { onPick }) {
-  let model = initial || '';
+  let { provider = '', model = '' } = initial || {};
   const label = h('span', { class: 'chip-label' });
   const chip = h('button', { class: 'chip chip-compact chip-model', title: tr('Model'), 'aria-haspopup': 'menu' });
   const render = () => {
     label.textContent = model || defaultModel() || tr('Model');
-    chip.title = tr('Model: {0}', label.textContent);
+    chip.title = tr('Model: {0}', [provider || defaultProvider(), label.textContent].filter(Boolean).join(' · '));
     chip.replaceChildren(icon('robot'), label, icon('chevron'));
   };
   chip.addEventListener('click', async () => {
@@ -872,23 +874,34 @@ function modelSwitch(initial, { onPick }) {
     const list = h('div', { class: 'model-list' }, h('div', { class: 'popover-empty' }, tr('Loading the list...')));
     const place = openPopover(chip, [h('div', { class: 'popover-search' }, icon('search'), search), list], 'model-pop');
     search.focus();
-    let ids;
-    try { ids = (await loadModels()).map((m) => m.id); } catch (err) { list.replaceChildren(h('div', { class: 'popover-empty' }, err.message)); return; }
-    const current = model || defaultModel();
-    const renderList = () => {
-      const q = search.value.trim().toLowerCase();
-      const shown = ids.filter((id) => !q || id.toLowerCase().includes(q));
-      list.replaceChildren(...(shown.length ? shown.map((id) => h('button', {
-        class: `menu-item${id === current ? ' selected' : ''}`,
+    let groups;
+    try { groups = await loadModels(); } catch (err) { list.replaceChildren(h('div', { class: 'popover-empty' }, err.message)); return; }
+    const cur = { provider: provider || defaultProvider(), model: model || defaultModel() };
+    const item = (g, id) => {
+      const on = g.provider_id === cur.provider && id === cur.model;
+      return h('button', {
+        class: `menu-item${on ? ' selected' : ''}`,
         role: 'menuitemradio',
-        'aria-checked': String(id === current),
+        'aria-checked': String(on),
         onclick: async () => {
           closeLayer();
-          if (id === current) return;
-          try { await onPick(id); model = id; render(); } catch (err) { fail(err); }
+          if (on) return;
+          try { await onPick(g.provider_id, id); provider = g.provider_id; model = id; render(); } catch (err) { fail(err); }
         },
-      }, h('span', { class: 'mi-model' }, modelLabel(id)), id === defaultModel() ? h('span', { class: 'popover-sub' }, tr('default')) : null, id === current ? icon('check') : null))
-        : [h('div', { class: 'popover-empty' }, tr('Nothing found'))]));
+      }, h('span', { class: 'mi-model' }, modelLabel(id)), g.default && id === g.default_model ? h('span', { class: 'popover-sub' }, tr('default')) : null, on ? icon('check') : null);
+    };
+    const renderList = () => {
+      const q = search.value.trim().toLowerCase();
+      const shown = groups.map((g) => {
+        const ids = g.models.map((m) => m.id);
+        if (g.provider_id === cur.provider && cur.model && !ids.includes(cur.model)) ids.unshift(cur.model);
+        const hit = !q || g.title.toLowerCase().includes(q) || g.provider_id.includes(q);
+        return { g, ids: hit ? ids : ids.filter((id) => id.toLowerCase().includes(q)) };
+      }).filter(({ g, ids }) => ids.length || (!q && g.error));
+      list.replaceChildren(...(shown.length ? shown.flatMap(({ g, ids }) => [
+        h('div', { class: 'menu-group' }, g.title, g.provider_id !== g.kind ? h('code', { class: 'provider-id' }, g.provider_id) : null),
+        ...(ids.length ? ids.map((id) => item(g, id)) : [h('div', { class: 'popover-empty' }, tr('Error: {0}', g.error))]),
+      ]) : [h('div', { class: 'popover-empty' }, tr('Nothing found'))]));
       place();
     };
     search.addEventListener('input', renderList);
@@ -897,11 +910,18 @@ function modelSwitch(initial, { onPick }) {
     list.querySelector('.selected')?.scrollIntoView({ block: 'nearest' });
   });
   render();
-  return { el: chip, value: () => model, set(value) { model = value || ''; render(); } };
+  return {
+    el: chip,
+    value: () => ({ provider, model }),
+    set(value) { ({ provider = '', model = '' } = value || {}); render(); },
+  };
 }
 
-// The agent's plan for the current task, pinned above the composer; folds by itself once every step is done.
+// The agent's plan for the current task, pinned above the composer; folds by itself once every step is done
+// or the task stops running, so a crashed or paused task does not keep spinning its current step.
 function planStrip(items = []) {
+  let current = items;
+  let active = true;
   const list = h('div', { class: 'plan-list' });
   const count = h('span', { class: 'plan-count' });
   const el = h('div', { class: 'plan', hidden: true });
@@ -911,18 +931,20 @@ function planStrip(items = []) {
   } }, icon('list'), h('span', { class: 'plan-title' }, tr('Plan')), count, icon('chevron'));
   el.append(head, list);
   const set = (next) => {
+    current = next;
     if (!next.length) { el.hidden = true; return; }
     const done = next.filter((i) => i.status === 'done').length;
     el.hidden = false;
     count.textContent = `${done}/${next.length}`;
     list.replaceChildren(...next.map((i) => h('div', { class: `plan-item ${i.status}` },
-      i.status === 'done' ? icon('check') : i.status === 'in_progress' ? h('span', { class: 'spinner' }) : h('span', { class: 'plan-box' }),
+      i.status === 'done' ? icon('check') : i.status === 'in_progress' && active ? h('span', { class: 'spinner' }) : h('span', { class: 'plan-box' }),
       h('span', { class: 'plan-text' }, i.title))));
-    el.classList.toggle('folded', done === next.length);
-    head.setAttribute('aria-expanded', String(done !== next.length));
+    const open = active && done !== next.length;
+    el.classList.toggle('folded', !open);
+    head.setAttribute('aria-expanded', String(open));
   };
   set(items);
-  return { el, set };
+  return { el, set, setActive(value) { if (value !== active) { active = value; set(current); } } };
 }
 
 // Sub-agents of a chat: a counter chip next to the model, a modal with each agent's assignment, activity and report.
@@ -1033,7 +1055,12 @@ async function viewNewChat(projectId = null) {
     viewCleanups.push(() => clearInterval(iv));
   }
 
-  const modelCtl = modelSwitch('', { onPick: async () => {} });
+  // The model picked for a new chat becomes the default for the next ones.
+  const modelCtl = modelSwitch(null, { onPick: async (provider, model) => {
+    await api('/v1/system/model', { method: 'PUT', body: JSON.stringify({ provider, model }) });
+    if (state.system) state.system.provider = { ...state.system.provider, name: provider, model };
+    state.models = null;
+  } });
   const projectChip = project
     ? h('a', { class: 'chip', href: `#/projects/${project.id}`, title: `${project.source_name || ''}:${project.source_path}` }, icon(KIND_ICON[project.kind] || 'folder'), h('span', { class: 'chip-label' }, project.name))
     : null;
@@ -1044,7 +1071,7 @@ async function viewNewChat(projectId = null) {
     onSend: async (text) => {
       if (project && source()?.status !== 'online') throw new Error(offlineText());
       if (!selected) throw new Error(tr('Select the device the agent will work on'));
-      const task = await post('/v1/tasks', { target_id: selected.id, input: text, mode: modeCtl.effective(), model: modelCtl.value() || undefined, project_id: project?.id });
+      const task = await post('/v1/tasks', { target_id: selected.id, input: text, mode: modeCtl.effective(), model: modelCtl.value().model || undefined, provider: modelCtl.value().provider || undefined, project_id: project?.id });
       state.tasks.unshift(task);
       go(`#/chat/${task.id}`);
     },
@@ -1119,8 +1146,8 @@ async function viewChat(taskId) {
     target,
     onPick: async (value) => { await post(`/v1/tasks/${taskId}/mode`, { mode: value }); localStorageSet('mode', value); },
   });
-  const modelCtl = modelSwitch(task.model, {
-    onPick: (value) => post(`/v1/tasks/${taskId}/model`, { model: value }),
+  const modelCtl = modelSwitch({ provider: task.provider, model: task.model }, {
+    onPick: (provider, model) => post(`/v1/tasks/${taskId}/model`, { provider, model }),
   });
   const plan = planStrip(task.plan || []);
   const agents = agentsPanel();
@@ -1150,6 +1177,7 @@ async function viewChat(taskId) {
 
   function setStatus(status) {
     task.status = status;
+    plan.setActive(isRunning(status));
     const hints = { WAITING_APPROVAL: tr('The agent is waiting for your decision above'), EXECUTING: tr('The agent is running an action…'), OBSERVING: tr('The agent is reading the result…') };
     if (isRunning(status)) c.setAgent('running', hints[status] || tr('The agent is thinking…'));
     else c.setAgent(RESUMABLE.includes(status) ? 'paused' : 'idle');
@@ -1442,8 +1470,8 @@ async function viewChat(taskId) {
         note(MODES[p.mode]?.icon || 'shield', tr('Mode: {0}', (MODES[p.mode]?.label || p.mode).toLowerCase()));
         break;
       case 'task.model':
-        modelCtl.set(p.model);
-        note('robot', tr('Model: {0}', p.model));
+        modelCtl.set(p);
+        note('robot', tr('Model: {0}', [p.provider, p.model].filter(Boolean).join(' · ')));
         break;
       case 'task.plan':
         plan.set(p.items || []);
@@ -1638,7 +1666,7 @@ async function settingsOverview(shell) {
   state.limitsRender = () => { if (limitsBox.isConnected) renderLimits(); };
   page(shell, tr('Overview'), tr('Where the main agent is reachable, and how to check that devices are talking to it.'), [languageSelect(), logout],
     h('div', { class: 'hero' }, orb('md'), h('div', { class: 'hero-text' }, h('h2', {}, 'Mensarium Core'), h('p', {}, tr('Version {0}', s.version))), coreUpdate),
-    section(tr('Usage limits'), tr('How much of each connected provider\'s quota is used. The active provider warns above the chat input from {0}%.', Math.round((state.limits?.threshold || 0.75) * 100)), limitsBox),
+    section(tr('Usage limits'), tr('How much of each connected provider\'s quota is used. The default provider, the one last picked for a new chat, warns above the chat input from {0}%.', Math.round((state.limits?.threshold || 0.75) * 100)), limitsBox),
     section(tr('Connection'), null, h('div', { class: 'rows' },
       row(tr('Core address'), tr('Other devices connect to it; the web UI opens here and on their gateways.'), cmdValue(url), true),
       row(tr('Key fingerprint'), tr('Check it against what the installer showed on the device during pairing.'), s.core_key_fingerprint, true),
@@ -1657,13 +1685,9 @@ async function settingsOverview(shell) {
 async function settingsProviders(shell) {
   const [data, sys] = await Promise.all([get('/v1/providers'), get('/v1/system')]);
   state.system = sys;
-  const health = sys.provider.health || {};
   const kinds = Object.fromEntries(data.kinds.map((k) => [k.kind, k]));
 
   const reload = () => settingsProviders(shell).catch(fail);
-  const activate = async (x) => {
-    try { await post(`/v1/providers/${x.id}/activate`); state.models = null; closeLayer(); toast(tr('Active provider: {0}', x.title)); reload(); } catch (err) { fail(err); }
-  };
   const remove = async (x) => {
     if (!await confirmDialog({ title: tr('Remove “{0}”?', x.title), text: tr('Its settings and saved key are deleted from Core.'), action: tr('Remove'), danger: true })) return;
     try { await del(`/v1/providers/${x.id}`); closeLayer(); toast(tr('Removed')); reload(); } catch (err) { fail(err); }
@@ -1683,8 +1707,6 @@ async function settingsProviders(shell) {
     const vision = h('select', { 'aria-label': tr('Model for images') });
     const timeout = h('input', { type: 'number', value: x ? x.timeout_s : 90, min: 5, max: 600, 'aria-label': tr('Timeout, s') });
     const retries = h('input', { type: 'number', value: x ? x.max_retries : 2, min: 0, max: 5, 'aria-label': tr('Retries') });
-    let makeActive = adding && !data.providers.length;
-    const activeSwitch = adding ? h('label', { class: 'switch-label' }, toggleSwitch(makeActive, { label: tr('Make it active'), onChange: async (v) => { makeActive = v; } }), tr('Make it active')) : null;
     const keyHint = h('div', { class: 'row-desc' });
     const statusDot = h('span', { class: 'dot' });
     const statusText = h('span', {}, tr('Check the connection to load the models.'));
@@ -1735,7 +1757,6 @@ async function settingsProviders(shell) {
           kind: kindSel.value, base_url: base.value.trim(), default_model: model.value.trim(), api_key: key.value || null,
           timeout_s: Number(timeout.value) || 90, max_retries: Number(retries.value) || 0, vision_model: vision.value.trim() || null,
         }) });
-        if (makeActive) await post(`/v1/providers/${encodeURIComponent(id.value.trim())}/activate`);
         state.models = null;
         closeLayer();
         toast(tr('Saved'));
@@ -1753,13 +1774,11 @@ async function settingsProviders(shell) {
         field(baseLabel, base),
         keyField,
         status,
-        field(tr('Default model'), model, h('div', { class: 'row-desc' }, tr('For new chats. In a chat the model is changed with the robot button in the input.'))),
+        field(tr('Default model'), model, h('div', { class: 'row-desc' }, tr('Used when this provider is picked without a model. The model list in a chat shows every provider\'s models.'))),
         visionField,
-        h('div', { class: 'plugin-grid' }, field(tr('Timeout, s'), timeout), field(tr('Retries'), retries)),
-        activeSwitch),
+        h('div', { class: 'plugin-grid' }, field(tr('Timeout, s'), timeout), field(tr('Retries'), retries))),
       h('div', { class: 'modal-actions' },
-        x && !x.active ? h('button', { class: 'btn btn-danger', onclick: () => remove(x) }, tr('Remove')) : null,
-        x && !x.active ? h('button', { class: 'btn', onclick: () => activate(x) }, tr('Make active')) : null,
+        x ? h('button', { class: 'btn btn-danger', onclick: () => remove(x) }, tr('Remove')) : null,
         h('span', { class: 'spacer' }),
         h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
     ).classList.add('modal-wide');
@@ -1771,9 +1790,6 @@ async function settingsProviders(shell) {
     try {
       const pid = data.providers.some((p) => p.id === d.kind) ? `${d.kind}-2` : d.kind;
       await api(`/v1/providers/${pid}`, { method: 'PUT', body: JSON.stringify({ kind: d.kind, base_url: d.path, default_model: d.default_model, api_key: null, timeout_s: 180, max_retries: 1, vision_model: null }) });
-      if (!data.providers.length || await confirmDialog({ title: tr('Make {0} the active provider?', d.title), text: tr('New chats will think through it; running tasks switch from their next step.'), action: tr('Make active') })) {
-        await post(`/v1/providers/${pid}/activate`);
-      }
       state.models = null;
       toast(tr('Connected: {0}', d.title));
       reload();
@@ -1795,11 +1811,11 @@ async function settingsProviders(shell) {
   },
   h('span', { class: 'market-icon' }, icon('robot')),
   h('div', { class: 'hero-text' },
-    h('h2', {}, x.title, x.id !== x.kind ? h('code', { class: 'provider-id' }, x.id) : null, x.active ? h('span', { class: 'pill accent' }, tr('active')) : null),
+    h('h2', {}, x.title, x.id !== x.kind ? h('code', { class: 'provider-id' }, x.id) : null),
     h('p', {}, [x.base_url, x.default_model, x.vision_model ? tr('images: {0}', x.vision_model) : null, x.needs_key || x.has_key ? (x.has_key ? tr('key saved') : tr('no key')) : null].filter(Boolean).join(' · '))),
-  x.active ? h('span', { class: 'status' }, h('span', { class: `dot ${health.ok ? 'ok' : 'danger'}` }), health.ok ? tr('Available') : tr('Unavailable')) : icon('chevron'));
+  icon('chevron'));
 
-  page(shell, tr('Providers'), tr('Where the agent thinks: the LLM provider and its models. Keys are stored only on the Core server; switching the active provider applies from the next step of running tasks.'),
+  page(shell, tr('Providers'), tr('Where the agent thinks: LLM providers and their models. Keys are stored only on the Core server; the model is picked in the chat from one list grouped by provider.'),
     h('button', { class: 'btn btn-primary', onclick: () => editor(null) }, icon('plus'), tr('Add a provider')),
     h('div', { class: 'provider-cards' }, data.providers.length ? data.providers.map(card) : h('div', { class: 'empty rows' }, tr('No providers yet.'))),
     health.ok ? null : h('p', { class: 'market-note' }, health.detail || ''),
@@ -2780,13 +2796,12 @@ async function settingsPlugins(shell) {
 
 async function settingsProfiles(shell) {
   const profiles = await get('/v1/agent-profiles');
-  page(shell, tr('Profiles'), tr('A profile sets the agent\'s tools, its limits, and the actions that wait for approval in ask-before-acting mode.'), null,
+  page(shell, tr('Profiles'), tr('A profile sets the agent\'s tools and the actions that wait for approval in ask-before-acting mode.'), null,
     profiles.map((p) => section(tr('{0}, version {1}', p.name, p.version), p.id, h('div', { class: 'rows' },
       row(tr('Model'), tr('Temperature {0}', p.llm.temperature), p.llm.model, true),
       row(tr('Tools'), null, null),
       h('div', { class: 'row-extra' }, p.allowed_tools.map((t) => h('span', { class: 'pill tag' }, t))),
       row(tr('Require approval'), tr('In “Ask before acting” mode, you approve each such action separately.'), h('span', {}, p.approval.required_risks.map((r) => (RISK[r] || [r])[0]).join(', '))),
-      row(tr('Limits'), null, tr('{0} steps, {1} actions, {2} min', p.limits.max_steps, p.limits.max_tool_calls, Math.round(p.limits.max_wall_time_s / 60))),
     ))),
   );
 }
@@ -3083,11 +3098,15 @@ async function viewAutomationEditor(id) {
   syncMode();
 
   const modelSel = h('select', { 'aria-label': tr('Model') }, h('option', { value: '' }, defaultModel() ? tr('{0} (default)', defaultModel()) : tr('default')));
-  loadModels().then((models) => {
-    const ids = models.map((m) => m.id).filter((x) => x !== defaultModel());
-    if (a?.model && !ids.includes(a.model)) ids.unshift(a.model);
-    modelSel.append(...ids.map((x) => h('option', { value: x }, modelLabel(x))));
-    modelSel.value = a?.model || '';
+  // An option value is "provider\nmodel"; the empty one follows the default model.
+  const saved = a?.model ? `${a.provider || defaultProvider()}\n${a.model}` : '';
+  loadModels().then((groups) => {
+    for (const g of groups) {
+      const ids = g.models.map((m) => m.id);
+      if (saved.startsWith(`${g.provider_id}\n`) && !ids.includes(a.model)) ids.unshift(a.model);
+      if (ids.length) modelSel.append(h('optgroup', { label: g.provider_id !== g.kind ? `${g.title} (${g.provider_id})` : g.title }, ids.map((x) => h('option', { value: `${g.provider_id}\n${x}` }, modelLabel(x)))));
+    }
+    modelSel.value = saved;
   }).catch(() => {});
   const timeout = h('input', { type: 'number', min: 1, max: 1440, step: 1, value: Math.round((a?.timeout_s || 3600) / 60), 'aria-label': tr('Time limit, min') });
   let notify = a ? a.notify : true;
@@ -3125,7 +3144,8 @@ async function viewAutomationEditor(id) {
         schedule: scheduleFromForm(read()),
         target_id: device.value,
         mode: modeSel.value,
-        model: modelSel.value || null,
+        provider: modelSel.value ? modelSel.value.split('\n')[0] : null,
+        model: modelSel.value ? modelSel.value.split('\n')[1] : null,
         timeout_s: Math.min(1440, Math.max(1, Math.round(Number(timeout.value) || 60))) * 60,
         notify,
         delete_after_run: kind.value === 'once' && dropAfter,
