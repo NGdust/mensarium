@@ -10,8 +10,8 @@ import typer
 from rich.table import Table
 
 from mensarium.cli.ui import console, fail, ok, warn
+from mensarium.client.config import ClientPaths
 from mensarium.core.config import CorePaths, load_config, read_secret
-from mensarium.target.config import TargetPaths
 
 plugins_app = typer.Typer(help="Plugins: device tools, Core tools and MCP servers", no_args_is_help=True)
 mcp_app = typer.Typer(help="MCP servers (each one is a plugin)", no_args_is_help=True)
@@ -336,7 +336,7 @@ def mcp_tools(
 
 def target_plugins() -> None:
     """MCP servers the Core placed on this device, as of the last sync."""
-    path = TargetPaths().plugins
+    path = ClientPaths().plugins
     if not path.exists():
         console.print("No MCP servers on this device.")
         return

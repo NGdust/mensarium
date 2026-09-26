@@ -9,8 +9,9 @@ from typing import Literal
 from mensarium import __version__
 from mensarium.shared.paths import mensarium_home
 
-Role = Literal["core", "target"]
-COMMANDS: dict[str, list[str]] = {"core": ["core", "serve"], "target": ["target", "run"]}
+Unit = Literal["core", "client"]
+COMMANDS: dict[str, list[str]] = {"core": ["core", "serve"], "client": ["client", "run"]}
+LEGACY_LABEL, LEGACY_UNIT = "com.mensarium.target", "mensarium-target.service"
 APP_BUNDLE_ID = "com.mensarium.agent"
 INFO_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -39,7 +40,7 @@ def install_app_bundle() -> Path | None:
     in Privacy & Security instead of the Python interpreter. Returns the launcher path, or None off macOS."""
     if sys.platform != "darwin":
         return None
-    src = Path(str(resources.files("mensarium.target") / "macos"))
+    src = Path(str(resources.files("mensarium.client") / "macos"))
     launcher = src / "Mensarium"
     if not launcher.exists():
         return None
@@ -63,21 +64,21 @@ def mensarium_bin() -> str:
     return str(candidate) if candidate.exists() else (shutil.which("mensarium") or "mensarium")
 
 
-def log_file(role: Role) -> Path:
+def log_file(role: Unit) -> Path:
     path = mensarium_home() / role / f"{role}.log"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def _label(role: Role) -> str:
+def _label(role: Unit) -> str:
     return f"com.mensarium.{role}"
 
 
-def _plist_path(role: Role) -> Path:
+def _plist_path(role: Unit) -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{_label(role)}.plist"
 
 
-def _unit_name(role: Role) -> str:
+def _unit_name(role: Unit) -> str:
     return f"mensarium-{role}.service"
 
 
@@ -105,9 +106,11 @@ def _run(*cmd: str, check: bool = False) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, capture_output=True, text=True, check=check)
 
 
-def install(role: Role) -> str:
+def install(role: Unit) -> str:
     argv = [mensarium_bin(), *COMMANDS[role]]
-    if role == "target" and (launcher := install_app_bundle()):
+    if role == "client":
+        _remove_legacy()
+    if role == "client" and (launcher := install_app_bundle()):
         argv = [str(launcher), *argv]
     env = {"MENSARIUM_HOME": str(mensarium_home()), "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
     log = log_file(role)
@@ -167,7 +170,7 @@ WantedBy={'multi-user.target' if _is_root() else 'default.target'}
     return f"background process (pid {proc.pid}); it will not restart after reboot"
 
 
-def stop(role: Role) -> None:
+def stop(role: Unit) -> None:
     kind = backend()
     if kind == "launchd":
         _run("launchctl", "bootout", f"gui/{os.getuid()}/{_label(role)}")
@@ -183,7 +186,7 @@ def stop(role: Role) -> None:
             pid_file.unlink(missing_ok=True)
 
 
-def restart(role: Role) -> None:
+def restart(role: Unit) -> None:
     kind = backend()
     if kind == "launchd":
         domain = f"gui/{os.getuid()}"
@@ -195,12 +198,12 @@ def restart(role: Role) -> None:
         install(role)
 
 
-def uninstall(role: Role) -> None:
+def uninstall(role: Unit) -> None:
     stop(role)
     kind = backend()
     if kind == "launchd":
         _plist_path(role).unlink(missing_ok=True)
-        if role == "target":
+        if role == "client":
             shutil.rmtree(app_bundle(), ignore_errors=True)
     elif kind == "systemd":
         _systemctl("disable", _unit_name(role))
@@ -208,7 +211,36 @@ def uninstall(role: Role) -> None:
         _systemctl("daemon-reload")
 
 
-def is_installed(role: Role) -> bool:
+def _remove_legacy() -> bool:
+    """Drop the pre-0.38 `target` service unit; returns True when one was installed."""
+    kind = backend()
+    if kind == "launchd":
+        plist = Path.home() / "Library" / "LaunchAgents" / f"{LEGACY_LABEL}.plist"
+        if not plist.exists():
+            return False
+        _run("launchctl", "bootout", f"gui/{os.getuid()}/{LEGACY_LABEL}")
+        plist.unlink(missing_ok=True)
+        return True
+    if kind == "systemd":
+        unit = _systemd_user_dir() / LEGACY_UNIT
+        if not unit.exists():
+            return False
+        _systemctl("disable", "--now", LEGACY_UNIT)
+        unit.unlink(missing_ok=True)
+        _systemctl("daemon-reload")
+        return True
+    return False
+
+
+def migrate_legacy_client() -> bool:
+    """Replace the pre-0.38 target service with the client one; returns True when something was replaced."""
+    if not _remove_legacy():
+        return False
+    install("client")
+    return True
+
+
+def is_installed(role: Unit) -> bool:
     kind = backend()
     if kind == "launchd":
         return _plist_path(role).exists()
@@ -217,7 +249,7 @@ def is_installed(role: Role) -> bool:
     return (mensarium_home() / role / f"{role}.pid").exists()
 
 
-def is_running(role: Role) -> bool:
+def is_running(role: Unit) -> bool:
     kind = backend()
     if kind == "launchd":
         out = _run("launchctl", "print", f"gui/{os.getuid()}/{_label(role)}").stdout

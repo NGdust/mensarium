@@ -14,6 +14,8 @@ import typer
 
 from mensarium.cli import service
 from mensarium.cli.ui import banner, console, fail, ok, step, summary, warn
+from mensarium.client.config import DEFAULT_COMMAND_ALLOWLIST, ClientPaths, load_client_config
+from mensarium.client.pairing import PairingError, pair
 from mensarium.core.config import (
     CoreConfig,
     CorePaths,
@@ -28,8 +30,6 @@ from mensarium.core.config import (
 )
 from mensarium.llm_providers.factory import PROVIDER_KINDS
 from mensarium.shared.crypto import fingerprint, load_or_create_private_key, public_key_b64
-from mensarium.target.config import DEFAULT_COMMAND_ALLOWLIST, TargetPaths, load_target_config
-from mensarium.target.pairing import PairingError, pair
 
 STYLE = questionary.Style(
     [("qmark", "fg:#22d3ee bold"), ("pointer", "fg:#22d3ee bold"), ("highlighted", "fg:#22d3ee bold"),
@@ -109,7 +109,7 @@ def setup_core(start_service: bool | None = None) -> None:
         questionary.select(
             "Who should be able to reach the Core?",
             choices=[
-                questionary.Choice("Devices in my network (targets on other machines)", "0.0.0.0"),
+                questionary.Choice("Devices in my network (clients on other machines)", "0.0.0.0"),
                 questionary.Choice("Only this machine (localhost)", "127.0.0.1"),
             ],
             style=STYLE,
@@ -118,7 +118,7 @@ def setup_core(start_service: bool | None = None) -> None:
     host_guess = lan_ip() if bind == "0.0.0.0" else "127.0.0.1"
     public_url = ask(
         questionary.text(
-            "URL targets and the browser will use to reach the Core:",
+            "URL clients and the browser will use to reach the Core:",
             default=f"http://{host_guess}:{port}",
             validate=lambda v: v.startswith(("http://", "https://")) or "Must start with http:// or https://",
             style=STYLE,
@@ -249,8 +249,8 @@ def _finish_core(paths: CorePaths, cfg: CoreConfig, start_service: bool | None) 
             ("Logs", str(service.log_file("core"))),
         ],
         footer=(
-            "Add a target machine: open the web UI -> Targets -> Pair new target,\n"
-            "or run `mensarium core pair-code` here and paste the command on the target."
+            "Add a client machine: open the web UI -> Devices -> Pair new device,\n"
+            "or run `mensarium core pair-code` here and paste the command on the client."
             + ("" if start_service else "\nStart manually: mensarium core serve")
         ),
     )
@@ -269,11 +269,11 @@ def _root_candidates() -> list[str]:
     return found
 
 
-def setup_target(server: str | None, code: str | None, name: str | None, start_service: bool | None) -> None:
-    paths = TargetPaths()
-    banner("Target Agent setup: lets the Core run approved tools on this machine")
+def setup_client(server: str | None, code: str | None, name: str | None, start_service: bool | None) -> None:
+    paths = ClientPaths()
+    banner("Client setup: this machine becomes a device of the Core")
     if paths.config.exists():
-        current = load_target_config(paths)
+        current = load_client_config(paths)
         action = ask(
             questionary.select(
                 f"This machine is already paired as '{current.name}' with {current.server}.",
@@ -282,7 +282,7 @@ def setup_target(server: str | None, code: str | None, name: str | None, start_s
             )
         )
         if action.startswith("Keep"):
-            _finish_target(paths, start_service)
+            _finish_client(paths, start_service)
             return
 
     total = 4
@@ -383,7 +383,7 @@ def setup_target(server: str | None, code: str | None, name: str | None, start_s
     while True:
         code = code or ask(
             questionary.text(
-                "Pairing code from the Core (Targets -> Pair new target):",
+                "Pairing code from the Core (Devices -> Pair new device):",
                 validate=lambda v: bool(CODE_RE.match(v.strip())) or "Format: WORD-WORD-1234",
                 style=STYLE,
             )
@@ -410,7 +410,7 @@ def setup_target(server: str | None, code: str | None, name: str | None, start_s
     ok(f"Core key fingerprint: {cfg.core_fingerprint} (compare with Settings in the web UI)")
 
     step(4, total, "Service")
-    _finish_target(paths, start_service)
+    _finish_client(paths, start_service)
 
 
 def _desktop_setup() -> None:
@@ -418,7 +418,7 @@ def _desktop_setup() -> None:
     if sys.platform == "darwin":
         console.print(
             "macOS now asks to allow [bold]Screen Recording[/bold] and [bold]Accessibility[/bold] for Mensarium: allow both so the agent "
-            "can see the screen and use the mouse and keyboard. Later: [bold]mensarium target permissions[/bold]."
+            "can see the screen and use the mouse and keyboard. Later: [bold]mensarium client permissions[/bold]."
         )
         if not shutil.which("cliclick") and shutil.which("brew") and ask(
             questionary.confirm("Install cliclick with Homebrew so the agent can move the mouse?", default=True, style=STYLE)
@@ -435,26 +435,26 @@ def _desktop_setup() -> None:
         console.print("For screen and input control install: " + ", ".join(missing) + " (apt install xdotool wmctrl scrot; grim on Wayland).")
 
 
-def _finish_target(paths: TargetPaths, start_service: bool | None) -> None:
-    cfg = load_target_config(paths)
+def _finish_client(paths: ClientPaths, start_service: bool | None) -> None:
+    cfg = load_client_config(paths)
     if start_service is None:
         start_service = ask(
-            questionary.confirm("Run the Target Agent as a background service?", default=True, style=STYLE)
+            questionary.confirm("Run the client as a background service?", default=True, style=STYLE)
         )
     if start_service:
-        with console.status("Starting the Target Agent..."):
-            how = service.install("target")
+        with console.status("Starting the client..."):
+            how = service.install("client")
             time.sleep(2)
-        if service.is_running("target"):
-            ok(f"Target Agent is running ({how})")
+        if service.is_running("client"):
+            ok(f"Client is running ({how})")
         else:
-            warn(f"Target Agent may not be running; check {service.log_file('target')}")
+            warn(f"Client may not be running; check {service.log_file('client')}")
     _desktop_setup()
     summary(
-        "Mensarium Target Agent is ready",
+        "Mensarium client is ready",
         [
             ("Name", cfg.name),
-            ("Target ID", cfg.target_id),
+            ("Client ID", cfg.target_id),
             ("Core", cfg.server),
             ("Roots", ", ".join(cfg.roots)),
             ("Programs", ", ".join(cfg.command_allowlist)),
@@ -462,8 +462,8 @@ def _finish_target(paths: TargetPaths, start_service: bool | None) -> None:
             ("Remote update", "allowed" if cfg.allow_remote_update else "disabled"),
             ("Plugins from Core", "allowed" if cfg.allow_remote_plugins else "disabled"),
             ("Bash scripts", "allowed" if cfg.allow_shell else "disabled"),
-            ("Logs", str(service.log_file("target"))),
+            ("Logs", str(service.log_file("client"))),
         ],
-        footer="The target appears as online in the Core web UI within a few seconds."
-        + ("" if start_service else "\nStart manually: mensarium target run"),
+        footer="The device appears as online in the Core web UI within a few seconds."
+        + ("" if start_service else "\nStart manually: mensarium client run"),
     )

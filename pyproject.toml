@@ -1,7 +1,7 @@
 [project]
 name = "mensarium"
 dynamic = ["version"]
-description = "Portable Agent Harness: Core (main agent) and Target Agent"
+description = "Portable Agent Harness: Core (main agent) and clients"
 requires-python = ">=3.12"
 dependencies = [
     "aiosqlite>=0.20",

@@ -18,6 +18,9 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from mensarium import __version__
+from mensarium.client import desktop
+from mensarium.client.config import ClientConfig
+from mensarium.client.desktop import DesktopError
 from mensarium.contracts.protocol import ToolOutput
 from mensarium.contracts.tools import (
     AppOpenArgs,
@@ -46,13 +49,10 @@ from mensarium.contracts.tools import (
     SystemVolumeArgs,
 )
 from mensarium.shared.redaction import SECRET_DIRS, SECRET_FILE_PATTERNS, is_secret_path, redact
-from mensarium.target import desktop
-from mensarium.target.config import TargetConfig
-from mensarium.target.desktop import DesktopError
 from mensarium.tool_runtime.mcp import McpError
 
 if TYPE_CHECKING:
-    from mensarium.target.mcp_host import McpHost
+    from mensarium.client.mcp_host import McpHost
 
 MAX_READ_BYTES = 2_000_000
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".ruff_cache", ".pytest_cache", "dist", "build", ".next", ".idea"}  # fmt: skip
@@ -64,7 +64,7 @@ class ToolError(Exception):
 
 
 class Executor:
-    def __init__(self, cfg: TargetConfig) -> None:
+    def __init__(self, cfg: ClientConfig) -> None:
         self.cfg = cfg
         self.roots = [Path(r).expanduser().resolve() for r in cfg.roots]
         self.mcp: McpHost | None = None

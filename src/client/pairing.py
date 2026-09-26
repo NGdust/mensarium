@@ -4,10 +4,10 @@ from pathlib import Path
 import httpx
 
 from mensarium import __version__
+from mensarium.client.agent import platform_id
+from mensarium.client.config import DEFAULT_COMMAND_ALLOWLIST, ClientConfig, ClientPaths, save_client_config
 from mensarium.contracts.protocol import PairRequest, PairResponse
 from mensarium.shared.crypto import load_or_create_private_key, public_key_b64
-from mensarium.target.agent import platform_id
-from mensarium.target.config import DEFAULT_COMMAND_ALLOWLIST, TargetConfig, TargetPaths, save_target_config
 
 
 class PairingError(Exception):
@@ -15,7 +15,7 @@ class PairingError(Exception):
 
 
 def pair(
-    paths: TargetPaths,
+    paths: ClientPaths,
     *,
     server: str,
     code: str,
@@ -26,7 +26,7 @@ def pair(
     allow_remote_update: bool = True,
     allow_remote_plugins: bool = True,
     allow_shell: bool = True,
-) -> TargetConfig:
+) -> ClientConfig:
     server = server.rstrip("/")
     resolved_roots = []
     for r in roots:
@@ -54,7 +54,7 @@ def pair(
         detail = resp.json().get("detail") if resp.headers.get("content-type", "").startswith("application/json") else resp.text
         raise PairingError(f"core refused pairing ({resp.status_code}): {detail}")
     data = PairResponse.model_validate(resp.json())
-    cfg = TargetConfig(
+    cfg = ClientConfig(
         server=server,
         ws_url=data.ws_url,
         target_id=data.target_id,
@@ -69,5 +69,5 @@ def pair(
         allow_remote_plugins=allow_remote_plugins,
         allow_shell=allow_shell,
     )
-    save_target_config(paths, cfg)
+    save_client_config(paths, cfg)
     return cfg

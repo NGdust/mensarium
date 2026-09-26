@@ -3,9 +3,9 @@ import json
 import logging
 from pathlib import Path
 
+from mensarium.client.config import ClientConfig
 from mensarium.contracts.protocol import McpServerDef, McpServerStatus, McpToolInfo
 from mensarium.shared.paths import mensarium_home, write_private
-from mensarium.target.config import TargetConfig
 from mensarium.tool_runtime.mcp import McpClient, McpError, McpServer, connect, describe
 
 log = logging.getLogger(__name__)
@@ -16,7 +16,7 @@ START_TIMEOUT_S = 240
 class McpHost:
     """MCP servers the Core placed on this device; each program must be in the device's command allowlist."""
 
-    def __init__(self, cfg: TargetConfig, roots: list[Path], status_file: Path) -> None:
+    def __init__(self, cfg: ClientConfig, roots: list[Path], status_file: Path) -> None:
         self.cfg = cfg
         self.roots = roots
         self.status_file = status_file

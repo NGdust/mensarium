@@ -4,7 +4,7 @@ import yaml
 from pydantic import BaseModel, Field
 
 from mensarium.contracts.protocol import TargetLimits, TargetPolicy
-from mensarium.shared.paths import ensure_private_dir, target_dir, write_private
+from mensarium.shared.paths import client_dir, ensure_private_dir, write_private
 
 DEFAULT_COMMAND_ALLOWLIST = [
     "git", "python", "python3", "pytest", "uv", "pip", "pip3", "poetry", "ruff", "mypy", "black",
@@ -13,7 +13,7 @@ DEFAULT_COMMAND_ALLOWLIST = [
 ]  # fmt: skip
 
 
-class TargetConfig(BaseModel):
+class ClientConfig(BaseModel):
     server: str
     ws_url: str
     target_id: str
@@ -36,11 +36,11 @@ class TargetConfig(BaseModel):
         )
 
 
-class TargetPaths:
+class ClientPaths:
     def __init__(self, root: Path | None = None) -> None:
-        self.root = root or target_dir()
+        self.root = root or client_dir()
         self.config = self.root / "config.yaml"
-        self.key = self.root / "keys" / "target_ed25519.pem"
+        self.key = self.root / "keys" / "client_ed25519.pem"
         self.audit = self.root / "audit.jsonl"
         self.plugins = self.root / "plugins.json"
         self.permissions = self.root / "permissions.json"
@@ -51,11 +51,11 @@ class TargetPaths:
         ensure_private_dir(self.key.parent)
 
 
-def load_target_config(paths: TargetPaths) -> TargetConfig:
+def load_client_config(paths: ClientPaths) -> ClientConfig:
     if not paths.config.exists():
-        raise FileNotFoundError(f"target is not paired: {paths.config} not found. Run `mensarium target pair`.")
-    return TargetConfig.model_validate(yaml.safe_load(paths.config.read_text()))
+        raise FileNotFoundError(f"client is not paired: {paths.config} not found. Run `mensarium client pair`.")
+    return ClientConfig.model_validate(yaml.safe_load(paths.config.read_text()))
 
 
-def save_target_config(paths: TargetPaths, cfg: TargetConfig) -> None:
+def save_client_config(paths: ClientPaths, cfg: ClientConfig) -> None:
     write_private(paths.config, yaml.safe_dump(cfg.model_dump(), sort_keys=False, allow_unicode=True))

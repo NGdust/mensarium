@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from mensarium import __version__
 from mensarium.agent_core.profile import AgentProfile, builtin_profiles
+from mensarium.client.agent import ClientAgent
 from mensarium.contracts.automations import AutomationCreate, AutomationError, AutomationPatch, Schedule
 from mensarium.contracts.plugins import Plugin
 from mensarium.contracts.protocol import AccessMode, PairRequest, PairResponse
@@ -46,7 +47,6 @@ from mensarium.shared.crypto import fingerprint, load_or_create_private_key, pub
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import iso_in, now_iso, parse_iso, utcnow
 from mensarium.shared.versions import parse_version
-from mensarium.target.agent import TargetAgent
 from mensarium.tool_runtime.registry import REGISTRY
 
 PAIRING_TTL_S = 600
@@ -247,7 +247,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         local = await ensure_local_target(repo, paths, cfg, public_key_b64(key), workspace_id)
         local_agent = None
         if local:
-            local_agent = asyncio.create_task(TargetAgent(local[0], local_target_paths(paths), local[1]).run_forever())
+            local_agent = asyncio.create_task(ClientAgent(local[0], local_target_paths(paths), local[1]).run_forever())
         channels = ChannelManager(repo, paths, workspace_id, orchestrator, bus)
         channels.default_target_id = local[0].target_id if local else None
         await channels.start()
@@ -516,7 +516,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             "code": code,
             "expires_at": expires,
             "install_command": f"curl -fsSL {url}/install.sh | sh -s -- --code {code}",
-            "pair_command": f"mensarium target pair --server {url} --code {code}",
+            "pair_command": f"mensarium client pair --server {url} --code {code}",
         }
 
     @app.put("/v1/targets/{target_id}/tools")

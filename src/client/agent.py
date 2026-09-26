@@ -15,6 +15,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from pydantic import ValidationError
 
 from mensarium import __version__
+from mensarium.client import desktop
+from mensarium.client.config import ClientConfig, ClientPaths
+from mensarium.client.mcp_host import McpHost
+from mensarium.client.tools import ExecTimeout, Executor, ToolError
 from mensarium.contracts.protocol import (
     AuthChallenge,
     AuthResponse,
@@ -36,10 +40,6 @@ from mensarium.contracts.protocol import (
 )
 from mensarium.shared.crypto import canonical_json, sha256_hex, sign, verify
 from mensarium.shared.timeutil import now_iso, parse_iso, utcnow
-from mensarium.target import desktop
-from mensarium.target.config import TargetConfig, TargetPaths
-from mensarium.target.mcp_host import McpHost
-from mensarium.target.tools import ExecTimeout, Executor, ToolError
 
 log = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ def platform_id() -> str:
 
 
 class AuditLog:
-    def __init__(self, paths: TargetPaths) -> None:
+    def __init__(self, paths: ClientPaths) -> None:
         self.path = paths.audit
         self.prev = "sha256:genesis"
         if self.path.exists():
@@ -85,8 +85,8 @@ class AuditLog:
         return str(body["hash"])
 
 
-class TargetAgent:
-    def __init__(self, cfg: TargetConfig, paths: TargetPaths, key: Ed25519PrivateKey) -> None:
+class ClientAgent:
+    def __init__(self, cfg: ClientConfig, paths: ClientPaths, key: Ed25519PrivateKey) -> None:
         self.cfg = cfg
         self.key = key
         self.executor = Executor(cfg)

@@ -10,8 +10,15 @@ def core_dir() -> Path:
     return mensarium_home() / "core"
 
 
-def target_dir() -> Path:
-    return mensarium_home() / "target"
+def client_dir() -> Path:
+    """The client's data directory; a pre-0.38 `target/` directory is moved here on first access."""
+    new, old = mensarium_home() / "client", mensarium_home() / "target"
+    if not new.exists() and old.exists():
+        old.rename(new)
+        legacy_key = new / "keys" / "target_ed25519.pem"
+        if legacy_key.exists():
+            legacy_key.rename(new / "keys" / "client_ed25519.pem")
+    return new
 
 
 def ensure_private_dir(path: Path) -> Path:

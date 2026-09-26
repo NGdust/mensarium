@@ -1,5 +1,5 @@
 #!/bin/sh
-# Mensarium installer: sets up the Core (main agent) or a Target Agent.
+# Mensarium installer: sets up the Core (main agent) or a client.
 #   curl -fsSL http://<core>:8787/install.sh | sh -s -- --code WOLF-SKY-4821
 #   sh install.sh                      (from a source checkout)
 #   sh install.sh uninstall
@@ -39,10 +39,10 @@ Usage: install.sh [options]
        install.sh uninstall
 
 Options:
-  --role core|target   What to install (asked interactively if omitted)
-  --server URL         Core URL (target)
-  --code CODE          Pairing code from the Core (target)
-  --name NAME          Target name
+  --role core|client   What to install (asked interactively if omitted)
+  --server URL         Core URL (client)
+  --code CODE          Pairing code from the Core (client)
+  --name NAME          Client name
   --source PATH|URL    Source checkout, .tar.gz URL or git URL
   --no-service         Do not install a background service
 EOF
@@ -50,7 +50,7 @@ EOF
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --role) ROLE="$2"; shift 2 ;;
+    --role) ROLE="$2"; [ "$ROLE" = target ] && ROLE=client; shift 2 ;;
     --server) SERVER="$2"; shift 2 ;;
     --code) CODE="$2"; shift 2 ;;
     --name) NAME="$2"; shift 2 ;;

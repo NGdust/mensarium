@@ -12,10 +12,10 @@ import httpx
 
 from mensarium import __version__
 from mensarium.cli import service
+from mensarium.client.config import ClientPaths, load_client_config
 from mensarium.core.config import CorePaths
 from mensarium.shared.paths import mensarium_home
 from mensarium.shared.versions import parse_version
-from mensarium.target.config import TargetPaths, load_target_config
 
 DEFAULT_UPDATE_URL = "https://mensarium.com"
 
@@ -25,11 +25,11 @@ class UpdateError(Exception):
 
 
 def update_source() -> str:
-    """Core updates from the public site; a target follows its own Core to stay on the same version."""
+    """Core updates from the public site; a client follows its own Core to stay on the same version."""
     if env := os.environ.get("MENSARIUM_UPDATE_URL"):
         return env.rstrip("/")
-    if not CorePaths().config.exists() and TargetPaths().config.exists():
-        return load_target_config(TargetPaths()).server.rstrip("/")
+    if not CorePaths().config.exists() and ClientPaths().config.exists():
+        return load_client_config(ClientPaths()).server.rstrip("/")
     return DEFAULT_UPDATE_URL
 
 
@@ -89,9 +89,11 @@ def install(base: str, latest: dict[str, Any]) -> list[str]:
         raise UpdateError(f"install failed: {result.stderr.strip()[-800:]}")
 
     restarted = []
-    configured = {"core": CorePaths().config.exists(), "target": TargetPaths().config.exists()}
-    for role in ("core", "target"):
-        if configured[role] and service.is_installed(role):  # type: ignore[arg-type]
+    configured = {"core": CorePaths().config.exists(), "client": ClientPaths().config.exists()}
+    if configured["client"] and service.migrate_legacy_client():
+        restarted.append("client")
+    for role in ("core", "client"):
+        if configured[role] and role not in restarted and service.is_installed(role):  # type: ignore[arg-type]
             service.restart(role)  # type: ignore[arg-type]
             restarted.append(role)
     return restarted

@@ -839,7 +839,7 @@ async function viewNewChat() {
   if (!state.system) { try { state.system = await get('/v1/system'); } catch { /* shown without version info */ } }
   const banner = h('div', { class: 'welcome-banner' }, outdatedBanner(selected) || '');
   const hintText = (mode = modeCtl.effective()) => {
-    if (!online.length) return tr('All devices are currently offline. Run mensarium target run on the machine you need.');
+    if (!online.length) return tr('All devices are currently offline. Run mensarium client run on the machine you need.');
     return mode === 'full'
       ? tr('Full access: the agent runs commands and changes files on its own, without asking.')
       : tr('The agent will explore the project on its own and ask permission before running commands or changing files.');
@@ -1682,7 +1682,7 @@ async function settingsDevices(shell) {
     const mac = (t.platform || '').startsWith('darwin');
     const item = (label, value) => h('span', { class: `pill ${value === true ? 'ok' : value === false ? 'warn' : ''}` }, `${label}: ${value === true ? tr('allowed') : value === false ? tr('not allowed') : tr('unknown')}`);
     const hint = (d.screen === false || d.input === false)
-      ? (mac ? tr('Allow Screen Recording and Accessibility for Mensarium in System Settings, Privacy & Security, or run mensarium target permissions on the device.') : tr('Install xdotool, wmctrl and scrot (or grim) on the device.'))
+      ? (mac ? tr('Allow Screen Recording and Accessibility for Mensarium in System Settings, Privacy & Security, or run mensarium client permissions on the device.') : tr('Install xdotool, wmctrl and scrot (or grim) on the device.'))
       : '';
     return h('div', { class: 'device-desktop' }, h('span', { class: 'device-text' }, tr('Screen and input:')), item(tr('screen'), d.screen), item(tr('input'), d.input), hint ? h('span', { class: 'row-desc' }, hint) : null);
   }
