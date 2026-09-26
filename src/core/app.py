@@ -22,10 +22,12 @@ from mensarium import __version__
 from mensarium.agent_core.profile import AgentProfile, builtin_profiles
 from mensarium.client.agent import ClientAgent
 from mensarium.contracts.automations import AutomationCreate, AutomationError, AutomationPatch, Schedule
+from mensarium.contracts.gateway import GATEWAY_SCOPE_KEY
 from mensarium.contracts.plugins import Plugin
 from mensarium.contracts.protocol import AccessMode, PairRequest, PairResponse
 from mensarium.contracts.skills import OS, SkillError, SkillMeta, SkillRequires
 from mensarium.core import distribution, pairing
+from mensarium.core.api_tunnel import ApiTunnel
 from mensarium.core.automations import AutomationManager
 from mensarium.core.catalog import Catalog
 from mensarium.core.channels import ChannelError, ChannelManager
@@ -203,7 +205,7 @@ class DecisionBody(BaseModel):
 
 
 def _ws_url(public_url: str) -> str:
-    return public_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1).rstrip("/") + "/v1/targets/ws"
+    return public_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1).rstrip("/") + "/v1/clients/ws"
 
 
 def create_app(paths: CorePaths | None = None) -> FastAPI:
@@ -228,6 +230,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         await db.execute("UPDATE targets SET status = 'offline' WHERE status = 'online'")
         key = load_or_create_private_key(paths.signing_key)
         hub = ClientHub(repo, key)
+        hub.api = ApiTunnel(app)
         bus = EventBus(repo)
         memory = Memory(repo)
         skills = SkillStore(repo, workspace_id, paths.skills)
@@ -294,7 +297,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             await db.close()
 
     app = FastAPI(title="Mensarium Core", version=__version__, lifespan=lifespan, docs_url="/docs")
-    web_dir = Path(str(resources.files("mensarium.core") / "web"))
+    web_dir = Path(str(resources.files("mensarium.web")))
     app.mount("/static", StaticFiles(directory=web_dir), name="static")
 
     def core(request: Request) -> Core:
@@ -302,6 +305,8 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
 
     def auth(request: Request) -> Core:
         c = core(request)
+        if request.scope.get(GATEWAY_SCOPE_KEY):
+            return c
         token = request.cookies.get(SESSION_COOKIE) or ""
         header = request.headers.get("authorization", "")
         if header.lower().startswith("bearer "):
@@ -394,6 +399,10 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             core_fingerprint=fingerprint(c.core_public_key),
             ws_url=_ws_url(c.cfg.server.public_url),
         )
+
+    @app.websocket("/v1/clients/ws")
+    async def client_ws(ws: WebSocket) -> None:
+        await ws.app.state.core.hub.handle(ws)
 
     @app.websocket("/v1/targets/ws")
     async def target_ws(ws: WebSocket) -> None:
