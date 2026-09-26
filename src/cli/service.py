@@ -186,7 +186,9 @@ def stop(role: Role) -> None:
 def restart(role: Role) -> None:
     kind = backend()
     if kind == "launchd":
-        _run("launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{_label(role)}")
+        domain = f"gui/{os.getuid()}"
+        _run("launchctl", "bootstrap", domain, str(_plist_path(role)))
+        _run("launchctl", "kickstart", "-k", f"{domain}/{_label(role)}")
     elif kind == "systemd":
         _systemctl("restart", _unit_name(role))
     else:

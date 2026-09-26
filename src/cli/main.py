@@ -411,6 +411,13 @@ def service_uninstall(role: Role) -> None:
     ok(f"{role} service removed")
 
 
+@service_app.command("stop")
+def service_stop(role: Role) -> None:
+    """Stop the background service; it starts again on login or `service restart`."""
+    service.stop(role)
+    ok(f"{role} service stopped")
+
+
 @service_app.command("restart")
 def service_restart(role: Role) -> None:
     """Restart the background service."""
