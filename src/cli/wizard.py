@@ -24,6 +24,7 @@ from mensarium.client.pairing import PairingError, pair
 from mensarium.core.config import (
     CoreConfig,
     CorePaths,
+    DeviceConfig,
     LLMConfig,
     ProviderConfig,
     ServerConfig,
@@ -32,6 +33,7 @@ from mensarium.core.config import (
     save_config,
     write_secret,
 )
+from mensarium.core.device import device_name
 from mensarium.llm_providers.factory import PROVIDER_KINDS, is_cli
 from mensarium.llm_providers.local_cli import detect_local_clis
 from mensarium.shared.crypto import fingerprint, load_or_create_private_key, public_key_b64
@@ -83,7 +85,7 @@ def wait_healthy(url: str, timeout_s: float = 25) -> bool:
 
 def setup_core(start_service: bool | None = None) -> None:
     paths = CorePaths()
-    banner("Core setup: the main agent and LLM gateway (the web UI runs on clients)")
+    banner("Core setup: the main agent, the web UI and this machine as the agent's first device")
     existing: CoreConfig | None = None
     if paths.config.exists():
         existing = load_config(paths)
@@ -98,7 +100,7 @@ def setup_core(start_service: bool | None = None) -> None:
             _finish_core(paths, existing, start_service)
             return
 
-    total = 3
+    total = 4
     step(1, total, "Network")
     port = int(
         ask(
@@ -199,6 +201,12 @@ def setup_core(start_service: bool | None = None) -> None:
     else:
         model = ask(questionary.text("Default model:", default=str(kind["default_model"]), style=STYLE))
 
+    step(3, total, "This machine as a device")
+    device = existing.device if existing else DeviceConfig()
+    device.name = ask(questionary.text("Name for this machine:", default=device.name or socket.gethostname().split(".")[0], style=STYLE))
+    access = ask_device_access(device.roots, device.command_allowlist, device.allow_full_access, device.allow_shell, device.allow_remote_plugins)
+    device = DeviceConfig(name=device.name, **access)
+
     paths.ensure()
     if api_key and api_key_ref:
         write_secret(paths, api_key_ref.removeprefix("secret://"), api_key)
@@ -207,6 +215,7 @@ def setup_core(start_service: bool | None = None) -> None:
 
     cfg = CoreConfig(
         server=ServerConfig(host=bind, port=port, public_url=public_url),
+        device=device,
         llm=LLMConfig(
             active_provider=provider,
             providers={
@@ -223,11 +232,13 @@ def setup_core(start_service: bool | None = None) -> None:
     )
     save_config(paths, cfg)
     ok(f"Configuration saved to {paths.config}")
-    step(3, total, "Service")
+    step(4, total, "Service")
     _finish_core(paths, cfg, start_service)
 
 
 def _finish_core(paths: CorePaths, cfg: CoreConfig, start_service: bool | None) -> None:
+    from mensarium.client.gateway import auth
+
     if start_service is None:
         start_service = ask(
             questionary.confirm(
@@ -244,17 +255,21 @@ def _finish_core(paths: CorePaths, cfg: CoreConfig, start_service: bool | None) 
         else:
             fail(f"Core did not become healthy; see logs: {service.log_file('core')}")
             raise typer.Exit(1)
+    if cfg.device.enabled:
+        _desktop_setup()
     summary(
         "Mensarium Core is ready",
         [
             ("Core URL", cfg.server.public_url),
             ("Provider", f"{cfg.llm.active_provider} / {cfg.llm.providers[cfg.llm.active_provider].default_model}"),
+            ("Device", f"{device_name(cfg)}: {', '.join(cfg.device.roots) or '~'}" if cfg.device.enabled else "disabled"),
             ("Data", str(paths.root)),
             ("Logs", str(service.log_file("core"))),
         ],
         footer=(
-            "The web UI opens on a client: install one with `curl -fsSL https://mensarium.com/install.sh | sh`,\n"
-            "create a code with `mensarium core pair-code` here and run `mensarium client` there."
+            f"Open the web UI: {cfg.server.public_url}/login?link={auth.write_link(paths.device)} (one-time link)\n"
+            "Later: mensarium core open, token: mensarium core token\n"
+            "Other machines: `mensarium core pair-code` here, `mensarium client` there."
             + ("" if start_service else "\nStart manually: mensarium core serve")
         ),
     )
@@ -275,6 +290,9 @@ def _root_candidates() -> list[str]:
 
 def setup_client(server: str | None, code: str | None, name: str | None, start_service: bool | None) -> None:
     paths = ClientPaths()
+    if CorePaths().config.exists():
+        fail("This machine runs the Core and is already its device; the web UI is served by the Core (mensarium core open).")
+        raise typer.Exit(1)
     banner("Client setup: this machine becomes a device of the Core")
     if paths.config.exists():
         current = load_client_config(paths)
@@ -312,8 +330,57 @@ def setup_client(server: str | None, code: str | None, name: str | None, start_s
         server = None
 
     step(2, total, "Workspace access")
-    choices = [questionary.Choice(p, p, checked=i == 0) for i, p in enumerate(_root_candidates())]
-    roots: list[str] = []
+    access = ask_device_access([], list(DEFAULT_COMMAND_ALLOWLIST), True, True, True)
+    remote_update = ask(
+        questionary.confirm(
+            "Allow the Core to update this agent from its web UI (downloads the release from the Core and restarts the agent)?",
+            default=True,
+            style=STYLE,
+        )
+    )
+
+    step(3, total, "Pairing")
+    name = name or ask(questionary.text("Name for this machine:", default=socket.gethostname().split(".")[0], style=STYLE))
+    while True:
+        code = code or ask(
+            questionary.text(
+                "Pairing code from the Core (Devices -> Pair new device):",
+                validate=lambda v: bool(CODE_RE.match(v.strip())) or "Format: WORD-WORD-1234",
+                style=STYLE,
+            )
+        )
+        try:
+            with console.status("Pairing..."):
+                cfg = pair(
+                    paths,
+                    server=server,
+                    code=code.strip(),
+                    name=name,
+                    roots=access["roots"],
+                    command_allowlist=access["command_allowlist"],
+                    allow_full_access=access["allow_full_access"],
+                    allow_remote_update=remote_update,
+                    allow_remote_plugins=access["allow_remote_plugins"],
+                    allow_shell=access["allow_shell"],
+                )
+            break
+        except PairingError as e:
+            fail(str(e))
+            code = None
+    ok(f"Paired as {cfg.target_id}")
+    ok(f"Core key fingerprint: {cfg.core_fingerprint} (compare with Settings in the web UI)")
+
+    step(4, total, "Service")
+    configure_client_roles(paths, cfg)
+    finish_client(paths, start_service)
+
+
+def ask_device_access(
+    roots: list[str], allowlist: list[str], full_access: bool, allow_shell: bool, remote_plugins: bool
+) -> dict[str, Any]:
+    """What the agent may touch on this machine; the same questions for a client and for the Core's own device."""
+    choices = [questionary.Choice(p, p, checked=(p in roots) if roots else i == 0) for i, p in enumerate(dict.fromkeys([*roots, *_root_candidates()]))]
+    roots = []
     if choices:
         roots = ask(
             questionary.checkbox(
@@ -341,82 +408,46 @@ def setup_client(server: str | None, code: str | None, name: str | None, start_s
                 questionary.Choice("Any program on PATH", "any"),
                 questionary.Choice("Custom list", "custom"),
             ],
+            default="any" if allowlist == ["*"] else "custom" if allowlist != DEFAULT_COMMAND_ALLOWLIST else "default",
             style=STYLE,
         )
     )
-    allowlist = list(DEFAULT_COMMAND_ALLOWLIST)
     if mode == "any":
         allowlist = ["*"]
     elif mode == "custom":
         raw = ask(questionary.text("Programs, comma separated:", default=", ".join(allowlist), style=STYLE))
         allowlist = [p.strip() for p in raw.split(",") if p.strip()]
+    else:
+        allowlist = list(DEFAULT_COMMAND_ALLOWLIST)
 
     full_access = ask(
         questionary.confirm(
             "Allow full-access mode on this machine (the agent runs commands without asking when a chat is switched to it)?",
-            default=True,
+            default=full_access,
             style=STYLE,
         )
     )
-
-    remote_update = ask(
-        questionary.confirm(
-            "Allow the Core to update this agent from its web UI (downloads the release from the Core and restarts the agent)?",
-            default=True,
-            style=STYLE,
-        )
-    )
-
     remote_plugins = ask(
         questionary.confirm(
             "Allow the Core to run MCP servers from plugins on this machine (programs must be in the list above)?",
-            default=True,
+            default=remote_plugins,
             style=STYLE,
         )
     )
-
     allow_shell = ask(
         questionary.confirm(
             "Allow the agent to run bash scripts on this machine (each script is approved by you in the chat)?",
-            default=True,
+            default=allow_shell,
             style=STYLE,
         )
     )
-
-    step(3, total, "Pairing")
-    name = name or ask(questionary.text("Name for this machine:", default=socket.gethostname().split(".")[0], style=STYLE))
-    while True:
-        code = code or ask(
-            questionary.text(
-                "Pairing code from the Core (Devices -> Pair new device):",
-                validate=lambda v: bool(CODE_RE.match(v.strip())) or "Format: WORD-WORD-1234",
-                style=STYLE,
-            )
-        )
-        try:
-            with console.status("Pairing..."):
-                cfg = pair(
-                    paths,
-                    server=server,
-                    code=code.strip(),
-                    name=name,
-                    roots=roots,
-                    command_allowlist=allowlist,
-                    allow_full_access=full_access,
-                    allow_remote_update=remote_update,
-                    allow_remote_plugins=remote_plugins,
-                    allow_shell=allow_shell,
-                )
-            break
-        except PairingError as e:
-            fail(str(e))
-            code = None
-    ok(f"Paired as {cfg.target_id}")
-    ok(f"Core key fingerprint: {cfg.core_fingerprint} (compare with Settings in the web UI)")
-
-    step(4, total, "Service")
-    configure_client_roles(paths, cfg)
-    finish_client(paths, start_service)
+    return {
+        "roots": roots,
+        "command_allowlist": allowlist,
+        "allow_full_access": full_access,
+        "allow_shell": allow_shell,
+        "allow_remote_plugins": remote_plugins,
+    }
 
 
 def configure_client_roles(paths: ClientPaths, cfg: ClientConfig) -> ClientConfig:
@@ -542,10 +573,11 @@ def core_status() -> None:
             ("Core", "running" if healthy else "not responding"),
             ("Core URL", cfg.server.public_url),
             ("Provider", f"{cfg.llm.active_provider} / {cfg.llm.providers[cfg.llm.active_provider].default_model}"),
+            ("Device", f"{device_name(cfg)}: {', '.join(cfg.device.roots) or '~'}" if cfg.device.enabled else "disabled"),
             ("Service", ("running" if service.is_running("core") else "stopped") if service.is_installed("core") else "not installed"),
             ("Data", str(paths.root)),
         ],
-        footer="Pair a client: mensarium core pair-code\nReconfigure: mensarium core setup\nAll commands: mensarium core --help",
+        footer="Open the web UI: mensarium core open\nPair another device: mensarium core pair-code\nReconfigure: mensarium core setup\nAll commands: mensarium core --help",
     )
 
 

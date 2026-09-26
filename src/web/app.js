@@ -589,7 +589,7 @@ function showLogin() {
   $app.replaceChildren(h('div', { class: 'login' }, h('div', { class: 'login-lang' }, languageSwitch(true)), h('div', { class: 'login-card' },
     orb('md'),
     h('h1', {}, 'Mensarium'),
-    h('p', {}, tr('The token is issued by the command '), h('code', {}, 'mensarium client gateway token'), tr(' on this machine.')),
+    h('p', {}, tr('The token is issued by the command '), h('code', {}, state.gateway?.core ? 'mensarium core token' : 'mensarium client gateway token'), tr(' on this machine.')),
     input, btn,
   )));
   input.focus();
@@ -1640,12 +1640,12 @@ async function settingsOverview(shell) {
     h('div', { class: 'hero' }, orb('md'), h('div', { class: 'hero-text' }, h('h2', {}, 'Mensarium Core'), h('p', {}, tr('Version {0}', s.version))), coreUpdate),
     section(tr('Usage limits'), tr('How much of each connected provider\'s quota is used. The active provider warns above the chat input from {0}%.', Math.round((state.limits?.threshold || 0.75) * 100)), limitsBox),
     section(tr('Connection'), null, h('div', { class: 'rows' },
-      row(tr('Core address'), tr('Clients connect to it; the web UI runs on the clients.'), cmdValue(url), true),
+      row(tr('Core address'), tr('Other devices connect to it; the web UI opens here and on their gateways.'), cmdValue(url), true),
       row(tr('Key fingerprint'), tr('Check it against what the installer showed on the device during pairing.'), s.core_key_fingerprint, true),
     )),
     section(tr('Maintenance'), tr('Commands run on the Core server.'), h('div', { class: 'rows' },
       row(tr('Update Mensarium'), tr('Downloads the latest version and restarts the service.'), cmdValue('mensarium update'), true),
-      row(tr('Login token'), tr('Shows the gateway token; run it on this machine.'), cmdValue('mensarium client gateway token'), true),
+      row(tr('Login token'), tr('Shows the token for this web UI; run it on the machine that serves it.'), cmdValue(state.gateway?.core ? 'mensarium core token' : 'mensarium client gateway token'), true),
     )),
     section(tr('Backup'), tr('An archive with the database, keys, secrets, and settings, encrypted with a password you set. The same archive is used to move Core to another server.'), h('div', { class: 'rows' },
       row(tr('Create a backup'), tr('Saves the archive to the current folder.'), cmdValue('mensarium core backup -o mensarium.pab'), true),
@@ -1969,7 +1969,8 @@ async function settingsDevices(shell) {
         icon('chevron'),
         h('div', { class: 'row-text' },
           h('div', { class: 'row-title' }, t.name,
-            isThisDevice(t) ? h('span', { class: 'pill', title: tr('The machine this web UI runs on.') }, tr('This device')) : null,
+            t.core_host ? h('span', { class: 'pill accent', title: tr('The machine the Core runs on: the agent works here through the Core itself.') }, tr('Core')) : null,
+            isThisDevice(t) && !t.core_host ? h('span', { class: 'pill', title: tr('The machine this web UI runs on.') }, tr('This device')) : null,
             t.gateway_online && !isThisDevice(t) ? h('span', { class: 'pill', title: tr('This device runs a gateway: the web UI is open there too.') }, tr('gateway')) : null,
             state.updates.has(t.id) ? h('span', { class: 'pill accent' }, tr('updating'))
               : outdated ? h('span', { class: 'pill warn', title: tr('Open the device to update the agent') }, tr('v{0}, update available', t.agent_version)) : null),

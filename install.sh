@@ -35,7 +35,7 @@ Usage: install.sh [options]
 Options:
   --source PATH|URL    Source checkout, .tar.gz URL or git URL
 
-After installing, run `mensarium core` on a server or `mensarium client` on a machine the agent should work on.
+After installing, run `mensarium core` on the main machine or `mensarium client` on another machine the agent should work on.
 EOF
 }
 
@@ -194,6 +194,6 @@ rm -f "$LOG"
 
 say ""
 say "  Next step on this machine:"
-say "    ${B}mensarium core${R}     run the Core here (a server: the agent's brain, no web UI)"
+say "    ${B}mensarium core${R}     run the Core here (the agent's brain, the web UI and its first device)"
 say "    ${B}mensarium client${R}   connect this machine to a Core (the agent works here, the web UI opens here)"
 say ""

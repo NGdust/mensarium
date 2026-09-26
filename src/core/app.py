@@ -7,18 +7,24 @@ import shlex
 import shutil
 import time
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from importlib import resources
+from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
 from mensarium import __version__
 from mensarium.agent_core.profile import AgentProfile, builtin_profiles
+from mensarium.client.agent import ClientAgent
+from mensarium.client.gateway import auth as ui_auth
 from mensarium.contracts.automations import AutomationCreate, AutomationError, AutomationPatch, Schedule
 from mensarium.contracts.gateway import GATEWAY_SCOPE_KEY
 from mensarium.contracts.plugins import Plugin
@@ -33,6 +39,7 @@ from mensarium.core.channels import ChannelError, ChannelManager
 from mensarium.core.client_hub import ClientHub, TargetUnavailable
 from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secret, save_config, write_secret
 from mensarium.core.db import Database
+from mensarium.core.device import ensure_device
 from mensarium.core.dreaming import Dreamer, DreamError
 from mensarium.core.events import EventBus
 from mensarium.core.limits import LimitsStore
@@ -78,7 +85,11 @@ class Core:
     automations: AutomationManager
     projects: ProjectManager
     limits: LimitsStore
+    device_id: str | None
 
+
+class LoginBody(BaseModel):
+    token: str
 
 
 
@@ -274,6 +285,15 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         automations = AutomationManager(repo, workspace_id, orchestrator, channels, cfg.server.public_url)
         orchestrator.automations = automations
         await automations.start()
+        device = await ensure_device(repo, paths, cfg, public_key_b64(key), workspace_id)
+        device_agent: asyncio.Task[None] | None = None
+        if device:
+            # The worker dials the Core's own port, which starts listening once startup is over.
+            async def run_device() -> None:
+                await asyncio.sleep(1)
+                await ClientAgent(device[0], paths.device, device[1]).run_forever()
+
+            device_agent = asyncio.create_task(run_device())
         app.state.core = Core(
             cfg=cfg,
             paths=paths,
@@ -297,10 +317,13 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             automations=automations,
             projects=projects,
             limits=limits,
+            device_id=device[0].target_id if device else None,
         )
         try:
             yield
         finally:
+            if device_agent:
+                device_agent.cancel()
             limits.stop()
             await automations.stop()
             await projects.stop()
@@ -315,20 +338,36 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             await db.close()
 
     app = FastAPI(title="Mensarium Core", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
+    web_dir = Path(str(resources.files("mensarium.web")))
+    app.mount("/static", StaticFiles(directory=web_dir), name="static")
+
+    @app.middleware("http")
+    async def same_origin(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+        """The browser session is a cookie, so a page from another site must not be able to call the API."""
+        origin = request.headers.get("origin")
+        if origin and urlparse(origin).netloc != request.headers.get("host", ""):
+            return JSONResponse({"detail": "origin not allowed"}, status_code=403)
+        return await call_next(request)
 
     def core(request: Request) -> Core:
         return request.app.state.core  # type: ignore[no-any-return]
 
     def auth(request: Request) -> Core:
-        """Requests relayed by a paired client's gateway, or the Core-host CLI on loopback with the local token."""
+        """A browser logged into the Core's own UI, a paired client's gateway, or the Core-host CLI on loopback."""
         c = core(request)
         if request.scope.get(GATEWAY_SCOPE_KEY):
+            return c
+        cookie = request.cookies.get(ui_auth.COOKIE)
+        if cookie and ui_auth.check_token(c.paths.device, cookie):
             return c
         header = request.headers.get("authorization", "")
         local = request.client is not None and request.client.host in ("127.0.0.1", "::1")
         if local and header.lower().startswith("bearer ") and hmac.compare_digest(header[7:], c.cli_token):
             return c
         raise HTTPException(401, "authentication required")
+
+    def set_session(c: Core, response: Response) -> None:
+        response.set_cookie(ui_auth.COOKIE, ui_auth.load_or_create_token(c.paths.device), httponly=True, samesite="strict", max_age=30 * 86400)
 
     def task_error(e: TaskError) -> HTTPException:
         return HTTPException(404 if "not found" in str(e) else 409, str(e))
@@ -341,6 +380,35 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok", "version": __version__}
+
+    @app.get("/", include_in_schema=False)
+    async def index() -> FileResponse:
+        return FileResponse(web_dir / "index.html")
+
+    @app.get("/login", include_in_schema=False)
+    async def login_link(request: Request, link: str = "") -> RedirectResponse:
+        response = RedirectResponse("/", status_code=303)
+        if link and ui_auth.take_link(core(request).paths.device, link):
+            set_session(core(request), response)
+        return response
+
+    @app.post("/v1/auth/login")
+    async def login(body: LoginBody, response: Response, c: Core = Depends(core)) -> dict[str, bool]:
+        if not ui_auth.check_token(c.paths.device, body.token):
+            await asyncio.sleep(1)
+            raise HTTPException(401, "invalid token")
+        set_session(c, response)
+        return {"ok": True}
+
+    @app.post("/v1/auth/logout")
+    async def logout(response: Response) -> dict[str, bool]:
+        response.delete_cookie(ui_auth.COOKIE)
+        return {"ok": True}
+
+    @app.get("/v1/gateway")
+    async def gateway_state(c: Core = Depends(core)) -> dict[str, object]:
+        """What the UI asks first: here it is served by the Core itself, whose device is `target_id`."""
+        return {"gateway": False, "core": True, "online": True, "target_id": c.device_id, "version": __version__}
 
     @app.get("/install.sh", include_in_schema=False)
     async def install_sh(request: Request) -> PlainTextResponse:
@@ -505,6 +573,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             "hostname": t["hostname"],
             "status": status,
             "gateway_online": c.hub.gateway_online(t["id"]),
+            "core_host": t["id"] == c.device_id,
             "last_seen_at": t["last_seen_at"],
             "agent_version": t["agent_version"],
             "created_at": t["created_at"],
@@ -564,6 +633,8 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         t = await c.repo.get_target(target_id)
         if not t or t["status"] == "revoked":
             raise HTTPException(404, "target not found")
+        if target_id == c.device_id:
+            raise HTTPException(409, "the Core device is updated together with the Core")
         try:
             status = await c.hub.update_device(t, __version__, c.cfg.execution.request_ttl_s)
         except TargetUnavailable as e:
@@ -606,6 +677,8 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     async def revoke_target(target_id: str, c: Core = Depends(auth)) -> dict[str, bool]:
         if not await c.repo.get_target(target_id):
             raise HTTPException(404, "target not found")
+        if target_id == c.device_id:
+            raise HTTPException(409, "the Core device cannot be revoked; disable it in the Core config")
         await c.repo.update_target(target_id, {"status": "revoked", "revoked_at": now_iso()})
         await c.hub.disconnect(target_id, "revoked")
         await c.repo.audit(c.workspace_id, "user", "target.revoked", {"target_id": target_id})

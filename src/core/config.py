@@ -3,6 +3,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field
 
+from mensarium.client.config import DEFAULT_COMMAND_ALLOWLIST, ClientPaths
 from mensarium.shared.paths import core_dir, ensure_private_dir, write_private
 
 
@@ -36,9 +37,22 @@ class PluginsConfig(BaseModel):
     catalog_url: str | None = "https://mensarium.com/dist/plugins.json"
 
 
+class DeviceConfig(BaseModel):
+    """The Core host as a device: the agent works here through a worker inside the Core process."""
+
+    enabled: bool = True
+    name: str | None = None
+    roots: list[str] = Field(default_factory=list)
+    command_allowlist: list[str] = Field(default_factory=lambda: list(DEFAULT_COMMAND_ALLOWLIST))
+    allow_full_access: bool = True
+    allow_shell: bool = True
+    allow_remote_plugins: bool = True
+
+
 class CoreConfig(BaseModel):
     update_url: str = "https://mensarium.com"
     server: ServerConfig = Field(default_factory=ServerConfig)
+    device: DeviceConfig = Field(default_factory=DeviceConfig)
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
@@ -56,6 +70,7 @@ class CorePaths:
         self.artifacts = self.root / "artifacts"
         self.skills = self.root / "skills"
         self.logs = self.root / "logs"
+        self.device = ClientPaths(self.root / "device")
 
     def ensure(self) -> None:
         ensure_private_dir(self.root)

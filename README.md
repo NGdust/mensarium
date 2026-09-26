@@ -2,7 +2,7 @@ English · [Русский](README.ru.md)
 
 # Mensarium
 
-A portable agent harness. **Core** is a headless server: it calls the LLM, builds context, checks model-proposed actions against policies, waits for user approval, writes an audit trail, and holds all state — SQLite, secrets, Telegram, automations, plugins, skills, memory. It has no web UI of its own. **Client** is installed on every machine the agent works on or is controlled from: one ED25519 key, one pairing, and two independent processes — `worker`, which executes signed tool requests, and `gateway`, which serves the web UI on that machine and relays it to Core over its own WebSocket session.
+A portable agent harness. **Core** calls the LLM, builds context, checks model-proposed actions against policies, waits for user approval, writes an audit trail, and holds all state — SQLite, secrets, Telegram, automations, plugins, skills, memory. It serves its own web UI (log in with a token from `mensarium core token`, or a one-time link from `mensarium core open`) and is itself the first device: a worker runs inside the Core process, attached over loopback with the same signed frames as any remote client, so the agent can work on the Core host without installing anything else there. **Client** is installed on every other machine the agent works on or is controlled from: one ED25519 key, one pairing, and two independent processes — `worker`, which executes signed tool requests, and `gateway`, which serves the web UI on that machine and relays it to Core over its own WebSocket session.
 
 The model never gets direct access to shell, files, network, or secrets: it only proposes a `tool_call`, and Core decides whether it can be executed.
 
@@ -20,15 +20,15 @@ On the machine that should be the brain (a server or a laptop):
 mensarium core
 ```
 
-With no subcommand this runs the setup wizard if Core isn't configured yet (port, address, LLM provider and model, service), or shows Core's state if it already is; `mensarium core setup` reconfigures it. At the end it prints `mensarium core pair-code` — a one-time code (10 minutes) for pairing clients.
+With no subcommand this runs the setup wizard if Core isn't configured yet (port, address, LLM provider and model, service, this machine as a device: name, folders, program allowlist, full access, bash scripts, MCP plugins), or shows Core's state if it already is; `mensarium core setup` reconfigures it. Once it's done you have the web UI and the first device — this machine itself — right away. At the end it prints `mensarium core pair-code` — a one-time code (10 minutes) for pairing clients.
 
-On every machine the agent should work on or be controlled from:
+On every other machine the agent should work on or be controlled from:
 
 ```sh
 mensarium client
 ```
 
-With no subcommand this runs the client wizard if not paired yet: Core URL, folders, program allowlist, device permissions, the pairing code, then two questions — run the agent's tools here (`worker`) and open the web UI here (`gateway`: port, localhost-only or other machines too). It installs the services and prints a one-time login link; `mensarium client setup` reconfigures it. `mensarium client pair --server URL --code CODE --root DIR` pairs non-interactively and, in a terminal, continues with the worker/gateway questions.
+With no subcommand this runs the client wizard if not paired yet: Core URL, folders, program allowlist, device permissions, the pairing code, then two questions — run the agent's tools here (`worker`) and open the web UI here (`gateway`: port, localhost-only or other machines too). It installs the services and prints a one-time login link; `mensarium client setup` reconfigures it. `mensarium client pair --server URL --code CODE --root DIR` pairs non-interactively and, in a terminal, continues with the worker/gateway questions. Running it on the Core host is refused: "This machine runs the Core and is already its device."
 
 A pairing code is also available from the web UI (Devices → Pair a device), which shows both the install command and the pair command.
 
@@ -36,9 +36,10 @@ Clients only ever talk to Core, never to each other — a star topology:
 
 ```
                      ┌──────────────────────────────┐
-   Telegram ────────►│ core (headless)              │
+   Telegram ────────►│ core                         │
    (Core channel)    │  orchestrator, LLM, policy   │
-                     │  approvals, sqlite, secrets  │
+   browser  ────────►│  UI, own device, approvals   │
+                     │  sqlite, secrets             │
                      │  cron, WSS /v1/clients, CLI  │
                      └──────┬────────────┬──────────┘
                     WSS     │            │     WSS
@@ -64,6 +65,8 @@ Clients only ever talk to Core, never to each other — a star topology:
 | `mensarium core setup` | Reconfigure the Core |
 | `mensarium core serve` | Run Core in the foreground |
 | `mensarium core pair-code` | One-time pairing code (10 minutes) |
+| `mensarium core open` | Open the web UI with a one-time login link |
+| `mensarium core token [--rotate]` | Token for logging into the Core's web UI |
 | `mensarium core backup -o file.pab` / `restore file.pab` | Encrypted transfer of Core to another host |
 | `mensarium client` | Set up this client (first run) or show its state |
 | `mensarium client setup` | Reconfigure: pairing, folders, worker, gateway |
@@ -91,9 +94,9 @@ LLM proposal → schema validation → target capability check → policy evalua
 ```
 
 - LLM providers: Ollama Cloud, local Ollama, llama.cpp, LM Studio, OpenAI, OpenRouter or any OpenAI-compatible server — all through the OpenAI-compatible API — plus Claude Code and Codex CLI installed on the Core host (found automatically, connected with one click in Settings → Providers or in `mensarium core`; they think through your subscription, their own tools are switched off). They are added, checked and switched in Settings → Providers (or in the `mensarium core` wizard); the active provider changes without a restart and keys stay in Core secrets.
-- Access modes per chat: "Ask before acting" (default) and "Full access". The Core host is not a device by itself — install a client there too if you want the agent to work on that machine.
+- Access modes per chat: "Ask before acting" (default) and "Full access". The Core host is a device by itself: a worker runs inside the Core process, attached over loopback with the same signed frames as any remote client, so nothing extra needs installing there (settings live in the `device` section of `core/config.yaml`; its key and login token live under `~/.mensarium/core/device/`). On start, a Core that finds a client in the same `~/.mensarium` paired with itself adopts it — device id, key, folders and login token move into Core, the client and gateway services are removed, and `client/` is renamed to `client.adopted`; the device's chats, projects and automations carry over.
 - Device tools, all native in the client: read without confirmation (`files.list`, `files.read`, `files.search`, `files.stat`, `files.find`, `git.status`, `git.diff`, `system.info`, `process.list`, `net.ports`), changes with confirmation (`files.write`, `files.edit`, `files.mkdir`, `files.move`, `files.copy`, `net.http`), irreversible ones always confirmed (`files.delete`, `process.kill`), and `shell.bash` for real bash scripts (reviewed and approved per script, `sudo` refused, can be disabled per device with `--no-shell`). `shell.exec` runs one allowlisted program without a shell. Desktop tools appear when the device has the OS utilities: `screen.capture` (a screenshot the model sees as an image; set a "model for images" on the provider, e.g. `gemma4` on Ollama Cloud, and Core switches to it on steps with a screenshot), `screen.windows`, `input.mouse`, `input.type`, `input.key`, `app.open`, `system.volume`. On macOS the worker runs through `~/Applications/Mensarium.app`, so Privacy & Security shows Mensarium (not Python); it asks for Screen Recording and Accessibility after install and after every update (`mensarium client permissions` asks again); mouse moves need `brew install cliclick`.
-- The web UI is served by the client's gateway, not by Core: `mensarium client gateway open` opens it with a one-time login link, or log in with the local gateway token (`mensarium client gateway token`, `--rotate` to replace it). The gateway rejects requests whose `Host` or `Origin` don't match its own address (`allowed_hosts` when it listens on other interfaces). There is one user and pairing equals full access, so any gateway shows the full Core state — all chats, devices, approvals, settings; revoke a device in Devices to cut it off. If Core is down the UI shows a "Core is offline" banner and recovers on its own once Core is back.
+- The web UI is served by Core itself and by each client's gateway: `mensarium core open` or `mensarium client gateway open` opens it with a one-time login link, or log in with a token (`mensarium core token` / `mensarium client gateway token`, `--rotate` to replace it). Core rejects requests whose `Origin` doesn't match its `Host`; the gateway also rejects requests whose `Host` or `Origin` don't match its own address (`allowed_hosts` when it listens on other interfaces). There is one user and pairing equals full access, so any of them shows the full Core state — all chats, devices, approvals, settings; revoke a device in Devices to cut it off. If Core is down, a client's gateway shows a "Core is offline" banner and recovers on its own once Core is back.
 - Memory (Settings → Memory): notes with `[[Title]]` links, an interactive relationship graph, and dreaming — nightly consolidation of new chats into long-term memory with a diary. The agent searches, reads, and adds to memory via `memory.*` tools; pinned and important notes are included in the system prompt.
 - Skills (Settings → Skills, or `mensarium skills` on the Core host) are `SKILL.md` files in the [Agent Skills](https://agentskills.io) format: a frontmatter with `name` and `description` and markdown instructions for one kind of work. Bundled skills ship with the release; your own live in `~/.mensarium/core/skills/<name>/SKILL.md` and replace a bundled skill with the same name. The system prompt lists only names and descriptions in an `available_skills` block; the agent loads a skill with `skills.read` when the task matches (and reads files the skill ships with `path`). The optional `metadata.mensarium` block gates a skill: `os`, `requires.tools` (globs like `mcp.github.*`), `always`.
 - Plugins (Settings → Plugins, or `mensarium plugins` / `mensarium mcp` on the Core host) extend the agent: device tools are command templates sent to a client as `shell.exec`; Core tools run in Core (`web.search` through Brave Search, `web.fetch` with internal addresses blocked); MCP servers run in Core or on a chosen device and give the agent `mcp.<server>.<tool>`. Plugins have a `category` the Plugins page groups them by, settings with secret fields that stay in Core, a risk level that decides approvals, and a catalog bundled with the release and refreshed from mensarium.com. A client runs an MCP server only if its program is in the device's allowlist and plugins from Core are allowed there. The catalog covers code hosting, docs and web search, browsers, databases, cloud and observability services, productivity and chat tools; servers that need your files, browser, docker or CLI logins run on a device. When a request needs something the agent has no tool for (web search, a browser, GitHub...), it looks up the catalog with `plugins.find` and proposes a plugin with `plugins.install`: the install always waits for your approval, even in full access, keys are entered only in Settings → Plugins, and a server that runs on a device is placed on the chat's device.

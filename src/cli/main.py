@@ -19,6 +19,7 @@ from mensarium.cli.skills import skills_app
 from mensarium.cli.ui import console, fail, ok, summary, use_select_event_loop, warn
 from mensarium.client.config import ClientConfig, ClientPaths, load_client_config
 from mensarium.core.config import CorePaths, load_config
+from mensarium.core.device import device_name
 from mensarium.shared.logging import setup_logging
 from mensarium.shared.paths import mensarium_home
 
@@ -107,6 +108,7 @@ def status() -> None:
             ("Core", "running" if healthy else "not responding"),
             ("Core URL", cfg.server.public_url),
             ("LLM", f"{cfg.llm.active_provider} / {cfg.llm.providers[cfg.llm.active_provider].default_model}"),
+            ("Core device", f"{device_name(cfg)}: {', '.join(cfg.device.roots) or '~'}" if cfg.device.enabled else "disabled"),
         ]
     tpaths = ClientPaths()
     if tpaths.config.exists():
@@ -230,6 +232,31 @@ def core_pair_code() -> None:
     console.print("Or run `mensarium client` there and answer the questions.")
 
 
+@core_app.command("token")
+def core_token(
+    rotate: Annotated[bool, typer.Option("--rotate", help="Replace the token; open browser sessions are logged out")] = False,
+) -> None:
+    """Print the token for logging into the web UI of this Core."""
+    from mensarium.client.gateway import auth
+
+    paths = CorePaths().device
+    console.print(auth.rotate_token(paths) if rotate else auth.load_or_create_token(paths))
+
+
+@core_app.command("open")
+def core_open() -> None:
+    """Open the web UI in the browser with a one-time login link."""
+    import webbrowser
+
+    from mensarium.client.gateway import auth
+
+    paths = CorePaths()
+    cfg = load_config(paths)
+    url = f"{cfg.server.public_url}/login?link={auth.write_link(paths.device)}"
+    console.print(url, soft_wrap=True, highlight=False)
+    webbrowser.open(url)
+
+
 @core_app.command("backup")
 def core_backup(
     output: Annotated[Path | None, typer.Option("-o", "--output", help="Output .pab file")] = None,
@@ -327,6 +354,9 @@ def client_pair(
     """Pair this machine with a Core non-interactively."""
     from mensarium.client.pairing import PairingError, pair
 
+    if CorePaths().config.exists():
+        fail("This machine runs the Core and is already its device; the web UI is served by the Core (mensarium core open).")
+        raise typer.Exit(1)
     try:
         cfg = pair(
             ClientPaths(),
