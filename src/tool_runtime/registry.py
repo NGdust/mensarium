@@ -353,6 +353,19 @@ AUTOMATION_TOOLS: dict[str, ToolSpec] = {
     ),
 }
 
+DEVICE_TOOLS: dict[str, ToolSpec] = {
+    "device.update": ToolSpec(
+        "device.update",
+        "Update the Mensarium client on this device to the Core version. Compares the versions first and does "
+        "nothing when the client is up to date; the device itself allows or rejects remote updates. Reports what "
+        "happened in one line.",
+        "read",
+        CORE_TOOL_ARGS["device.update"],
+        lambda a: "update the client",
+        runs_on="core",
+    ),
+}
+
 AGENT_TOOLS: dict[str, ToolSpec] = {
     "agent.spawn": ToolSpec(
         "agent.spawn",

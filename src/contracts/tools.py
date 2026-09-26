@@ -283,6 +283,7 @@ CORE_TOOL_ARGS: dict[str, type[BaseModel]] = {
     "automations.list": NoArgs,
     "automations.create": AutomationsCreateArgs,
     "automations.delete": AutomationsDeleteArgs,
+    "device.update": NoArgs,
 }
 
 PATH_FIELDS: dict[str, tuple[str, ...]] = {

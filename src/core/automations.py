@@ -33,6 +33,25 @@ KEEP_RUNS = 200
 KEEP_DAYS = 7
 CATCHUP_AFTER_S = 120
 NO_REPLY = "NO_REPLY"
+UPDATE_EVERY_S = 2 * 3600
+UPDATE_SEEDED_KEY = "automations.update_seeded"
+UPDATE_PROMPT = (
+    "Keep the Mensarium client on this device up to date. Call device.update once: it compares the client version "
+    "with the Core version and starts the update when the client is behind. Then finish. Answer with one short line "
+    "when an update was started. Answer NO_REPLY when the client is already up to date, the device is offline or "
+    "it does not allow remote updates. Do not use any other tool."
+)
+
+
+def update_automation(target: dict[str, Any]) -> AutomationCreate:
+    """The automation every paired device gets: check the client version every two hours and update it."""
+    return AutomationCreate(
+        name=f"Update client on {target['name']}",
+        prompt=UPDATE_PROMPT,
+        schedule=Schedule.model_validate({"kind": "every", "every_s": UPDATE_EVERY_S, "tz": "UTC"}),
+        target_id=target["id"],
+        timeout_s=600,
+    )
 
 
 def next_run(schedule: Schedule, after: datetime) -> datetime | None:
@@ -122,7 +141,18 @@ class AutomationManager:
                 values |= _next_values(Schedule.model_validate(row["schedule"]))
             if values:
                 await self.repo.update_automation(row["id"], values)
+        await self._seed_update_automations()
         self.loop = asyncio.create_task(self._loop())
+
+    async def _seed_update_automations(self) -> None:
+        """Once: give the devices paired before default automations existed their update automation."""
+        if await self.repo.get_setting(UPDATE_SEEDED_KEY):
+            return
+        covered = {row["target_id"] for row in await self.repo.list_automations() if row["created_by"] == "core"}
+        for target in await self.repo.list_targets():
+            if target["status"] != "revoked" and target["id"] not in covered:
+                await self.add_device(target)
+        await self.repo.set_setting(UPDATE_SEEDED_KEY, True)
 
     async def stop(self) -> None:
         tasks = [t for t in (self.loop, *self.running.values()) if t]
@@ -201,6 +231,9 @@ class AutomationManager:
             self.workspace_id, created_by, "automation.created", {"automation_id": automation_id, "name": body.name}
         )
         return await self.get(automation_id)
+
+    async def add_device(self, target: dict[str, Any]) -> dict[str, Any]:
+        return await self.create(update_automation(target), created_by="core")
 
     async def update(self, automation_id: str, patch: AutomationPatch) -> dict[str, Any]:
         row = await self._row(automation_id)

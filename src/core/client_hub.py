@@ -232,6 +232,12 @@ class ClientHub:
         finally:
             conn.plugins.pop(msg.request_id, None)
 
+    async def update_device(self, target: dict[str, Any], version: str, ttl_s: int) -> TargetUpdateStatus:
+        """Ask a device that allows remote updates to update its agent from this Core."""
+        if not (target.get("capabilities") or {}).get("remote_update"):
+            raise TargetUnavailable("this agent cannot be updated remotely; run `mensarium update` on the device")
+        return await self.request_update(target["id"], version, ttl_s)
+
     async def request_update(self, target_id: str, version: str, ttl_s: int) -> TargetUpdateStatus:
         """Ask a device to update its agent from this Core; returns the device's signed answer."""
         conn = self.connections.get(target_id)

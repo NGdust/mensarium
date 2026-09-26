@@ -1517,6 +1517,8 @@ async function settingsProviders(shell) {
     const freeId = (kind) => { let id = kind; for (let i = 2; taken.has(id); i++) id = `${kind}-${i}`; return id; };
     const id = h('input', { type: 'text', value: x ? x.id : freeId(kindSel.value), disabled: !adding, 'aria-label': tr('Name in the config') });
     const base = h('input', { type: 'text', value: x ? x.base_url : kinds[kindSel.value].base_url, 'aria-label': tr('API address') });
+    const isCli = () => kinds[kindSel.value].transport === 'cli';
+    const baseLabel = h('span', {}, tr('API address'));
     const key = h('input', { type: 'password', autocomplete: 'off', placeholder: x?.has_key ? tr('Saved. Type to replace') : '', 'aria-label': tr('API key') });
     const model = h('select', { 'aria-label': tr('Default model') });
     const vision = h('select', { 'aria-label': tr('Model for images') });
@@ -1543,9 +1545,12 @@ async function settingsProviders(shell) {
       if (!touchedBase) base.value = k.base_url;
       if (adding) { id.value = freeId(k.kind); fillModels([], k.default_model, k.vision_model || ''); }
       keyHint.replaceChildren(...(k.needs_key ? [tr('Required. '), k.key_url ? linkify(k.key_url) : ''] : [tr('Only if the server asks for one.')]).flat());
+      baseLabel.textContent = isCli() ? tr('Command on the Core host') : tr('API address');
+      keyField.hidden = isCli();
+      visionField.hidden = isCli();
+      statusText.textContent = isCli() ? tr('Check that the command works and is logged in.') : tr('Check the connection to load the models.');
     };
     kindSel.addEventListener('change', syncKind);
-    syncKind();
     const runCheck = async () => {
       check.disabled = true;
       setStatus('busy', tr('Connecting...'));
@@ -1578,16 +1583,19 @@ async function settingsProviders(shell) {
         reload();
       } catch (err) { fail(err); } finally { save.disabled = false; }
     });
-    const field = (label, control, hint) => h('label', { class: 'plugin-field' }, h('div', { class: 'plugin-field-head' }, h('span', {}, label)), control, hint || null);
+    const field = (label, control, hint) => h('label', { class: 'plugin-field' }, h('div', { class: 'plugin-field-head' }, typeof label === 'string' ? h('span', {}, label) : label), control, hint || null);
+    const keyField = field(tr('API key'), key, keyHint);
+    const visionField = field(tr('Model for images'), vision, h('div', { class: 'row-desc' }, tr('Used automatically on steps where the agent looks at a screenshot; leave empty if the default model accepts images.')));
+    syncKind();
     openModal(
       h('div', { class: 'modal-head' }, h('h2', {}, adding ? tr('Add a provider') : x.title), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
       h('div', { class: 'plugin-form' },
         h('div', { class: 'plugin-grid' }, field(tr('Type'), kindSel), field(tr('Name in the config'), id)),
-        field(tr('API address'), base),
-        field(tr('API key'), key, keyHint),
+        field(baseLabel, base),
+        keyField,
         status,
         field(tr('Default model'), model, h('div', { class: 'row-desc' }, tr('For new chats. In a chat the model is changed with the robot button in the input.'))),
-        field(tr('Model for images'), vision, h('div', { class: 'row-desc' }, tr('Used automatically on steps where the agent looks at a screenshot; leave empty if the default model accepts images.'))),
+        visionField,
         h('div', { class: 'plugin-grid' }, field(tr('Timeout, s'), timeout), field(tr('Retries'), retries)),
         activeSwitch),
       h('div', { class: 'modal-actions' },
@@ -1598,6 +1606,29 @@ async function settingsProviders(shell) {
     ).classList.add('modal-wide');
     if (x && (x.has_key || !kinds[x.kind].needs_key)) runCheck();
   }
+
+  const connect = async (d, btn) => {
+    btn.disabled = true;
+    try {
+      const pid = data.providers.some((p) => p.id === d.kind) ? `${d.kind}-2` : d.kind;
+      await api(`/v1/providers/${pid}`, { method: 'PUT', body: JSON.stringify({ kind: d.kind, base_url: d.path, default_model: d.default_model, api_key: null, timeout_s: 180, max_retries: 1, vision_model: null }) });
+      if (!data.providers.length || await confirmDialog({ title: tr('Make {0} the active provider?', d.title), text: tr('New chats will think through it; running tasks switch from their next step.'), action: tr('Make active') })) {
+        await post(`/v1/providers/${pid}/activate`);
+      }
+      state.models = null;
+      toast(tr('Connected: {0}', d.title));
+      reload();
+    } catch (err) { fail(err); btn.disabled = false; }
+  };
+  const detectedCard = (d) => {
+    const btn = h('button', { class: 'btn btn-sm btn-primary', onclick: (e) => { e.stopPropagation(); connect(d, btn); } }, tr('Connect'));
+    return h('div', { class: 'hero provider-hero provider-card' },
+      h('span', { class: 'market-icon' }, icon('robot')),
+      h('div', { class: 'hero-text' },
+        h('h2', {}, d.title, d.version ? h('code', { class: 'provider-id' }, d.version) : null),
+        h('p', {}, [d.path, d.logged_in === true ? tr('logged in') + (d.account ? ` (${d.account})` : '') : d.logged_in === false ? tr('not logged in: log in on the Core host first') : null, d.default_model ? tr('model {0}', d.default_model) : null].filter(Boolean).join(' · '))),
+      btn);
+  };
 
   const card = (x) => h('div', {
     class: 'hero provider-hero provider-card', role: 'button', tabindex: '0', onclick: () => editor(x),
@@ -1613,6 +1644,8 @@ async function settingsProviders(shell) {
     h('button', { class: 'btn btn-primary', onclick: () => editor(null) }, icon('plus'), tr('Add a provider')),
     h('div', { class: 'provider-cards' }, data.providers.length ? data.providers.map(card) : h('div', { class: 'empty rows' }, tr('No providers yet.'))),
     health.ok ? null : h('p', { class: 'market-note' }, health.detail || ''),
+    data.detected?.length ? section(tr('Found on the Core host'), tr('Local agent CLIs that can think for Mensarium through your subscription. Their own tools are switched off; only the answer is used.'),
+      h('div', { class: 'provider-cards' }, data.detected.map(detectedCard))) : null,
   );
 }
 
@@ -2743,6 +2776,7 @@ function scheduleText(s) {
 }
 
 const safeScheduleText = (a) => { try { return scheduleText(a.schedule); } catch { return a.schedule_text; } };
+const createdBy = (a) => a.created_by === 'agent' ? tr('created by the agent') : a.created_by === 'core' ? tr('built in') : null;
 
 const nextText = (a) => (a.enabled && a.next_run_at ? inTime(a.next_run_at) : DISABLED[a.disabled_reason]?.(a) || tr('Off'));
 
@@ -2769,7 +2803,7 @@ function automationRow(a, reload) {
   return h('div', { class: 'row' },
     h('a', { class: 'row-text', href: `#/automations/${a.id}` },
       h('div', { class: 'row-title' }, h('span', { class: `dot ${cls}${a.running ? ' live' : ''}`, title: a.last_error || label }), a.name),
-      h('div', { class: 'row-desc' }, [safeScheduleText(a), a.target_name || a.target_id, a.created_by === 'agent' ? tr('created by the agent') : null].filter(Boolean).join(' · '))),
+      h('div', { class: 'row-desc' }, [safeScheduleText(a), a.target_name || a.target_id, createdBy(a)].filter(Boolean).join(' · '))),
     h('div', { class: 'row-value' },
       h('span', { class: 'auto-next', title: a.next_run_at ? new Date(a.next_run_at).toLocaleString(locale) : null }, nextText(a)),
       toggleSwitch(a.enabled, { label: tr('Enable “{0}”', a.name), onChange: async (v) => {
@@ -2976,7 +3010,7 @@ async function viewAutomationEditor(id) {
   }
 
   const desc = a
-    ? [a.enabled && a.next_run_at ? tr('Next run {0}', inTime(a.next_run_at)) : nextText(a), a.created_by === 'agent' ? tr('created by the agent') : null].filter(Boolean).join(' · ')
+    ? [a.enabled && a.next_run_at ? tr('Next run {0}', inTime(a.next_run_at)) : nextText(a), createdBy(a)].filter(Boolean).join(' · ')
     : tr('The agent runs the prompt on schedule, each run in its own chat.');
   page(shell, a ? a.name : tr('New automation'), desc, runBtn,
     section(tr('Task'), null, h('div', { class: 'plugin-form' },

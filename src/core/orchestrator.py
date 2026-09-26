@@ -34,7 +34,7 @@ from mensarium.policy_engine.engine import Decision, evaluate
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import iso_in, now_iso, parse_iso, utcnow
 from mensarium.shared.versions import parse_version
-from mensarium.tool_runtime.registry import AGENT_TOOLS, AUTOMATION_TOOLS, PLAN_TOOLS, REGISTRY
+from mensarium.tool_runtime.registry import AGENT_TOOLS, AUTOMATION_TOOLS, DEVICE_TOOLS, PLAN_TOOLS, REGISTRY
 
 if TYPE_CHECKING:
     from mensarium.core.automations import AutomationManager
@@ -382,8 +382,7 @@ class Orchestrator:
             toolbox = await self.plugins.toolbox(profile, target)
             if not task.get("parent_id"):
                 toolbox.add_tools({**PLAN_TOOLS, **AGENT_TOOLS})
-                if not task.get("automation_id"):
-                    toolbox.add_tools(AUTOMATION_TOOLS)
+                toolbox.add_tools(DEVICE_TOOLS if task.get("automation_id") else AUTOMATION_TOOLS)
             available = toolbox.available(target)
             if profile.allow_extensions:
                 toolbox.add_skills(self.skills.eligible(await self.skills.all(), target["platform"], available))
@@ -852,7 +851,32 @@ class Orchestrator:
             return await self.plugins.agent_install((await self.catalog.load())[0], args["id"], target)
         if tool in ("automations.list", "automations.create", "automations.delete"):
             return await self._automations_tool(task_id, tool, args)
+        if tool == "device.update":
+            return await self._update_device(task_id)
         return await self.plugins.call_core(toolbox, toolbox.registry[tool], args)
+
+    async def _update_device(self, task_id: str) -> str:
+        target = await self.repo.get_target((await self._task(task_id))["target_id"])
+        if not target:
+            raise TaskError("the device of this task is gone")
+        current = target.get("agent_version") or "unknown"
+        if self.hub.hello(target["id"]) is None:
+            return f"The device is offline; its client is {current}, the Core is {__version__}."
+        if parse_version(target.get("agent_version") or "0") >= parse_version(__version__):
+            return f"The client is up to date: {current} (the Core is {__version__})."
+        try:
+            status = await self.hub.update_device(target, __version__, self.cfg.execution.request_ttl_s)
+        except TargetUnavailable as e:
+            raise TaskError(str(e)) from e
+        await self.repo.audit(
+            self.workspace_id,
+            "agent",
+            "target.update",
+            {"target_id": target["id"], "from": current, "to": __version__, "status": status.status, "reason": status.detail or None},
+        )
+        if status.status != "started":
+            raise TaskError(status.detail or f"update {status.status}")
+        return f"Update started: {current} -> {__version__}. The client restarts on its own when it is done."
 
     async def _automations_tool(self, task_id: str, tool: str, args: dict[str, Any]) -> str:
         if self.automations is None:

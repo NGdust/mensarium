@@ -342,22 +342,22 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         target_id = new_id("tgt")
         if not await c.repo.use_pairing(row["id"], target_id):
             raise HTTPException(403, "pairing code already used")
-        await c.repo.create_target(
-            {
-                "id": target_id,
-                "workspace_id": c.workspace_id,
-                "name": body.name[:80],
-                "platform": body.platform,
-                "hostname": body.hostname,
-                "status": "offline",
-                "public_key": body.public_key,
-                "agent_version": body.agent_version,
-                "created_at": now_iso(),
-            }
-        )
+        target = {
+            "id": target_id,
+            "workspace_id": c.workspace_id,
+            "name": body.name[:80],
+            "platform": body.platform,
+            "hostname": body.hostname,
+            "status": "offline",
+            "public_key": body.public_key,
+            "agent_version": body.agent_version,
+            "created_at": now_iso(),
+        }
+        await c.repo.create_target(target)
         await c.repo.audit(
             c.workspace_id, "target", "target.paired", {"target_id": target_id, "name": body.name, "hostname": body.hostname}
         )
+        await c.automations.add_device(target)
         return PairResponse(
             target_id=target_id,
             workspace_id=c.workspace_id,
@@ -405,7 +405,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
 
     @app.get("/v1/providers")
     async def list_providers(c: Core = Depends(auth)) -> dict[str, Any]:
-        return c.providers.view()
+        return {**c.providers.view(), "detected": await c.providers.detected()}
 
     @app.put("/v1/providers/{provider_id}")
     async def save_provider(provider_id: str, body: ProviderBody, c: Core = Depends(auth)) -> dict[str, Any]:
@@ -518,10 +518,8 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         t = await c.repo.get_target(target_id)
         if not t or t["status"] == "revoked":
             raise HTTPException(404, "target not found")
-        if not (t.get("capabilities") or {}).get("remote_update"):
-            raise HTTPException(409, "this agent cannot be updated remotely; run `mensarium update` on the device")
         try:
-            status = await c.hub.request_update(target_id, __version__, c.cfg.execution.request_ttl_s)
+            status = await c.hub.update_device(t, __version__, c.cfg.execution.request_ttl_s)
         except TargetUnavailable as e:
             raise HTTPException(409, str(e)) from e
         await c.repo.audit(
