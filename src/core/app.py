@@ -493,6 +493,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             "platform": t["platform"],
             "hostname": t["hostname"],
             "status": status,
+            "gateway_online": c.hub.gateway_online(t["id"]),
             "last_seen_at": t["last_seen_at"],
             "agent_version": t["agent_version"],
             "created_at": t["created_at"],

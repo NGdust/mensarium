@@ -8,7 +8,7 @@ const $app = document.getElementById('app');
 const $toasts = document.getElementById('toasts');
 const $layer = document.getElementById('layer');
 
-const state = { system: null, targets: [], tasks: [], shell: null, lastChat: '#/', updates: new Map() };
+const state = { system: null, gateway: null, coreOffline: false, targets: [], tasks: [], shell: null, lastChat: '#/', updates: new Map() };
 let viewCleanups = [];
 let shellCleanups = [];
 
@@ -26,6 +26,10 @@ async function api(path, opts = {}) {
   const text = await res.text();
   let data = null;
   if (text) { try { data = JSON.parse(text); } catch { data = text; } }
+  if (res.status === 503 && data?.error === 'core-offline') {
+    setCoreOffline(true);
+    throw Object.assign(new Error(tr('Core is offline')), { status: 503, code: 'core-offline' });
+  }
   if (!res.ok) {
     const detail = Array.isArray(data?.detail) ? data.detail.map((d) => String(d.msg).replace(/^Value error, /, '')).join('; ') : data?.detail;
     throw Object.assign(new Error(detail || tr('Request error ({0})', res.status)), { status: res.status });
@@ -38,7 +42,44 @@ const del = (path) => api(path, { method: 'DELETE' });
 
 function fail(err) {
   if (err instanceof AuthError) { showLogin(); return; }
+  if (err?.code === 'core-offline') return;
   toast(err.message || String(err), true);
+}
+
+// ---------- gateway ----------
+
+async function loadGateway() {
+  try {
+    const res = await fetch('/v1/gateway', { credentials: 'same-origin' });
+    state.gateway = res.ok ? await res.json() : null;
+  } catch { state.gateway = null; }
+  return state.gateway;
+}
+
+let offlineTimer = null;
+function setCoreOffline(offline) {
+  if (state.coreOffline === offline) return;
+  state.coreOffline = offline;
+  document.body.classList.toggle('core-offline', offline);
+  let banner = document.getElementById('core-offline');
+  if (offline) {
+    if (!banner) {
+      banner = h('div', { id: 'core-offline', class: 'offline-banner', role: 'status' }, icon('alert'), h('span', {}, tr('Core is offline, reconnecting...')));
+      document.body.prepend(banner);
+    }
+    if (!offlineTimer) offlineTimer = setInterval(async () => {
+      const g = await loadGateway();
+      if (g && g.online) {
+        setCoreOffline(false);
+        state.system = null;
+        state.shell = null;
+        boot();
+      }
+    }, 5000);
+  } else {
+    banner?.remove();
+    if (offlineTimer) { clearInterval(offlineTimer); offlineTimer = null; }
+  }
 }
 
 // ---------- DOM helpers ----------
@@ -326,6 +367,7 @@ const reasonText = (r) => REASONS[r] || r;
 const statusOf = (s) => STATUS[s] || [s, '', false];
 const isRunning = (s) => statusOf(s)[2];
 const isLocal = (t) => t && t.id === state.system?.local_target_id;
+const isThisDevice = (t) => t && t.id === state.gateway?.target_id;
 const fullAccessOf = (t) => t?.capabilities?.full_access || 'disabled';
 const fullAccessBlock = (t) => (fullAccessOf(t) === 'outdated'
   ? tr('The device agent is outdated (v{0}). Update it in Settings → Devices.', t.agent_version)
@@ -432,7 +474,9 @@ function languageSwitch(compact = false) {
 function showLogin() {
   cleanupAll();
   state.shell = null;
-  const input = h('input', { type: 'password', placeholder: tr('Admin token'), autocomplete: 'current-password', 'aria-label': tr('Admin token') });
+  const gw = Boolean(state.gateway);
+  const label = gw ? tr('Gateway token') : tr('Admin token');
+  const input = h('input', { type: 'password', placeholder: label, autocomplete: 'current-password', 'aria-label': label });
   const btn = h('button', { class: 'btn btn-primary' }, tr('Sign in'));
   const submit = async () => {
     const token = input.value.trim();
@@ -450,7 +494,8 @@ function showLogin() {
   $app.replaceChildren(h('div', { class: 'login' }, h('div', { class: 'login-lang' }, languageSwitch(true)), h('div', { class: 'login-card' },
     orb('md'),
     h('h1', {}, 'Mensarium'),
-    h('p', {}, tr('The token is issued by the command '), h('code', {}, 'mensarium core token'), tr(' on the Core server.')),
+    gw ? h('p', {}, tr('The token is issued by the command '), h('code', {}, 'mensarium client gateway token'), tr(' on this machine.'))
+      : h('p', {}, tr('The token is issued by the command '), h('code', {}, 'mensarium core token'), tr(' on the Core server.')),
     input, btn,
   )));
   input.focus();
@@ -873,7 +918,7 @@ async function viewNewChat() {
     ]
     : h('div', { class: 'welcome-empty' },
       h('div', { class: 'welcome-hero' }, orb('lg'), h('h1', {}, tr('Connect a device'))),
-      h('p', {}, tr('The agent works on your machines through Mensarium Target. Pairing takes a minute.')),
+      h('p', {}, tr('The agent works on your machines through Mensarium clients. Pairing takes a minute.')),
       h('button', { class: 'btn btn-primary', onclick: openPairing }, icon('link'), tr('Pair a device')));
 
   shell.panel.replaceChildren(topbar(shell, [], null, { newChat: false }), h('div', { class: 'welcome' }, content));
@@ -1443,7 +1488,8 @@ async function settingsOverview(shell) {
     )),
     section(tr('Maintenance'), tr('Commands run on the Core server.'), h('div', { class: 'rows' },
       row(tr('Update Mensarium'), tr('Downloads the latest version and restarts the service.'), cmdValue('mensarium update'), true),
-      row(tr('Login token'), tr('Shows the admin token.'), cmdValue('mensarium core token'), true),
+      state.gateway ? row(tr('Login token'), tr('Shows the gateway token; run it on this machine.'), cmdValue('mensarium client gateway token'), true)
+        : row(tr('Login token'), tr('Shows the admin token.'), cmdValue('mensarium core token'), true),
     )),
     section(tr('Language'), tr('Interface language. The agent answers in the language you write to it.'), languageSwitch()),
     section(tr('Backup'), tr('An archive with the database, keys, secrets, and settings, encrypted with a password you set. The same archive is used to move Core to another server.'), h('div', { class: 'rows' },
@@ -1737,6 +1783,8 @@ async function settingsDevices(shell) {
         h('div', { class: 'row-text' },
           h('div', { class: 'row-title' }, t.name,
             isLocal(t) ? h('span', { class: 'pill accent', title: tr('The machine Core is installed on. Always connected.') }, 'Core') : null,
+            isThisDevice(t) ? h('span', { class: 'pill', title: tr('The machine this web UI runs on.') }, tr('This device')) : null,
+            t.gateway_online && !isThisDevice(t) ? h('span', { class: 'pill', title: tr('This device runs a gateway: the web UI is open there too.') }, tr('gateway')) : null,
             state.updates.has(t.id) ? h('span', { class: 'pill accent' }, tr('updating'))
               : outdated ? h('span', { class: 'pill warn', title: tr('Open the device to update the agent') }, tr('v{0}, update available', t.agent_version)) : null),
           h('div', { class: 'row-desc' }, [
@@ -2984,12 +3032,15 @@ document.addEventListener('keydown', (e) => {
 });
 
 async function boot() {
+  if (state.gateway === null) await loadGateway();
+  if (state.gateway && !state.gateway.online) { setCoreOffline(true); }
   try {
     state.system = await get('/v1/system');
+    setCoreOffline(false);
     await refreshData();
   } catch (err) {
     if (err instanceof AuthError) { showLogin(); return; }
-    toast(err.message, true);
+    if (err?.code !== 'core-offline') toast(err.message, true);
   }
   state.shell = null;
   window.removeEventListener('hashchange', route);
