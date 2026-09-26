@@ -654,83 +654,80 @@ function topbar(shell, crumbs, actions, { newChat = true } = {}) {
   );
 }
 
+// A device reads at a glance by its first letter on a hue of its own, the same in every list.
+const DEVICE_HUES = [265, 310, 355, 40, 85, 130, 175, 220];
+function deviceBadge(id, name, online, status) {
+  let n = 0;
+  for (const ch of id || '') n = (n * 31 + ch.charCodeAt(0)) >>> 0;
+  const label = name || id || '?';
+  return h('span', { class: `device-badge${online ? '' : ' off'}`, style: `--hue:${DEVICE_HUES[n % DEVICE_HUES.length]}`, title: online ? label : `${label} · ${tr('offline')}` },
+    [...label.trim()][0]?.toUpperCase() || '?', status ? h('span', { class: `dot ${status}` }) : null);
+}
+
 function ensureAppShell() {
   if (state.shell && state.shell.kind === 'app') return state.shell;
   const sessions = h('div', { class: 'sessions' });
   const projectsBox = h('div', { class: 'projects' });
   const devicesCount = h('span', { class: 'count' });
   const newChat = h('a', { class: 'new-chat', href: '#/' }, icon('plus'), tr('New chat'));
-  const newProject = h('a', { class: 'icon-btn nav-add', href: '#/projects/new', title: tr('New project'), 'aria-label': tr('New project') }, icon('plus'));
+  const newProject = h('a', { class: 'new-chat', href: '#/projects/new' }, icon('plus'), tr('Create project'));
   const automationsLink = h('a', { class: 'nav-item nav-automations', href: '#/automations' }, icon('clock'), tr('Automations'));
   const devicesLink = h('a', { class: 'nav-item', href: '#/settings/devices' }, icon('laptop'), tr('Devices'), devicesCount);
+  const folded = new Set(JSON.parse(localStorageGet('nav-collapsed') || '[]'));
+  // The list right after a folded head is hidden by CSS, so the head only flips aria-expanded.
+  const navSection = (key, label) => h('button', { class: 'nav-section', 'aria-expanded': String(!folded.has(key)), onclick: (e) => {
+    if (folded.has(key)) folded.delete(key); else folded.add(key);
+    e.currentTarget.setAttribute('aria-expanded', String(!folded.has(key)));
+    localStorageSet('nav-collapsed', JSON.stringify([...folded]));
+  } }, h('span', {}, label), icon('chevron'));
+  const projectsHead = navSection('projects', tr('Projects'));
   let s;
   const collapse = h('button', { class: 'icon-btn collapse-nav', 'aria-label': tr('Hide sidebar'), title: tr('Hide sidebar'), onclick: () => s.toggleNav() }, icon('sidebar'));
   s = frame('app', [
     h('div', { class: 'brand' }, orb('sm'), h('span', { class: 'brand-name' }, 'Mensarium'), collapse),
     automationsLink,
-    h('div', { class: 'nav-label nav-label-row' }, h('span', {}, tr('Projects')), newProject),
+    newProject,
+    projectsHead,
     projectsBox,
     newChat,
-    h('div', { class: 'nav-label' }, tr('Chats')),
+    navSection('chats', tr('Chats')),
     sessions,
     h('div', { class: 'sidebar-foot' }, devicesLink, h('div', { class: 'sidebar-foot-row' },
       h('a', { class: 'nav-item', href: '#/settings/overview' }, icon('sliders'), tr('Settings')),
       h('button', { class: 'icon-btn limits-btn', title: tr('Usage limits'), 'aria-label': tr('Usage limits'), onclick: limitsModal }, icon('gauge')))),
   ]);
 
-  const collapsed = new Set(JSON.parse(localStorageGet('collapsed') || '[]'));
   function renderSessions() {
     const online = devices().filter((t) => t.status === 'online').length;
     devicesCount.replaceChildren(h('span', { class: `dot${online ? ' ok' : ''}` }), tr('{0} online', online));
     const activeId = (location.hash.match(/^#\/chat\/(.+)$/) || [])[1];
+    const activeProject = state.tasks.find((t) => t.id === activeId)?.project_id;
     const onAutomations = location.hash.startsWith('#/automations');
     automationsLink.classList.toggle('active', onAutomations);
+    newProject.classList.toggle('active', location.hash === '#/projects/new');
     newChat.classList.toggle('active', !activeId && !onAutomations && !location.hash.startsWith('#/settings') && !location.hash.startsWith('#/projects'));
-    const sessionLink = (t) => {
+    const isOnline = (id) => state.targets.some((t) => t.id === id && t.status === 'online');
+    projectsHead.classList.toggle('hidden', !state.projects.length);
+    projectsBox.replaceChildren(...state.projects.map((p) => {
+      const active = activeProject === p.id || location.hash === `#/projects/${p.id}` || location.hash === `#/projects/${p.id}/new`;
+      const busy = p.status === 'creating' || p.syncing;
+      return h('div', { class: `project-head${active ? ' active' : ''}` },
+        h('a', { class: 'project-link', href: `#/projects/${p.id}`, title: `${p.source_name || ''}:${p.source_path}` },
+          deviceBadge(p.source_target_id, p.source_name, p.source_online, busy ? 'accent live' : p.status === 'error' ? 'danger' : ''),
+          h('span', { class: 'session-title' }, p.name)),
+        p.status === 'ready' ? h('a', { class: 'icon-btn session-add', href: `#/projects/${p.id}/new`, title: tr('New chat in project'), 'aria-label': tr('New chat in project') }, icon('plus')) : null);
+    }));
+    // Project chats live on their project's page; the sidebar lists the rest.
+    const plain = state.tasks.filter((t) => !t.project_id);
+    sessions.replaceChildren(...(plain.length ? plain.map((t) => {
       const [, kind, live] = statusOf(t.status);
+      // Only what needs a look gets a mark: work in progress, a pending decision, an error.
+      const mark = kind && kind !== 'ok' ? `${kind}${live ? ' live' : ''}` : '';
       return h('a', { class: `session${t.id === activeId ? ' active' : ''}`, href: `#/chat/${t.id}`, title: t.input },
-        h('span', { class: `dot ${kind}${live ? ' live' : ''}` }),
+        deviceBadge(t.target_id, t.target_name, isOnline(t.target_id), mark),
         h('span', { class: 'session-title' }, taskTitle(t)),
         h('button', { class: 'icon-btn session-del', title: tr('Delete chat'), 'aria-label': tr('Delete chat'), onclick: (e) => { e.preventDefault(); e.stopPropagation(); deleteChat(t); } }, icon('trash')));
-    };
-    projectsBox.replaceChildren(...state.projects.map((p) => {
-      const chats = state.tasks.filter((t) => t.project_id === p.id);
-      const active = location.hash === `#/projects/${p.id}` || location.hash === `#/projects/${p.id}/new`;
-      const busy = p.status === 'creating' || p.syncing;
-      const dot = busy ? 'accent live' : p.status === 'error' ? 'danger' : p.source_online ? 'ok' : '';
-      const head = h('div', { class: `project-head${active ? ' active' : ''}` },
-        h('a', { class: 'project-link', href: `#/projects/${p.id}`, title: `${p.source_name || ''}:${p.source_path}` },
-          icon(KIND_ICON[p.kind] || 'folder'), h('span', { class: `dot ${dot}` }), h('span', { class: 'session-title' }, p.name)),
-        p.status === 'ready' ? h('a', { class: 'icon-btn session-add', href: `#/projects/${p.id}/new`, title: tr('New chat in project'), 'aria-label': tr('New chat in project') }, icon('plus')) : null);
-      return h('div', { class: 'group project' }, head, h('div', { class: 'group-items' }, chats.map(sessionLink)));
-    }));
-    const plain = state.tasks.filter((t) => !t.project_id);
-    if (!plain.length) {
-      sessions.replaceChildren(h('div', { class: 'sessions-empty' }, tr('Chats with the agent will appear here.')));
-      return;
-    }
-    const byTarget = new Map();
-    plain.forEach((t) => {
-      const key = t.target_name || tr('Other');
-      if (!byTarget.has(key)) byTarget.set(key, []);
-      byTarget.get(key).push(t);
-    });
-    const single = byTarget.size === 1;
-    sessions.replaceChildren(...[...byTarget.entries()].map(([name, tasks]) => {
-      const group = h('div', { class: `group${!single && collapsed.has(name) ? ' collapsed' : ''}` });
-      const items = h('div', { class: 'group-items' }, tasks.map(sessionLink));
-      if (!single) {
-        group.append(h('button', { class: 'group-head', 'aria-expanded': String(!collapsed.has(name)), onclick: (e) => {
-          group.classList.toggle('collapsed');
-          const isCollapsed = group.classList.contains('collapsed');
-          e.currentTarget.setAttribute('aria-expanded', String(!isCollapsed));
-          if (isCollapsed) collapsed.add(name); else collapsed.delete(name);
-          localStorageSet('collapsed', JSON.stringify([...collapsed]));
-        } }, icon('chevron'), name));
-      }
-      group.append(items);
-      return group;
-    }));
+    }) : [h('div', { class: 'sessions-empty' }, tr('Chats with the agent will appear here.'))]));
   }
 
   const poll = async () => {

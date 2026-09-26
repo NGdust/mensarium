@@ -849,6 +849,7 @@ const RU = {
   'Transcript': 'Транскрипт',
   'Projects': 'Проекты',
   'New project': 'Новый проект',
+  'Create project': 'Создать проект',
   'New chat in project': 'Новый чат в проекте',
   'Git repository': 'Git-репозиторий',
   'A folder on one of your devices. Every chat in the project works in its own copy, so chats never disturb each other or your files.': 'Папка на одном из ваших устройств. Каждый чат проекта работает в своей копии, поэтому чаты не мешают ни друг другу, ни вашим файлам.',
