@@ -26,6 +26,28 @@ UNATTENDED_BLOCK = (
     "wait for them. If there is nothing to report, answer with exactly NO_REPLY.\n"
 )
 
+PROJECT_BLOCK = (
+    "\n## Project (set by the harness)\n"
+    "- name: {name}\n"
+    "- source: {source}\n"
+    "- your worktree (work only here; relative paths and shell cwd resolve to it): {workdir}\n"
+    "- your branch: {branch}, started from {base}\n"
+    "This worktree is your private copy of the project for this chat. Do not switch branches, do not touch other "
+    "worktrees or the source folder, do not push or add remotes unless the user explicitly asks. You may commit; "
+    "the harness also commits your branch at the end of every turn. The project's environment may be missing on "
+    "this machine (dependencies not installed, tests may not run): say so plainly instead of installing toolchains.\n"
+)
+FOLDER_BLOCK = (
+    "\n## Project (set by the harness)\n"
+    "- name: {name}\n"
+    "- source: {source}\n"
+    "- your working copy (work only here; relative paths and shell cwd resolve to it): {workdir}\n"
+    "- started from the folder state of {base}\n"
+    "This is a folder of files, not a code repository: Mensarium versions it for you, so do not run git commands. "
+    "Edit files in place inside the working copy. If the user later brings in a newer folder state and a binary "
+    "file (documents, images) was changed on both sides, keep both versions (`<name> (device).<ext>`) and say so.\n"
+)
+
 
 def skills_block(skills: list[tuple[str, str]]) -> str:
     """Names and descriptions only; the model loads a skill's text with skills.read when it applies.
@@ -56,8 +78,10 @@ def build_system_prompt(
     outdated_agent: str | None = None,
     agent_label: str | None = None,
     unattended: bool = False,
+    project: dict[str, Any] | None = None,
 ) -> str:
     allow = ", ".join(policy.command_allowlist) if policy.command_allowlist else "(none)"
+    root = project["workdir"] if project else (policy.roots[0] if policy.roots else "(none)")
     prompt = (
         f"{profile.instructions.strip()}\n\n"
         + (SUBAGENT_BLOCK.format(label=agent_label) if agent_label else "")
@@ -65,7 +89,7 @@ def build_system_prompt(
         "## Active target (set by the harness, not by you)\n"
         f"- name: {target_name}\n"
         f"- platform: {platform}\n"
-        f"- workspace root (base for relative paths): {policy.roots[0] if policy.roots else '(none)'}\n"
+        f"- workspace root (base for relative paths): {root}\n"
         f"- allowed roots: {', '.join(policy.roots)}\n"
         f"- programs allowed for shell.exec: {allow}\n"
         f"- available tools: {', '.join(tools) or '(none)'}\n"
@@ -78,6 +102,9 @@ def build_system_prompt(
         )
     if unattended:
         prompt += UNATTENDED_BLOCK
+    if project:
+        block = FOLDER_BLOCK if project["kind"] == "folder" else PROJECT_BLOCK
+        prompt += block.format(**project)
     if "plugins.find" in tools:
         prompt += (
             "\n## Missing capabilities\n"

@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from mensarium.contracts.protocol import TargetPolicy
 from mensarium.contracts.tools import PATH_FIELDS, WRITE_PATH_TOOLS
-from mensarium.shared.redaction import is_secret_path
+from mensarium.shared.redaction import GIT_DIRS, is_secret_path
 from mensarium.tool_runtime.commands import render
 from mensarium.tool_runtime.mcp import check_arguments
 from mensarium.tool_runtime.registry import REGISTRY, Risk, ToolSpec
@@ -58,14 +58,22 @@ def _within(path: str, root: str) -> bool:
     return path == root or path.startswith(root + "/") or root == "/"
 
 
-def _normalize_path(value: str, roots: list[str]) -> str:
+def _normalize_path(value: str, roots: list[str], base: str | None = None) -> str:
+    base = base or roots[0]
     if value.startswith("~"):
-        raise ValueError(f"path {value!r}: use an absolute path or a path relative to {roots[0]}")
-    full = value if value.startswith("/") else posixpath.join(roots[0], value)
+        raise ValueError(f"path {value!r}: use an absolute path or a path relative to {base}")
+    full = value if value.startswith("/") else posixpath.join(base, value)
     full = posixpath.normpath(full)
     if not any(_within(full, r) for r in roots):
         raise ValueError(f"path {full!r} is outside allowed roots {roots}")
     return full
+
+
+def _is_secret(path: str, projects_root: str | None) -> bool:
+    if projects_root and _within(path, projects_root):
+        rel = posixpath.relpath(path, projects_root)
+        return any(part.lower() in GIT_DIRS for part in rel.split("/")) or is_secret_path(rel)
+    return is_secret_path(path)
 
 
 ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -134,6 +142,8 @@ def evaluate(
     target_policy: TargetPolicy,
     disabled_tools: list[str] | None = None,
     registry: Mapping[str, ToolSpec] = REGISTRY,
+    workdir: str | None = None,
+    projects_root: str | None = None,
 ) -> Decision:
     """`arguments` and `exec_tool` of an allowed decision are what is sent to the device (or run in Core)."""
     spec = registry.get(tool)
@@ -193,14 +203,14 @@ def evaluate(
     try:
         for f in PATH_FIELDS.get(exec_tool, ()):
             if args.get(f) is not None:
-                args[f] = _normalize_path(args[f], target_policy.roots)
+                args[f] = _normalize_path(args[f], target_policy.roots, workdir)
     except ValueError as e:
         return _deny(str(e))
 
     risk: Risk = spec.risk
-    if exec_tool in ("files.read", "files.list", "files.search", "files.stat", "files.find") and is_secret_path(args["path"]):
+    if exec_tool in ("files.read", "files.list", "files.search", "files.stat", "files.find") and _is_secret(args["path"], projects_root):
         return _deny("access to secret files is not allowed")
-    if exec_tool in WRITE_PATH_TOOLS and any(is_secret_path(args[f]) for f in PATH_FIELDS[exec_tool]):
+    if exec_tool in WRITE_PATH_TOOLS and any(_is_secret(args[f], projects_root) for f in PATH_FIELDS[exec_tool]):
         return _deny("secret files and folders cannot be changed by the agent")
     if exec_tool == "shell.bash":
         risk = max(classify_script(args["script"]), risk, key=RISK_ORDER.index)

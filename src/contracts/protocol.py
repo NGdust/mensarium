@@ -38,6 +38,8 @@ class Capabilities(BaseModel):
     browser: dict[str, bool] = {"playwright": False}
     limits: TargetLimits = TargetLimits()
     remote_update: bool = False
+    projects: bool = False
+    projects_root: str | None = None
 
 
 class TargetHello(BaseModel):
@@ -82,6 +84,7 @@ class ExecutionRequest(BaseModel):
     arguments: dict[str, Any]
     approval_ref: str | None = None
     mode: AccessMode = "ask"
+    workdir: str | None = None
     signature: str = ""
 
 

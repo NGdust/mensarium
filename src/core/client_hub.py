@@ -11,6 +11,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from mensarium.contracts.gateway import SessionKind
+from mensarium.contracts.projects import ProjectOp, ProjectSnapshot
 from mensarium.contracts.protocol import (
     AuthChallenge,
     AuthResponse,
@@ -52,6 +53,7 @@ class ClientConnection:
     pending: dict[str, asyncio.Future[ExecutionResult]] = field(default_factory=dict)
     updates: dict[str, asyncio.Future[TargetUpdateStatus]] = field(default_factory=dict)
     plugins: dict[str, asyncio.Future[TargetPluginsStatus]] = field(default_factory=dict)
+    projects: dict[str, asyncio.Future[dict[str, Any]]] = field(default_factory=dict)
 
 
 class ClientHub:
@@ -102,7 +104,7 @@ class ClientHub:
             if self.connections.get(conn.target_id) is conn:
                 del self.connections[conn.target_id]
                 await self.repo.update_target(conn.target_id, {"status": "offline", "last_seen_at": now_iso()})
-            waiters: list[asyncio.Future[Any]] = [*conn.pending.values(), *conn.updates.values(), *conn.plugins.values()]
+            waiters: list[asyncio.Future[Any]] = [*conn.pending.values(), *conn.updates.values(), *conn.plugins.values(), *conn.projects.values()]
             for fut in waiters:
                 if not fut.done():
                     fut.set_exception(TargetUnavailable("target disconnected"))
@@ -203,6 +205,14 @@ class ClientHub:
             plugin_waiter = conn.plugins.pop(answer.request_id, None)
             if plugin_waiter and not plugin_waiter.done() and verify(conn.public_key, msg):
                 plugin_waiter.set_result(answer)
+        elif kind in ("project.snapshot.status", "project.op.status"):
+            project_waiter = conn.projects.pop(str(msg.get("request_id") or ""), None)
+            if project_waiter is None or project_waiter.done():
+                return
+            if not verify(conn.public_key, msg):
+                project_waiter.set_exception(TargetUnavailable("project answer has an invalid signature"))
+                return
+            project_waiter.set_result(msg)
 
     def supports(self, target_id: str, tool: str) -> bool:
         hello = self.hello(target_id)
@@ -231,6 +241,21 @@ class ClientHub:
             raise TargetUnavailable("the device did not report its MCP servers in time") from e
         finally:
             conn.plugins.pop(msg.request_id, None)
+
+    async def project_request(self, msg: ProjectSnapshot | ProjectOp, timeout_s: float) -> dict[str, Any]:
+        conn = self.connections.get(msg.target_id)
+        if conn is None:
+            raise TargetUnavailable("target is offline")
+        msg.signature = sign(self.key, msg.model_dump())
+        fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        conn.projects[msg.request_id] = fut
+        try:
+            await conn.ws.send_json(msg.model_dump())
+            return await asyncio.wait_for(fut, timeout_s)
+        except TimeoutError as e:
+            raise TargetUnavailable("the device did not answer the project request in time") from e
+        finally:
+            conn.projects.pop(msg.request_id, None)
 
     async def update_device(self, target: dict[str, Any], version: str, ttl_s: int) -> TargetUpdateStatus:
         """Ask a device that allows remote updates to update its agent from this Core."""

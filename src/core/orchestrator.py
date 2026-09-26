@@ -13,6 +13,7 @@ from mensarium.agent_core.context import MAX_AGENTS, build_messages, build_syste
 from mensarium.agent_core.profile import AgentProfile
 from mensarium.contracts.automations import AutomationCreate, AutomationError
 from mensarium.contracts.llm import ChatRequest
+from mensarium.contracts.projects import ProjectError, branch_name
 from mensarium.contracts.protocol import (
     AccessMode,
     ExecutionRequest,
@@ -38,6 +39,7 @@ from mensarium.tool_runtime.registry import AGENT_TOOLS, AUTOMATION_TOOLS, DEVIC
 
 if TYPE_CHECKING:
     from mensarium.core.automations import AutomationManager
+    from mensarium.core.projects import ProjectManager
 
 log = logging.getLogger(__name__)
 
@@ -129,6 +131,8 @@ class Orchestrator:
         self.running_requests: dict[str, tuple[str, str]] = {}
         self.interrupts: dict[str, asyncio.Event] = {}
         self.automations: AutomationManager | None = None
+        self.projects: ProjectManager | None = None
+        self.workdirs: dict[str, str] = {}
 
     # ---- public API -------------------------------------------------------
 
@@ -146,6 +150,7 @@ class Orchestrator:
         mode: AccessMode = "ask",
         model: str | None = None,
         automation_id: str | None = None,
+        project_id: str | None = None,
     ) -> dict[str, Any]:
         profile = await self.load_profile(profile_id)
         target = await self.repo.get_target(target_id)
@@ -156,6 +161,17 @@ class Orchestrator:
             raise TaskError(f"profile {profile.id} does not allow {platform} targets")
         if mode == "full" and (access := full_access(target)) != "allowed":
             raise TaskError(FULL_ACCESS_ERRORS[access])
+        project = None
+        if project_id:
+            assert self.projects
+            try:
+                project = await self.projects.get(project_id)
+            except ProjectError as e:
+                raise TaskError(str(e)) from e
+            if project["status"] != "ready":
+                raise TaskError("the project is not ready; sync it first")
+            if target_id != project["source_target_id"]:
+                raise TaskError("in this version a project chat runs on the project's source device")
         task_id = new_id("task")
         now = now_iso()
         await self.repo.create_task(
@@ -169,6 +185,9 @@ class Orchestrator:
                 "mode": mode,
                 "model": model,
                 "automation_id": automation_id,
+                "project_id": project_id,
+                "branch": branch_name(task_id, text) if project else None,
+                "base_ref": "snapshot" if project else None,
                 "budget": profile.limits.model_dump(),
                 "trace_id": new_id("tr"),
                 "created_at": now,
@@ -235,7 +254,8 @@ class Orchestrator:
 
     async def delete(self, task_id: str) -> None:
         await self._task(task_id)
-        for row in [*await self.repo.list_children(task_id), {"id": task_id}]:
+        rows = [*await self.repo.list_children(task_id), {"id": task_id}]
+        for row in rows:
             runner = self.runners.get(row["id"])
             if runner:
                 await self._control(row["id"], "cancel")
@@ -243,10 +263,23 @@ class Orchestrator:
                     await asyncio.wait_for(asyncio.shield(runner), 15)
                 except TimeoutError:
                     runner.cancel()
+        task = await self.repo.get_task(task_id)
+        if task and task.get("project_id") and not task.get("parent_id") and task.get("base_sha") and self.projects:
+            project = await self.repo.get_project(str(task["project_id"]))
+            if project:
+                await self.projects.remove(project, task)
+        for row in rows:
             for artifact_id in await self.repo.delete_task(row["id"]):
                 for path in self.artifacts_dir.glob(f"{artifact_id}.*"):
                     path.unlink(missing_ok=True)
         await self.repo.audit(self.workspace_id, "user", "task.deleted", {"task_id": task_id})
+
+    async def delete_project(self, project_id: str, remove_shadow: bool) -> None:
+        assert self.projects
+        await self.projects.precheck_delete(project_id, remove_shadow)
+        for t in await self.repo.list_project_tasks(project_id):
+            await self.delete(str(t["id"]))
+        await self.projects.delete_row(project_id, remove_shadow)
 
     async def decide(self, approval_id: str, decision: str, note: str | None, confirm: bool) -> None:
         approval = await self.repo.get_approval(approval_id)
@@ -329,6 +362,9 @@ class Orchestrator:
             if task.get("parent_id"):
                 self.bus.parents[task_id] = task["parent_id"]
             profile = await self.load_profile(task["profile_id"])
+            if task.get("project_id") and not task.get("parent_id") and not task.get("base_sha"):
+                await self._checkout(task)
+                task = await self._task(task_id)
             await self._loop(task, profile)
         except Stop as s:
             resumable = s.status in ("PAUSED", "FAILED_RECOVERABLE")
@@ -344,11 +380,67 @@ class Orchestrator:
             self.controls.pop(task_id, None)
             self.interrupts.pop(task_id, None)
             self.running_requests.pop(task_id, None)
+            self.workdirs.pop(task_id, None)
             # sub-agents of a finished task have nobody to report to; a paused one collects them on resume
             if not resumable:
                 for child in await self.repo.list_children(task_id):
                     if child["id"] in self.runners:
                         await self._control(child["id"], "cancel")
+            try:
+                await self._commit_turn(task_id)
+            except Exception:
+                log.exception("end-of-turn commit failed", extra={"task_id": task_id})
+
+    async def _project_of(self, task: dict[str, Any]) -> dict[str, Any] | None:
+        if not task.get("project_id"):
+            return None
+        assert self.projects
+        try:
+            return await self.projects.get(str(task["project_id"]))
+        except ProjectError as e:
+            raise Stop("FAILED", str(e)) from e
+
+    async def _checkout(self, task: dict[str, Any]) -> None:
+        project = await self._project_of(task)
+        assert project and self.projects
+        if self.hub.hello(task["target_id"]) is None:
+            raise Stop("PAUSED", "target offline")
+        try:
+            status = await self.projects.checkout(project, task)
+        except TargetUnavailable as e:
+            raise Stop("PAUSED", "target offline") from e
+        except ProjectError as e:
+            raise Stop("PAUSED", str(e)) from e
+        if status.state != "ok":
+            raise Stop("FAILED", f"cannot prepare the project worktree: {status.detail}")
+        await self.repo.update_task(task["id"], {"base_sha": status.head_sha, "head_sha": status.head_sha})
+        await self.repo.audit(self.workspace_id, "core", "project.checkout", {"task_id": task["id"], "project_id": project["id"], "branch": task["branch"], "sha": status.head_sha})
+        await self.bus.emit(task["id"], "task.project", {"kind": "checkout", "branch": task["branch"], "head_sha": status.head_sha})
+
+    async def _commit_turn(self, task_id: str) -> None:
+        task = await self.repo.get_task(task_id)
+        if not task or not task.get("project_id") or task.get("parent_id") or not task.get("base_sha") or not self.projects:
+            return
+        if self.hub.hello(task["target_id"]) is None:
+            return
+        project = await self.repo.get_project(str(task["project_id"]))
+        if not project:
+            return
+        steps = await self.repo.list_steps(task_id)
+        last = next((s for s in reversed(steps) if s["kind"] == "user"), None)
+        text = str(((last or {}).get("input") or {}).get("text") or "agent turn").strip().splitlines()[0][:72]
+        try:
+            status = await self.projects.commit(project, task, f"mensarium: {text}")
+        except TargetUnavailable as e:
+            await self.bus.emit(task_id, "task.project", {"kind": "commit", "error": str(e)})
+            return
+        if status.state != "ok":
+            await self.bus.emit(task_id, "task.project", {"kind": "commit", "error": status.detail})
+            return
+        if status.head_sha == task.get("head_sha"):
+            return
+        await self.repo.update_task(task_id, {"head_sha": status.head_sha})
+        await self.bus.emit(task_id, "task.project", {"kind": "commit", "head_sha": status.head_sha, "changed": status.changed})
 
     async def _interruptible(self, task_id: str, coro: Any) -> Any:
         main = asyncio.ensure_future(coro)
@@ -379,11 +471,31 @@ class Orchestrator:
                 raise Stop("FAILED", "target revoked")
             hello = self.hub.hello(task["target_id"])
             policy = hello.policy if hello else TargetPolicy.model_validate(target["policy"] or {"roots": [], "command_allowlist": []})
+            project = await self._project_of(task)
+            project_block = None
+            if project:
+                assert self.projects
+                wt_task = str(task.get("parent_id") or task_id)
+                try:
+                    self.workdirs[task_id] = self.projects.worktree(project, target, wt_task)
+                except ProjectError as e:
+                    raise Stop("PAUSED", str(e)) from e
+                base = f"{task.get('base_ref') or 'snapshot'}@{str(task.get('base_sha') or '')[:10]}"
+                project_block = {
+                    "name": project["name"],
+                    "kind": project["kind"],
+                    "source": f"{project.get('source_name') or project['source_target_id']}:{project['source_path']}",
+                    "workdir": self.workdirs[task_id],
+                    "branch": task.get("branch") or "",
+                    "base": base,
+                }
             toolbox = await self.plugins.toolbox(profile, target)
             if not task.get("parent_id"):
                 toolbox.add_tools({**PLAN_TOOLS, **AGENT_TOOLS})
                 toolbox.add_tools(DEVICE_TOOLS if task.get("automation_id") else AUTOMATION_TOOLS)
             available = toolbox.available(target)
+            if project and project["kind"] == "folder":
+                available = [t for t in available if not t.startswith("git.")]
             if profile.allow_extensions:
                 toolbox.add_skills(self.skills.eligible(await self.skills.all(), target["platform"], available))
             if toolbox.skills:
@@ -417,6 +529,7 @@ class Orchestrator:
                     outdated,
                     task.get("label"),
                     unattended=bool(task.get("automation_id")) and sum(s["kind"] == "user" for s in steps) == 1,
+                    project=project_block,
                 ),
                 messages=messages,
                 temperature=profile.llm.temperature,
@@ -491,7 +604,7 @@ class Orchestrator:
             if tool_calls > profile.limits.max_tool_calls:
                 raise Stop("FAILED", "tool call budget exhausted")
             assert action.call is not None
-            await self._handle_tool_call(task, profile, toolbox, target, policy, llm_step_id, action.call)
+            await self._handle_tool_call(task, profile, toolbox, target, policy, llm_step_id, action.call, project)
 
     async def _observe(self, task_id: str, call: ToolCallAction, content: str, summary: str, image: str | None = None) -> None:
         output: dict[str, Any] = {"content": content, "summary": summary}
@@ -548,6 +661,7 @@ class Orchestrator:
         policy: TargetPolicy,
         llm_step_id: str,
         call: ToolCallAction,
+        project: dict[str, Any] | None = None,
     ) -> None:
         task_id = task["id"]
         if call.parse_error:
@@ -557,6 +671,7 @@ class Orchestrator:
             )
             return
         target_tools = (target.get("capabilities") or {}).get("tools", [])
+        workdir = self.workdirs.get(task_id)
         decision: Decision = evaluate(
             call.tool,
             call.arguments,
@@ -566,7 +681,11 @@ class Orchestrator:
             target_policy=policy,
             disabled_tools=target.get("disabled_tools") or [],
             registry=toolbox.registry,
+            workdir=workdir,
+            projects_root=(target.get("capabilities") or {}).get("projects_root") if workdir else None,
         )
+        if project and project["kind"] == "folder" and call.tool.startswith("git."):
+            decision = Decision(allowed=False, reason="git tools are not available in a folder project")
         if not decision.allowed:
             await self._observe(task_id, call, f"DENIED by policy: {decision.reason}", f"{call.tool} denied")
             await self.bus.emit(
@@ -705,6 +824,7 @@ class Orchestrator:
             arguments=decision.arguments,
             approval_ref=approval_ref,
             mode=mode,
+            workdir=self.workdirs.get(task_id),
         )
         await self.repo.update_tool_call(tc_id, {"status": "executing", "request_id": request.request_id})
         await self._set_status(task_id, "EXECUTING")
@@ -932,6 +1052,11 @@ class Orchestrator:
                 "status": "NEW",
                 "mode": task["mode"],
                 "model": model,
+                "project_id": task.get("project_id"),
+                "branch": task.get("branch"),
+                "base_ref": task.get("base_ref"),
+                "base_sha": task.get("base_sha"),
+                "head_sha": task.get("head_sha"),
                 "budget": task.get("budget") or {},
                 "trace_id": task["trace_id"],
                 "created_at": now,

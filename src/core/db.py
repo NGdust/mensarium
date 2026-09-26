@@ -4,7 +4,7 @@ from typing import Any
 
 import aiosqlite
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 COLUMN_MIGRATIONS = [
     ("tasks", "mode", "TEXT NOT NULL DEFAULT 'ask'"),
@@ -16,6 +16,12 @@ COLUMN_MIGRATIONS = [
     ("tasks", "label", "TEXT"),
     ("tasks", "plan", "TEXT NOT NULL DEFAULT '[]'"),
     ("tasks", "automation_id", "TEXT"),
+    ("tasks", "project_id", "TEXT"),
+    ("tasks", "branch", "TEXT"),
+    ("tasks", "base_ref", "TEXT"),
+    ("tasks", "base_sha", "TEXT"),
+    ("tasks", "head_sha", "TEXT"),
+    ("tasks", "archived_at", "TEXT"),
 ]
 
 SCHEMA = """
@@ -101,12 +107,21 @@ CREATE TABLE IF NOT EXISTS automation_runs (
     result TEXT, error TEXT, started_at TEXT NOT NULL, finished_at TEXT, duration_ms INTEGER
 );
 CREATE INDEX IF NOT EXISTS automation_runs_auto ON automation_runs(automation_id, started_at);
+CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL,
+    source_target_id TEXT NOT NULL, source_path TEXT NOT NULL, default_executor_id TEXT, default_base TEXT NOT NULL DEFAULT 'snapshot',
+    include_remotes INTEGER NOT NULL DEFAULT 1, fetch_origin INTEGER NOT NULL DEFAULT 0,
+    size_limit_mb INTEGER NOT NULL DEFAULT 1024, file_limit_mb INTEGER NOT NULL DEFAULT 100,
+    head_sha TEXT, snapshot_sha TEXT, default_branch TEXT, last_sync_at TEXT, size_bytes INTEGER NOT NULL DEFAULT 0,
+    skipped TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS projects_source ON projects(source_target_id, source_path);
 """
 
 JSON_COLUMNS = {
     "settings", "capabilities", "policy", "body", "budget", "input", "output", "params", "usage",
     "arguments", "metadata", "payload", "disabled_tools", "manifest", "tags", "stats", "changes", "config", "status", "plan",
-    "schedule",
+    "schedule", "skipped",
 }
 
 

@@ -18,7 +18,9 @@ from mensarium import __version__
 from mensarium.client import desktop
 from mensarium.client.config import ClientConfig, ClientPaths
 from mensarium.client.mcp_host import McpHost
+from mensarium.client.projects import ProjectHost
 from mensarium.client.tools import ExecTimeout, Executor, ToolError
+from mensarium.contracts.projects import ProjectOp, ProjectOpStatus, ProjectSnapshot, ProjectSnapshotStatus
 from mensarium.contracts.protocol import (
     AuthChallenge,
     AuthResponse,
@@ -93,6 +95,7 @@ class ClientAgent:
         self.audit = AuditLog(paths)
         self.mcp = McpHost(cfg, self.executor.roots, paths.plugins)
         self.executor.mcp = self.mcp
+        self.projects = ProjectHost(self.executor)
         self.tools = (
             TOOLS
             + (["shell.bash"] if cfg.allow_shell else [])
@@ -131,6 +134,8 @@ class ClientAgent:
                 desktop=desktop.permissions(),
                 limits=self.cfg.limits,
                 remote_update=self.cfg.allow_remote_update and updater().exists(),
+                projects=self.projects.enabled,
+                projects_root=str(self.projects.root) if self.projects.enabled else None,
             ),
             policy=self.policy,
         )
@@ -203,6 +208,10 @@ class ClientAgent:
                 await self._send_status(str(msg.get("request_id")), "rejected", "an update is already running")
                 return
             self.updating = asyncio.create_task(self._update(msg))
+        elif kind in ("project.snapshot", "project.op"):
+            task = asyncio.create_task(self._project(msg))
+            self.syncing.add(task)
+            task.add_done_callback(self.syncing.discard)
         elif kind == "execution.cancel":
             if not verify(self.cfg.core_public_key, msg):
                 log.warning("unsigned execution.cancel ignored")
@@ -212,7 +221,9 @@ class ClientAgent:
             if running:
                 running.cancel()
 
-    def _check_signed(self, req: ExecutionRequest | TargetUpdate | TargetPlugins, raw: dict[str, Any]) -> str | None:
+    def _check_signed(
+        self, req: ExecutionRequest | TargetUpdate | TargetPlugins | ProjectSnapshot | ProjectOp, raw: dict[str, Any]
+    ) -> str | None:
         """Signature, addressee, freshness and replay checks shared by every command from the Core."""
         if not verify(self.cfg.core_public_key, raw):
             return "invalid signature"
@@ -238,6 +249,11 @@ class ClientAgent:
             return "policy snapshot mismatch; core must refresh target policy"
         if req.tool not in self.tools:
             return f"tool {req.tool} is not enabled on this target"
+        if req.workdir:
+            try:
+                self.executor.workdir(req.workdir)
+            except ToolError as e:
+                return str(e)
         full_access = req.mode == "full" and self.cfg.allow_full_access
         needs_approval = req.tool in APPROVAL_REQUIRED or (
             req.tool == "mcp.call" and self.mcp.risk(str(req.arguments.get("server"))) != "read"
@@ -299,6 +315,32 @@ class ClientAgent:
         except websockets.ConnectionClosed:
             log.warning("plugins status not delivered: connection closed")
 
+    async def _project(self, raw: dict[str, Any]) -> None:
+        answer: ProjectSnapshotStatus | ProjectOpStatus
+        try:
+            req = ProjectSnapshot.model_validate(raw) if raw.get("type") == "project.snapshot" else ProjectOp.model_validate(raw)
+        except ValidationError as e:
+            log.warning("invalid project request", extra={"type": raw.get("type"), "error": str(e)})
+            return
+        reason = self._check_signed(req, raw)
+        if isinstance(req, ProjectSnapshot):
+            answer = (
+                ProjectSnapshotStatus(request_id=req.request_id, project_id=req.project_id, state="error", detail=reason)
+                if reason
+                else await self.projects.snapshot(req)
+            )
+        else:
+            answer = (
+                ProjectOpStatus(request_id=req.request_id, project_id=req.project_id, task_id=req.task_id, op=req.op, state="error", detail=reason)
+                if reason
+                else await self.projects.op(req)
+            )
+        answer.signature = sign(self.key, answer.model_dump())
+        try:
+            await self._send(answer.model_dump())
+        except websockets.ConnectionClosed:
+            log.warning("project answer not delivered: connection closed", extra={"request_id": answer.request_id})
+
     async def _send_status(self, request_id: str, status: str, detail: str) -> None:
         msg = TargetUpdateStatus(request_id=request_id, status=status, detail=detail)  # type: ignore[arg-type]
         msg.signature = sign(self.key, msg.model_dump())
@@ -318,7 +360,8 @@ class ClientAgent:
             log.warning("execution request rejected", extra={"request_id": req.request_id, "reason": rejection})
         else:
             try:
-                output = await self.executor.run(req.tool, req.arguments)
+                workdir = self.executor.workdir(req.workdir) if req.workdir else None
+                output = await self.executor.run(req.tool, req.arguments, workdir)
                 status = "succeeded" if output.exit_code in (0, None) else "failed"
             except ToolError as e:
                 status, error = "failed", str(e)

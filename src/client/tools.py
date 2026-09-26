@@ -11,6 +11,8 @@ import stat
 import sys
 import tempfile
 import time
+from collections.abc import Callable
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -48,7 +50,8 @@ from mensarium.contracts.tools import (
     ShellExecArgs,
     SystemVolumeArgs,
 )
-from mensarium.shared.redaction import SECRET_DIRS, SECRET_FILE_PATTERNS, is_secret_path, redact
+from mensarium.shared.paths import ensure_private_dir, projects_dir
+from mensarium.shared.redaction import GIT_DIRS, SECRET_DIRS, SECRET_FILE_PATTERNS, is_secret_path, redact
 from mensarium.tool_runtime.mcp import McpError
 
 if TYPE_CHECKING:
@@ -57,6 +60,8 @@ if TYPE_CHECKING:
 MAX_READ_BYTES = 2_000_000
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".ruff_cache", ".pytest_cache", "dist", "build", ".next", ".idea"}  # fmt: skip
 SECRET_ENV = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|PRIVATE|CREDENTIAL|_KEY$)", re.I)
+GIT_SAFE_FLAGS = ("-c", "color.ui=never", "-c", "commit.gpgSign=false", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
+_WORKDIR: ContextVar[Path | None] = ContextVar("mensarium_workdir", default=None)
 
 
 class ToolError(Exception):
@@ -66,16 +71,33 @@ class ToolError(Exception):
 class Executor:
     def __init__(self, cfg: ClientConfig) -> None:
         self.cfg = cfg
+        self.projects_root = ensure_private_dir(projects_dir()).resolve()
         self.roots = [Path(r).expanduser().resolve() for r in cfg.roots]
+        if not any(self.projects_root == r or self.projects_root.is_relative_to(r) for r in self.roots):
+            self.roots.append(self.projects_root)
         self.mcp: McpHost | None = None
 
     def _path(self, value: str) -> Path:
         p = Path(value).expanduser()
         if not p.is_absolute():
-            p = self.roots[0] / p
+            p = (_WORKDIR.get() or self.roots[0]) / p
         resolved = p.resolve()
         if not any(resolved == r or resolved.is_relative_to(r) for r in self.roots):
             raise ToolError(f"path {value!r} resolves outside the allowed roots")
+        return resolved
+
+    def _is_secret(self, path: Path) -> bool:
+        if path.is_relative_to(self.projects_root):
+            rel = path.relative_to(self.projects_root)
+            return any(part.lower() in GIT_DIRS for part in rel.parts) or is_secret_path(str(rel))
+        return is_secret_path(str(path))
+
+    def workdir(self, value: str) -> Path:
+        resolved = Path(value).expanduser().resolve()
+        if not (resolved == self.projects_root or resolved.is_relative_to(self.projects_root)):
+            raise ToolError("workdir must be inside the projects directory of this device")
+        if not resolved.is_dir():
+            raise ToolError("workdir does not exist on this device")
         return resolved
 
     def _limit(self, text: str) -> tuple[str, bool]:
@@ -85,43 +107,47 @@ class Executor:
             return text, False
         return data[:limit].decode(errors="ignore") + "\n...[truncated by target]", True
 
-    async def run(self, tool: str, args: dict[str, Any]) -> ToolOutput:
-        handler = {
-            "files.list": self.files_list,
-            "files.read": self.files_read,
-            "files.search": self.files_search,
-            "files.stat": self.files_stat,
-            "files.find": self.files_find,
-            "files.write": self.files_write,
-            "files.edit": self.files_edit,
-            "files.mkdir": self.files_mkdir,
-            "files.move": self.files_move,
-            "files.copy": self.files_copy,
-            "files.delete": self.files_delete,
-            "git.status": self.git_status,
-            "git.diff": self.git_diff,
-            "system.info": self.system_info,
-            "process.list": self.process_list,
-            "process.kill": self.process_kill,
-            "net.ports": self.net_ports,
-            "net.http": self.net_http,
-            "shell.exec": self.shell_exec,
-            "shell.bash": self.shell_bash,
-            "screen.capture": self.screen_capture,
-            "screen.windows": self.screen_windows,
-            "input.mouse": self.input_mouse,
-            "input.type": self.input_type,
-            "input.key": self.input_key,
-            "app.open": self.app_open,
-            "system.volume": self.system_volume,
-            "mcp.call": self.mcp_call,
-        }.get(tool)
-        if handler is None:
-            raise ToolError(f"unsupported tool {tool!r}")
+    async def run(self, tool: str, args: dict[str, Any], workdir: Path | None = None) -> ToolOutput:
+        token = _WORKDIR.set(workdir)
         try:
-            return await handler(args)
-        except DesktopError as e:
-            raise ToolError(str(e)) from e
+            handler = {
+                "files.list": self.files_list,
+                "files.read": self.files_read,
+                "files.search": self.files_search,
+                "files.stat": self.files_stat,
+                "files.find": self.files_find,
+                "files.write": self.files_write,
+                "files.edit": self.files_edit,
+                "files.mkdir": self.files_mkdir,
+                "files.move": self.files_move,
+                "files.copy": self.files_copy,
+                "files.delete": self.files_delete,
+                "git.status": self.git_status,
+                "git.diff": self.git_diff,
+                "system.info": self.system_info,
+                "process.list": self.process_list,
+                "process.kill": self.process_kill,
+                "net.ports": self.net_ports,
+                "net.http": self.net_http,
+                "shell.exec": self.shell_exec,
+                "shell.bash": self.shell_bash,
+                "screen.capture": self.screen_capture,
+                "screen.windows": self.screen_windows,
+                "input.mouse": self.input_mouse,
+                "input.type": self.input_type,
+                "input.key": self.input_key,
+                "app.open": self.app_open,
+                "system.volume": self.system_volume,
+                "mcp.call": self.mcp_call,
+            }.get(tool)
+            if handler is None:
+                raise ToolError(f"unsupported tool {tool!r}")
+            try:
+                return await handler(args)
+            except DesktopError as e:
+                raise ToolError(str(e)) from e
+        finally:
+            _WORKDIR.reset(token)
 
     async def files_list(self, raw: dict[str, Any]) -> ToolOutput:
         a = FilesListArgs.model_validate(raw)
@@ -152,7 +178,7 @@ class Executor:
     async def files_read(self, raw: dict[str, Any]) -> ToolOutput:
         a = FilesReadArgs.model_validate(raw)
         path = self._path(a.path)
-        if is_secret_path(str(path)):
+        if self._is_secret(path):
             raise ToolError("reading secret files is not allowed")
         if not path.is_file():
             raise ToolError(f"{a.path} is not a file")
@@ -190,7 +216,7 @@ class Executor:
                 raise ToolError(f"rg failed: {err.strip()}")
             lines = out.splitlines()
         else:
-            lines = await asyncio.to_thread(_py_search, base, a)
+            lines = await asyncio.to_thread(_py_search, base, a, self._is_secret)
         shown = lines[: a.max_results]
         text = "\n".join(shown) or "(no matches)"
         if len(lines) > a.max_results:
@@ -205,7 +231,7 @@ class Executor:
         git = shutil.which("git")
         if not git:
             raise ToolError("git is not installed")
-        code, out, err = await _run([git, "-c", "color.ui=never", *args], cwd=cwd, timeout=60)
+        code, out, err = await _run([git, *GIT_SAFE_FLAGS, *args], cwd=cwd, timeout=60)
         text, truncated = self._limit(redact(out))
         return ToolOutput(exit_code=code, stdout=text, stderr=redact(err), truncated=truncated)
 
@@ -237,7 +263,7 @@ class Executor:
 
     def _writable(self, value: str) -> Path:
         path = self._path(value)
-        if is_secret_path(str(path)):
+        if self._is_secret(path):
             raise ToolError("secret files and folders cannot be changed")
         return path
 
@@ -267,7 +293,7 @@ class Executor:
     async def files_stat(self, raw: dict[str, Any]) -> ToolOutput:
         a = FilesStatArgs.model_validate(raw)
         path = self._path(a.path)
-        if is_secret_path(str(path)):
+        if self._is_secret(path):
             raise ToolError("access to secret files is not allowed")
         if not path.exists():
             raise ToolError(f"{a.path} does not exist")
@@ -667,7 +693,7 @@ async def _uptime_seconds() -> float | None:
         return None
 
 
-def _py_search(base: Path, a: FilesSearchArgs) -> list[str]:
+def _py_search(base: Path, a: FilesSearchArgs, is_secret: Callable[[Path], bool]) -> list[str]:
     pattern = re.compile(a.query if a.regex else re.escape(a.query))
     out: list[str] = []
     for root, dirs, files in os.walk(base):
@@ -676,7 +702,7 @@ def _py_search(base: Path, a: FilesSearchArgs) -> list[str]:
             if a.glob and not fnmatch.fnmatch(name, a.glob):
                 continue
             path = Path(root) / name
-            if is_secret_path(str(path)):
+            if is_secret(path):
                 continue
             try:
                 with path.open(errors="replace") as f:

@@ -291,6 +291,41 @@ class Repo:
         await self.db.conn.commit()
         return [str(r["task_id"]) for r in runs if r["task_id"]]
 
+    # projects
+    async def create_project(self, values: dict[str, Any]) -> None:
+        await self.db.insert("projects", values)
+
+    async def get_project(self, project_id: str) -> dict[str, Any] | None:
+        return await self.db.fetchone(
+            "SELECT p.*, g.name AS source_name FROM projects p LEFT JOIN targets g ON g.id = p.source_target_id WHERE p.id = ?",
+            (project_id,),
+        )
+
+    async def find_project(self, target_id: str, source_path: str) -> dict[str, Any] | None:
+        return await self.db.fetchone(
+            "SELECT * FROM projects WHERE source_target_id = ? AND source_path = ?", (target_id, source_path)
+        )
+
+    async def list_projects(self) -> list[dict[str, Any]]:
+        return await self.db.fetchall(
+            "SELECT p.*, g.name AS source_name, "
+            "(SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.parent_id IS NULL) AS chats "
+            "FROM projects p LEFT JOIN targets g ON g.id = p.source_target_id ORDER BY p.name"
+        )
+
+    async def update_project(self, project_id: str, values: dict[str, Any]) -> None:
+        await self.db.update("projects", project_id, {**values, "updated_at": now_iso()})
+
+    async def delete_project(self, project_id: str) -> None:
+        await self.db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+
+    async def list_project_tasks(self, project_id: str) -> list[dict[str, Any]]:
+        return await self.db.fetchall(
+            "SELECT t.*, g.name AS target_name FROM tasks t LEFT JOIN targets g ON g.id = t.target_id "
+            "WHERE t.project_id = ? AND t.parent_id IS NULL ORDER BY t.updated_at DESC",
+            (project_id,),
+        )
+
     # settings (kv)
     async def get_setting(self, key: str) -> Any:
         row = await self.db.fetchone("SELECT value FROM kv WHERE key = ?", (key,))

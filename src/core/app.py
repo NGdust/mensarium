@@ -22,6 +22,7 @@ from mensarium.agent_core.profile import AgentProfile, builtin_profiles
 from mensarium.contracts.automations import AutomationCreate, AutomationError, AutomationPatch, Schedule
 from mensarium.contracts.gateway import GATEWAY_SCOPE_KEY
 from mensarium.contracts.plugins import Plugin
+from mensarium.contracts.projects import BrowseBody, ProjectCreate, ProjectError, ProjectPatch
 from mensarium.contracts.protocol import AccessMode, PairRequest, PairResponse
 from mensarium.contracts.skills import OS, SkillError, SkillMeta, SkillRequires
 from mensarium.core import distribution, pairing
@@ -38,6 +39,7 @@ from mensarium.core.limits import LimitsStore
 from mensarium.core.memory import KINDS, Memory, NoteError
 from mensarium.core.orchestrator import Orchestrator, TaskError, full_access, missing_tools
 from mensarium.core.plugins import PluginError, PluginManager
+from mensarium.core.projects import ProjectManager
 from mensarium.core.providers import ProviderError, Providers
 from mensarium.core.releases import ReleaseError, fetch_latest, spawn_update, updater
 from mensarium.core.repo import Repo
@@ -74,6 +76,7 @@ class Core:
     dreamer: Dreamer
     channels: ChannelManager
     automations: AutomationManager
+    projects: ProjectManager
     limits: LimitsStore
 
 
@@ -92,6 +95,7 @@ class TaskCreate(BaseModel):
     profile_id: str = "coding-agent-v1"
     mode: AccessMode = "ask"
     model: str | None = Field(None, min_length=1, max_length=200)
+    project_id: str | None = Field(None, max_length=100)
 
 
 class ModeBody(BaseModel):
@@ -256,6 +260,9 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         await plugins.start()
         catalog = Catalog(cfg.plugins.catalog_url)
         orchestrator = Orchestrator(repo, hub, bus, provider, cfg, workspace_id, paths.artifacts, memory, plugins, skills, catalog)
+        projects = ProjectManager(repo, workspace_id, hub, cfg.execution.request_ttl_s)
+        await projects.start()
+        orchestrator.projects = projects
         await orchestrator.recover_after_restart()
         dreamer = Dreamer(repo, memory, provider, cfg, workspace_id)
         await dreamer.recover()
@@ -288,6 +295,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             dreamer=dreamer,
             channels=channels,
             automations=automations,
+            projects=projects,
             limits=limits,
         )
         try:
@@ -295,6 +303,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         finally:
             limits.stop()
             await automations.stop()
+            await projects.stop()
             await channels.stop()
             for runner in list(orchestrator.runners.values()):
                 runner.cancel()
@@ -323,6 +332,9 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
 
     def task_error(e: TaskError) -> HTTPException:
         return HTTPException(404 if "not found" in str(e) else 409, str(e))
+
+    def project_error(e: ProjectError) -> HTTPException:
+        return HTTPException(404 if str(e) == "project not found" else 409, str(e))
 
     # ---- public ---------------------------------------------------------------
 
@@ -775,11 +787,21 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         return await c.plugins.device_tools(target_id)
 
     async def device_choices(c: Core) -> list[dict[str, Any]]:
-        return [
-            {"id": t["id"], "name": t["name"], "online": c.hub.is_online(t["id"]), "full_access": full_access(t) == "allowed"}
-            for t in await c.repo.list_targets()
-            if t["status"] != "revoked"
-        ]
+        devices: list[dict[str, Any]] = []
+        for t in await c.repo.list_targets():
+            if t["status"] == "revoked":
+                continue
+            hello = c.hub.hello(t["id"])
+            devices.append(
+                {
+                    "id": t["id"],
+                    "name": t["name"],
+                    "online": c.hub.is_online(t["id"]),
+                    "full_access": full_access(t) == "allowed",
+                    "projects": bool(hello and hello.capabilities.projects),
+                }
+            )
+        return devices
 
     @app.get("/v1/channels")
     async def list_channels(c: Core = Depends(auth)) -> dict[str, Any]:
@@ -1002,8 +1024,59 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         return {"id": run_id}
 
     def task_view(t: dict[str, Any]) -> dict[str, Any]:
-        keys = ("id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result", "mode", "model", "parent_id", "label", "automation_id")
+        keys = (
+            "id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result", "mode", "model", "parent_id", "label",
+            "automation_id", "project_id", "branch", "base_sha", "head_sha",
+        )
         return {k: t.get(k) for k in keys} | {"plan": t.get("plan") or [], "created_at": t["created_at"], "updated_at": t["updated_at"]}
+
+    @app.get("/v1/projects")
+    async def list_projects(c: Core = Depends(auth)) -> dict[str, Any]:
+        return {"items": await c.projects.all(), "devices": await device_choices(c)}
+
+    @app.post("/v1/projects/browse")
+    async def browse_project_source(body: BrowseBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return await c.projects.browse(body.target_id, body.path)
+        except ProjectError as e:
+            raise project_error(e) from e
+
+    @app.post("/v1/projects")
+    async def create_project(body: ProjectCreate, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return await c.projects.create(body)
+        except ProjectError as e:
+            raise project_error(e) from e
+
+    @app.get("/v1/projects/{project_id}")
+    async def get_project(project_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            p = await c.projects.get(project_id)
+        except ProjectError as e:
+            raise project_error(e) from e
+        return {**c.projects.view(p), "chats": [task_view(t) for t in await c.repo.list_project_tasks(project_id)]}
+
+    @app.put("/v1/projects/{project_id}")
+    async def update_project(project_id: str, body: ProjectPatch, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return await c.projects.update(project_id, body)
+        except ProjectError as e:
+            raise project_error(e) from e
+
+    @app.post("/v1/projects/{project_id}/sync")
+    async def sync_project(project_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return await c.projects.sync(project_id)
+        except ProjectError as e:
+            raise project_error(e) from e
+
+    @app.delete("/v1/projects/{project_id}")
+    async def delete_project(project_id: str, remove_shadow: bool = False, c: Core = Depends(auth)) -> dict[str, bool]:
+        try:
+            await c.orchestrator.delete_project(project_id, remove_shadow)
+        except (ProjectError, TaskError) as e:
+            raise HTTPException(404 if "not found" in str(e) else 409, str(e)) from e
+        return {"ok": True}
 
     @app.get("/v1/tasks")
     async def list_tasks(c: Core = Depends(auth)) -> list[dict[str, Any]]:
@@ -1015,7 +1088,9 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             raise HTTPException(422, "input is empty")
         try:
             return task_view(
-                await c.orchestrator.create_task(body.profile_id, body.target_id, body.input, body.mode, body.model)
+                await c.orchestrator.create_task(
+                    body.profile_id, body.target_id, body.input, body.mode, body.model, project_id=body.project_id
+                )
             )
         except TaskError as e:
             raise task_error(e) from e

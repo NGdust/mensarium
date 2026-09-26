@@ -8,7 +8,7 @@ const $app = document.getElementById('app');
 const $toasts = document.getElementById('toasts');
 const $layer = document.getElementById('layer');
 
-const state = { system: null, gateway: null, coreOffline: false, limits: null, limitsBusy: new Set(), targets: [], tasks: [], shell: null, lastChat: '#/', updates: new Map() };
+const state = { system: null, gateway: null, coreOffline: false, limits: null, limitsBusy: new Set(), targets: [], tasks: [], projects: [], shell: null, lastChat: '#/', updates: new Map() };
 let viewCleanups = [];
 let shellCleanups = [];
 
@@ -374,6 +374,11 @@ const fullAccessBlock = (t) => (fullAccessOf(t) === 'outdated'
   : tr('Disabled on the device: allow_full_access in its config.'));
 const devices = () => state.targets.filter((t) => t.status !== 'revoked').sort((a, b) => isThisDevice(b) - isThisDevice(a));
 const taskTitle = (t) => ((t.input || '').split('\n')[0] || tr('Untitled')).slice(0, 80);
+// A folder project never shows git words (branch, commit, merge): only a repo project may.
+const KIND_ICON = { repo: 'git', folder: 'folder' };
+const kindLabel = (p) => (p.kind === 'repo' ? tr('Git repository') : tr('Folder'));
+// Core's file_limit_mb for a project that does not set its own.
+const DEFAULT_FILE_LIMIT_MB = 100;
 
 // ---------- overlays ----------
 
@@ -401,13 +406,14 @@ function openModal(...content) {
   return modal;
 }
 
-function confirmDialog({ title, text, action, danger = false }) {
+function confirmDialog({ title, text, action, danger = false, extra = null }) {
   return new Promise((resolve) => {
     const done = (value) => { closeLayer(); resolve(value); };
     const ok = h('button', { class: `btn ${danger ? 'btn-danger-solid' : 'btn-primary'}`, onclick: () => done(true) }, action);
     openModal(
       h('div', { class: 'modal-head' }, h('h2', {}, title)),
       h('p', {}, text),
+      extra,
       h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: () => done(false) }, tr('Cancel')), ok),
     );
     $layer.querySelector('.backdrop').addEventListener('click', (e) => { if (e.target === e.currentTarget) resolve(false); });
@@ -592,9 +598,15 @@ function showLogin() {
 // ---------- data ----------
 
 async function refreshData() {
-  const [targets, tasks] = await Promise.all([get('/v1/targets'), get('/v1/tasks')]);
+  const [targets, tasks, projects] = await Promise.all([
+    get('/v1/targets'),
+    get('/v1/tasks'),
+    // A Core older than this client has no projects yet.
+    get('/v1/projects').catch((err) => (err.status === 404 ? { items: [] } : Promise.reject(err))),
+  ]);
   state.targets = targets;
   state.tasks = tasks;
+  state.projects = projects.items;
   for (const [id, pending] of state.updates) {
     const t = targets.find((x) => x.id === id);
     if (t && t.status === 'online' && t.agent_version === pending.version) {
@@ -645,8 +657,10 @@ function topbar(shell, crumbs, actions, { newChat = true } = {}) {
 function ensureAppShell() {
   if (state.shell && state.shell.kind === 'app') return state.shell;
   const sessions = h('div', { class: 'sessions' });
+  const projectsBox = h('div', { class: 'projects' });
   const devicesCount = h('span', { class: 'count' });
   const newChat = h('a', { class: 'new-chat', href: '#/' }, icon('plus'), tr('New chat'));
+  const newProject = h('a', { class: 'icon-btn nav-add', href: '#/projects/new', title: tr('New project'), 'aria-label': tr('New project') }, icon('plus'));
   const automationsLink = h('a', { class: 'nav-item nav-automations', href: '#/automations' }, icon('clock'), tr('Automations'));
   const devicesLink = h('a', { class: 'nav-item', href: '#/settings/devices' }, icon('laptop'), tr('Devices'), devicesCount);
   let s;
@@ -654,6 +668,8 @@ function ensureAppShell() {
   s = frame('app', [
     h('div', { class: 'brand' }, orb('sm'), h('span', { class: 'brand-name' }, 'Mensarium'), collapse),
     automationsLink,
+    h('div', { class: 'nav-label nav-label-row' }, h('span', {}, tr('Projects')), newProject),
+    projectsBox,
     newChat,
     h('div', { class: 'nav-label' }, tr('Chats')),
     sessions,
@@ -669,13 +685,32 @@ function ensureAppShell() {
     const activeId = (location.hash.match(/^#\/chat\/(.+)$/) || [])[1];
     const onAutomations = location.hash.startsWith('#/automations');
     automationsLink.classList.toggle('active', onAutomations);
-    newChat.classList.toggle('active', !activeId && !onAutomations && !location.hash.startsWith('#/settings'));
-    if (!state.tasks.length) {
+    newChat.classList.toggle('active', !activeId && !onAutomations && !location.hash.startsWith('#/settings') && !location.hash.startsWith('#/projects'));
+    const sessionLink = (t) => {
+      const [, kind, live] = statusOf(t.status);
+      return h('a', { class: `session${t.id === activeId ? ' active' : ''}`, href: `#/chat/${t.id}`, title: t.input },
+        h('span', { class: `dot ${kind}${live ? ' live' : ''}` }),
+        h('span', { class: 'session-title' }, taskTitle(t)),
+        h('button', { class: 'icon-btn session-del', title: tr('Delete chat'), 'aria-label': tr('Delete chat'), onclick: (e) => { e.preventDefault(); e.stopPropagation(); deleteChat(t); } }, icon('trash')));
+    };
+    projectsBox.replaceChildren(...state.projects.map((p) => {
+      const chats = state.tasks.filter((t) => t.project_id === p.id);
+      const active = location.hash === `#/projects/${p.id}` || location.hash === `#/projects/${p.id}/new`;
+      const busy = p.status === 'creating' || p.syncing;
+      const dot = busy ? 'accent live' : p.status === 'error' ? 'danger' : p.source_online ? 'ok' : '';
+      const head = h('div', { class: `project-head${active ? ' active' : ''}` },
+        h('a', { class: 'project-link', href: `#/projects/${p.id}`, title: `${p.source_name || ''}:${p.source_path}` },
+          icon(KIND_ICON[p.kind] || 'folder'), h('span', { class: `dot ${dot}` }), h('span', { class: 'session-title' }, p.name)),
+        p.status === 'ready' ? h('a', { class: 'icon-btn session-add', href: `#/projects/${p.id}/new`, title: tr('New chat in project'), 'aria-label': tr('New chat in project') }, icon('plus')) : null);
+      return h('div', { class: 'group project' }, head, h('div', { class: 'group-items' }, chats.map(sessionLink)));
+    }));
+    const plain = state.tasks.filter((t) => !t.project_id);
+    if (!plain.length) {
       sessions.replaceChildren(h('div', { class: 'sessions-empty' }, tr('Chats with the agent will appear here.')));
       return;
     }
     const byTarget = new Map();
-    state.tasks.forEach((t) => {
+    plain.forEach((t) => {
       const key = t.target_name || tr('Other');
       if (!byTarget.has(key)) byTarget.set(key, []);
       byTarget.get(key).push(t);
@@ -683,13 +718,7 @@ function ensureAppShell() {
     const single = byTarget.size === 1;
     sessions.replaceChildren(...[...byTarget.entries()].map(([name, tasks]) => {
       const group = h('div', { class: `group${!single && collapsed.has(name) ? ' collapsed' : ''}` });
-      const items = h('div', { class: 'group-items' }, tasks.map((t) => {
-        const [, kind, live] = statusOf(t.status);
-        return h('a', { class: `session${t.id === activeId ? ' active' : ''}`, href: `#/chat/${t.id}`, title: t.input },
-          h('span', { class: `dot ${kind}${live ? ' live' : ''}` }),
-          h('span', { class: 'session-title' }, taskTitle(t)),
-          h('button', { class: 'icon-btn session-del', title: tr('Delete chat'), 'aria-label': tr('Delete chat'), onclick: (e) => { e.preventDefault(); e.stopPropagation(); deleteChat(t); } }, icon('trash')));
-      }));
+      const items = h('div', { class: 'group-items' }, tasks.map(sessionLink));
       if (!single) {
         group.append(h('button', { class: 'group-head', 'aria-expanded': String(!collapsed.has(name)), onclick: (e) => {
           group.classList.toggle('collapsed');
@@ -949,11 +978,25 @@ function agentsPanel() {
 
 // ---------- new chat ----------
 
-async function viewNewChat() {
+async function viewNewChat(projectId = null) {
   const shell = ensureAppShell();
   shell.setActive(null);
+  let project = projectId ? state.projects.find((p) => p.id === projectId) : null;
+  // The sidebar copy can lag behind the project page by a poll: ask Core before sending the user back.
+  if (projectId && project?.status !== 'ready') {
+    try { project = rememberProject(await get(`/v1/projects/${projectId}`)); } catch (err) { fail(err); go(err.status === 404 || !project ? '#/' : `#/projects/${projectId}`); return; }
+    shell.renderSessions();
+  }
+  if (project && project.status !== 'ready') { go(`#/projects/${project.id}`); return; }
   const online = devices().filter((t) => t.status === 'online');
-  let selected = online.find((t) => t.id === localStorageGet('target')) || online.find(isThisDevice) || online[0] || null;
+  // A project chat runs on the project's own device.
+  const source = () => devices().find((t) => t.id === project.source_target_id);
+  const offlineText = () => (project.source_name
+    ? tr('“{0}” is offline. Turn it on to start a chat in this project.', project.source_name)
+    : tr('The project\'s device is offline. Turn it on to start a chat in this project.'));
+  let selected = project
+    ? source() || null
+    : online.find((t) => t.id === localStorageGet('target')) || online.find(isThisDevice) || online[0] || null;
 
   const chipLabel = h('span', { class: 'chip-label' });
   const chipDot = h('span', { class: 'dot' });
@@ -976,7 +1019,8 @@ async function viewNewChat() {
   if (!state.system) { try { state.system = await get('/v1/system'); } catch { /* shown without version info */ } }
   const banner = h('div', { class: 'welcome-banner' }, outdatedBanner(selected) || '');
   const hintText = (mode = modeCtl.effective()) => {
-    if (!online.length) return tr('All devices are currently offline. Run mensarium client run on the machine you need.');
+    if (project && source()?.status !== 'online') return offlineText();
+    if (!project && !online.length) return tr('All devices are currently offline. Run mensarium client run on the machine you need.');
     return mode === 'full'
       ? tr('Full access: the agent runs commands and changes files on its own, without asking.')
       : tr('The agent will explore the project on its own and ask permission before running commands or changing files.');
@@ -986,15 +1030,24 @@ async function viewNewChat() {
     onPick: async (value) => { localStorageSet('mode', value); hint.textContent = hintText(value); },
   });
   hint.textContent = hintText();
+  if (project) {
+    // The source can come online or drop while the page is open; the shell poll refreshes state.targets.
+    const iv = setInterval(() => { selected = source() || selected; hint.textContent = hintText(); }, 4000);
+    viewCleanups.push(() => clearInterval(iv));
+  }
 
   const modelCtl = modelSwitch('', { onPick: async () => {} });
+  const projectChip = project
+    ? h('a', { class: 'chip', href: `#/projects/${project.id}`, title: `${project.source_name || ''}:${project.source_path}` }, icon(KIND_ICON[project.kind] || 'folder'), h('span', { class: 'chip-label' }, project.name))
+    : null;
 
   const c = composer({
     placeholder: tr('Describe the task for the agent'),
-    chips: [targetChip, h('span', { class: 'divider' }), modeCtl.el, modelCtl.el],
+    chips: [project ? projectChip : targetChip, h('span', { class: 'divider' }), modeCtl.el, modelCtl.el],
     onSend: async (text) => {
+      if (project && source()?.status !== 'online') throw new Error(offlineText());
       if (!selected) throw new Error(tr('Select the device the agent will work on'));
-      const task = await post('/v1/tasks', { target_id: selected.id, input: text, mode: modeCtl.effective(), model: modelCtl.value() || undefined });
+      const task = await post('/v1/tasks', { target_id: selected.id, input: text, mode: modeCtl.effective(), model: modelCtl.value() || undefined, project_id: project?.id });
       state.tasks.unshift(task);
       go(`#/chat/${task.id}`);
     },
@@ -1002,8 +1055,8 @@ async function viewNewChat() {
 
   const content = devices().length
     ? [
-      h('div', { class: 'welcome-hero' }, orb('lg'), h('h1', {}, tr('What needs to be done?'))),
-      h('div', { class: 'templates' }, TEMPLATES.map(([ic, label, text]) => h('button', { class: 'template', onclick: () => c.setText(text) }, icon(ic), label))),
+      h('div', { class: 'welcome-hero' }, orb('lg'), h('h1', {}, project ? tr('What needs to be done in “{0}”?', project.name) : tr('What needs to be done?'))),
+      project ? null : h('div', { class: 'templates' }, TEMPLATES.map(([ic, label, text]) => h('button', { class: 'template', onclick: () => c.setText(text) }, icon(ic), label))),
       c.el,
       hint,
       banner,
@@ -1085,9 +1138,13 @@ async function viewChat(taskId) {
 
   if (!state.system) { try { state.system = await get('/v1/system'); } catch { /* shown without version info */ } }
   const banner = outdatedBanner(target());
+  const project = task.project_id ? state.projects.find((p) => p.id === task.project_id) : null;
+  const crumb = project
+    ? h('a', { class: 'crumb-device', href: `#/projects/${project.id}` }, icon(KIND_ICON[project.kind] || 'folder'), project.name, h('span', { class: 'sep' }, '/'))
+    : h('span', { class: 'crumb-device' }, icon('laptop'), task.target_name || tr('device'), h('span', { class: 'sep' }, '/'));
   shell.panel.replaceChildren(
     topbar(shell,
-      [h('span', { class: 'crumb-device' }, icon('laptop'), task.target_name || tr('device'), h('span', { class: 'sep' }, '/')), h('span', { class: 'current', title: task.input }, taskTitle(task))],
+      [crumb, h('span', { class: 'current', title: task.input }, taskTitle(task))],
       [btnDelete]),
     thread,
     h('div', { class: 'thread-banner' }, banner || ''),
@@ -1393,6 +1450,11 @@ async function viewChat(taskId) {
         break;
       case 'task.plan':
         plan.set(p.items || []);
+        break;
+      case 'task.project':
+        if (p.kind === 'checkout') note(KIND_ICON[project?.kind] || 'folder', project?.kind === 'repo' && p.branch ? `${tr('Working copy ready')} · ${p.branch}` : tr('Working copy ready'));
+        else if (p.error != null) note('alert', tr('Could not save this turn: {0}', p.error || tr('error')), 'error');
+        else if (p.changed) note('file', tp('{0} file changed|{0} files changed', p.changed));
         break;
       case 'agent.spawned':
         stamp(ev);
@@ -3128,6 +3190,229 @@ async function viewAutomationEditor(id) {
   if (!a) name.focus();
 }
 
+// ---------- projects ----------
+
+// Keeps the sidebar's copy of a project in step with a fresher detail view (the list carries a chat count, not the chats).
+function rememberProject(view) {
+  const entry = { ...view, chats: Array.isArray(view.chats) ? view.chats.length : view.chats };
+  state.projects = state.projects.some((x) => x.id === view.id) ? state.projects.map((x) => (x.id === view.id ? entry : x)) : [...state.projects, entry];
+  return entry;
+}
+
+async function viewProjectNew() {
+  const shell = ensureAppShell();
+  shell.setActive(null);
+  const data = await get('/v1/projects');
+  state.projects = data.items;
+  const title = tr('New project');
+  const desc = tr('A folder on one of your devices. Every chat in the project works in its own copy, so chats never disturb each other or your files.');
+  const usable = data.devices.filter((d) => d.online && d.projects);
+  if (!usable.length) {
+    page(shell, title, desc, null, h('div', { class: 'empty rows' }, tr('No online device supports projects yet. Update the Mensarium client on the device you need.')));
+    return;
+  }
+  const preferred = usable.find((d) => d.id === state.gateway?.target_id) || usable[0];
+  const device = h('select', { 'aria-label': tr('Device') }, data.devices.map((d) => h('option', { value: d.id, disabled: !d.online || !d.projects, selected: d.id === preferred.id },
+    !d.online ? `${d.name} · ${tr('offline')}` : !d.projects ? `${d.name} · ${tr('update the client')}` : d.name)));
+
+  const pathEl = h('code', { class: 'browser-path' });
+  const errorEl = h('p', { class: 'browser-error', role: 'alert' });
+  const list = h('div', { class: 'rows browser-list' });
+  const up = h('button', { class: 'btn btn-sm', disabled: true, onclick: () => browse(cur.parent) }, icon('arrowUp'), tr('Up'));
+  const use = h('button', { class: 'btn btn-sm', disabled: true, onclick: () => choose() }, icon('check'), tr('Use this folder'));
+  const chosenBox = h('div', { class: 'browser-chosen' });
+  const name = h('input', { type: 'text', maxlength: 120, 'aria-label': tr('Name') });
+  let cur = null;
+  let chosen = null;
+  let autoName = '';
+  let seq = 0;
+
+  // A failed listing keeps the last good folder on screen, so the user can go up or pick it.
+  const browse = async (path) => {
+    const n = ++seq;
+    up.disabled = true;
+    use.disabled = true;
+    errorEl.textContent = '';
+    if (cur) list.classList.add('loading');
+    else list.replaceChildren(h('div', { class: 'empty rows' }, tr('Loading...')));
+    try {
+      const r = await post('/v1/projects/browse', { target_id: device.value, path });
+      if (n !== seq) return;
+      cur = r;
+      pathEl.textContent = r.path;
+      up.disabled = !r.parent;
+      use.disabled = false;
+      list.classList.remove('loading');
+      list.replaceChildren(...(r.entries.length
+        ? r.entries.map((e) => h('button', { class: 'browser-item', onclick: () => browse(e.path) },
+          icon(e.git ? 'git' : 'folder'), h('span', { class: 'browser-name' }, e.name), e.git ? h('span', { class: 'pill tag-kind' }, 'git') : null))
+        : [h('div', { class: 'empty rows' }, tr('No subfolders here.'))]));
+    } catch (err) {
+      if (n !== seq) return;
+      if (err instanceof AuthError) { fail(err); return; }
+      // The home folder may be outside the device's allowed folders: start from the first allowed one.
+      const root = state.targets.find((t) => t.id === device.value)?.capabilities?.roots?.[0];
+      if (err.status === 409 && path === '~' && root) { browse(root); return; }
+      errorEl.textContent = err.message;
+      up.disabled = !cur?.parent;
+      use.disabled = !cur;
+      list.classList.remove('loading');
+      if (!cur) list.replaceChildren(h('div', { class: 'empty rows' }, h('button', { class: 'btn btn-sm', onclick: () => browse(path) }, icon('refresh'), tr('Retry'))));
+    }
+  };
+
+  const choose = () => {
+    if (!cur) return;
+    chosen = { target_id: device.value, path: cur.path, kind: cur.git ? 'repo' : 'folder' };
+    if (!name.value.trim() || name.value === autoName) {
+      autoName = cur.path.split(/[\\/]/).filter(Boolean).pop() || cur.path;
+      name.value = autoName;
+    }
+    chosenBox.replaceChildren(
+      h('div', { class: 'browser-chosen-head' }, icon(KIND_ICON[chosen.kind]), h('code', {}, chosen.path), h('span', { class: 'pill tag-kind' }, kindLabel(chosen))),
+      h('div', { class: 'row-desc' }, chosen.kind === 'repo'
+        ? tr('Secret files such as .env and keys are left out of chat copies, but anything already committed to the repository history stays visible to the agent.')
+        : tr('Secret files such as .env and keys are left out, and so are files over {0} MB. To leave out more, list them in a .mensariumignore file in the folder.', DEFAULT_FILE_LIMIT_MB)));
+    create.disabled = false;
+    name.focus();
+  };
+
+  const create = h('button', { class: 'btn btn-primary', disabled: true, onclick: async () => {
+    if (!chosen) return;
+    if (!name.value.trim()) { name.focus(); return; }
+    create.disabled = true;
+    create.textContent = tr('Reading the folder…');
+    try {
+      const p = await post('/v1/projects', { name: name.value.trim(), source_target_id: chosen.target_id, source_path: chosen.path });
+      state.projects = await get('/v1/projects').then((r) => r.items, () => [...state.projects, p]);
+      go(`#/projects/${p.id}`);
+    } catch (err) {
+      fail(err);
+      create.disabled = false;
+      create.textContent = tr('Create');
+    }
+  } }, tr('Create'));
+
+  device.addEventListener('change', () => {
+    cur = null;
+    pathEl.textContent = '';
+    chosen = null;
+    chosenBox.replaceChildren();
+    create.disabled = true;
+    browse('~');
+  });
+
+  page(shell, title, desc, null,
+    h('div', { class: 'plugin-form' },
+      field(tr('Device'), device),
+      h('div', { class: 'plugin-field' }, h('div', { class: 'plugin-field-head' }, h('span', {}, tr('Folder'))),
+        h('div', { class: 'browser' }, h('div', { class: 'browser-bar' }, up, pathEl, use), errorEl, list)),
+      chosenBox,
+      field(tr('Name'), name)),
+    h('div', { class: 'auto-actions' }, h('span', { class: 'spacer' }), h('a', { class: 'btn', href: '#/' }, tr('Cancel')), create));
+  browse('~');
+}
+
+async function viewProject(id) {
+  const shell = ensureAppShell();
+  shell.setActive(null);
+  let p;
+  try { p = await get(`/v1/projects/${id}`); } catch (err) { fail(err); go('#/'); return; }
+  const desc = h('span', {});
+  const body = h('div', {});
+  const newChatBtn = h('a', { class: 'btn btn-primary', href: `#/projects/${id}/new` }, icon('plus'), tr('New chat'));
+  // Cleared on leaving the page and right after a delete, so a late poll cannot bring the project back.
+  let alive = true;
+  viewCleanups.push(() => { alive = false; });
+  const deleteBtn = h('button', { class: 'btn btn-danger', onclick: () => deleteProject(p, () => { alive = false; }) }, icon('trash'), tr('Delete'));
+  let shown = '';
+
+  const sync = async (btn) => {
+    btn.disabled = true;
+    try { await post(`/v1/projects/${id}/sync`); await load(); } catch (err) { fail(err); btn.disabled = false; }
+  };
+
+  const chatRow = (t) => {
+    const [label, cls, live] = statusOf(t.status);
+    return h('div', { class: 'row' },
+      h('a', { class: 'row-text', href: `#/chat/${t.id}`, title: t.input },
+        h('div', { class: 'row-title' }, h('span', { class: `dot ${cls}${live ? ' live' : ''}`, title: label }), taskTitle(t)),
+        p.kind === 'repo' && t.branch ? h('div', { class: 'row-desc mono' }, t.branch) : null),
+      h('div', { class: 'row-value' }, relTime(t.updated_at)));
+  };
+
+  const render = () => {
+    const ready = p.status === 'ready';
+    const busy = p.status === 'creating' || p.syncing;
+    const chats = Array.isArray(p.chats) ? p.chats : [];
+    const skipped = p.skipped || [];
+    desc.textContent = [ready ? kindLabel(p) : null, `${p.source_name || ''}:${p.source_path}`].filter(Boolean).join(' · ');
+    newChatBtn.classList.toggle('hidden', !ready);
+    const reread = busy || !p.source_online ? null
+      : h('button', { class: 'icon-btn', title: tr('Read the folder again'), 'aria-label': tr('Read the folder again'), onclick: (e) => sync(e.currentTarget) }, icon('refresh'));
+    body.replaceChildren(...[
+      busy ? h('div', { class: 'note-banner busy', role: 'status' }, h('span', { class: 'spinner' }), h('span', {}, tr('Reading the folder…'))) : null,
+      !busy && p.status === 'error'
+        ? h('div', { class: 'note-banner', role: 'alert' }, icon('alert'), h('span', {}, p.error || tr('Could not read the folder')),
+          p.source_online ? h('button', { class: 'btn btn-sm', onclick: (e) => sync(e.currentTarget) }, icon('refresh'), tr('Retry')) : null)
+        : null,
+      section(tr('Source'), null, h('div', { class: 'rows' },
+        row(tr('Device'), null, [h('span', { class: `dot${p.source_online ? ' ok' : ''}`, title: p.source_online ? null : tr('offline') }), p.source_name || p.source_target_id,
+          p.source_online ? null : h('span', { class: 'market-meta' }, tr('offline'))]),
+        row(tr('Folder'), null, p.source_path, true),
+        row(tr('Last read'), null, [relTime(p.last_sync_at), reread]),
+        ready && p.kind === 'repo' ? row(tr('Branch on the device'), null, p.default_branch || '—', true) : null,
+        skipped.length ? row(tr('Skipped large files'), `${tp('{0} file|{0} files', skipped.length)} · ${tr('over {0} MB each', p.file_limit_mb || DEFAULT_FILE_LIMIT_MB)}`, h('div', { class: 'skipped' }, [...skipped.slice(0, 20), skipped.length > 20 ? '…' : null].filter(Boolean).join('\n')), true) : null)),
+      ready || chats.length
+        ? section(tr('Chats'), null, chats.length
+          ? h('div', { class: 'rows' }, chats.map(chatRow))
+          : h('div', { class: 'empty rows' }, h('p', {}, tr('No chats yet. Start one and the agent will work in its own copy of the project.')),
+            h('a', { class: 'btn btn-primary', href: `#/projects/${id}/new` }, icon('plus'), tr('New chat'))))
+        : null,
+    ].filter(Boolean));
+  };
+
+  const show = (next) => {
+    p = next;
+    rememberProject(next);
+    const key = JSON.stringify(next) + Math.floor(Date.now() / 60000);
+    if (key === shown) return;
+    shown = key;
+    render();
+    shell.renderSessions();
+  };
+  const load = async () => {
+    const next = await get(`/v1/projects/${id}`);
+    if (alive) show(next);
+  };
+
+  page(shell, p.name, desc, [newChatBtn, deleteBtn], body);
+  show(p);
+  const iv = setInterval(() => load().catch(() => {}), 3000);
+  viewCleanups.push(() => clearInterval(iv));
+}
+
+async function deleteProject(p, onDeleted = null) {
+  // The hidden history exists only for a folder project that has been read at least once.
+  const shadow = p.kind === 'folder' && p.snapshot_sha ? h('input', { type: 'checkbox' }) : null;
+  const yes = await confirmDialog({
+    title: tr('Delete project “{0}”?', p.name),
+    text: tr('Its chats are deleted too. Files in the source folder are not touched.'),
+    action: tr('Delete'),
+    danger: true,
+    extra: shadow ? h('label', { class: 'check-label modal-check' }, shadow, tr('Also delete the hidden version history of this folder')) : null,
+  });
+  if (!yes) return;
+  try {
+    await del(`/v1/projects/${p.id}${shadow?.checked ? '?remove_shadow=1' : ''}`);
+    onDeleted?.();
+    state.projects = state.projects.filter((x) => x.id !== p.id);
+    state.tasks = state.tasks.filter((t) => t.project_id !== p.id);
+    toast(tr('Project deleted'));
+    go('#/');
+  } catch (err) { fail(err); }
+}
+
 // ---------- router ----------
 
 function go(hash) { if (location.hash === hash) route(); else location.hash = hash; }
@@ -3142,6 +3427,9 @@ async function route() {
     if ((m = hash.match(/^#\/chat\/([^/]+)$/)) || (m = hash.match(/^#\/tasks\/([^/]+)$/))) await viewChat(m[1]);
     else if (hash === '#/automations') await viewAutomations();
     else if ((m = hash.match(/^#\/automations\/([^/]+)$/))) await viewAutomationEditor(m[1] === 'new' ? null : m[1]);
+    else if (hash === '#/projects/new') await viewProjectNew();
+    else if ((m = hash.match(/^#\/projects\/([^/]+)\/new$/))) await viewNewChat(m[1]);
+    else if ((m = hash.match(/^#\/projects\/([^/]+)$/))) await viewProject(m[1]);
     else if ((m = hash.match(/^#\/settings\/?(\w*)$/))) await viewSettings(m[1] || 'overview');
     else await viewNewChat();
   } catch (err) { fail(err); }

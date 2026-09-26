@@ -14,6 +14,7 @@ from mensarium import __version__
 from mensarium.cli import service
 from mensarium.cli.automations import automations_app
 from mensarium.cli.plugins import mcp_app, plugins_app, target_plugins
+from mensarium.cli.projects import projects_app
 from mensarium.cli.skills import skills_app
 from mensarium.cli.ui import console, fail, ok, summary, use_select_event_loop, warn
 from mensarium.client.config import ClientConfig, ClientPaths, load_client_config
@@ -35,6 +36,7 @@ app.add_typer(plugins_app, name="plugins")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(skills_app, name="skills")
 app.add_typer(automations_app, name="automations")
+app.add_typer(projects_app, name="projects")
 
 @app.command()
 def version(

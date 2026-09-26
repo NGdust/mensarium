@@ -21,6 +21,10 @@ def client_dir() -> Path:
     return new
 
 
+def projects_dir() -> Path:
+    return mensarium_home() / "projects"
+
+
 def ensure_private_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     path.chmod(0o700)
