@@ -526,7 +526,7 @@ function limitsBody() {
       h('span', { class: 'spacer' }),
       p.checked_at ? h('span', { class: 'market-meta', title: p.source }, tr('checked {0}', relTime(p.checked_at))) : null,
       p.supported ? h('button', { class: `icon-btn${state.limitsBusy.has(p.provider_id) ? ' spinning' : ''}`, title: tr('Refresh'), 'aria-label': tr('Refresh'), disabled: state.limitsBusy.has(p.provider_id), onclick: () => refreshLimits(p.provider_id) }, icon('refresh')) : null),
-    p.windows.length ? p.windows.map((w) => meter(w, d.threshold)) : h('p', { class: 'row-desc' }, p.error ? tr('Error: {0}', p.error) : p.note || (p.supported ? tr('No data yet.') : tr('This provider does not report limits.')))));
+    p.windows.length ? p.windows.map((w) => meter(w, d.threshold)) : h('p', { class: 'row-desc' }, p.error ? tr('Error: {0}', p.error) : p.note ? tr(p.note) : (p.supported ? tr('No data yet.') : tr('This provider does not report limits.')))));
 }
 
 function limitsModal() {

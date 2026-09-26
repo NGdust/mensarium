@@ -895,9 +895,11 @@ body.core-offline #app { padding-top: 34px; }
 .modal .limits-list { margin-bottom: 18px; }
 .modal.modal-wide > .modal-actions { padding-bottom: 2px; }
 .icon-btn.spinning .icon { animation: spin 0.8s linear infinite; }
-.lang-select { height: 36px; padding: 0 30px 0 12px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--text); font: inherit; font-size: 13.5px; }
+.lang-select { height: 32px; padding: 0 34px 0 14px; border-radius: 999px; background-color: var(--surface); background-position: right 12px center; line-height: 30px; }
 .limit-provider { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: var(--r); background: var(--surface-2); }
-.limit-provider-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.limit-provider-head { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: 13.5px; }
+.limit-provider-head > strong { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.limit-provider-head > .spacer { flex: 1; }
 .limit-row { display: flex; flex-direction: column; gap: 4px; }
 .limit-label { display: flex; justify-content: space-between; font-size: 13px; }
 .limit-label > span:first-child { display: inline-flex; align-items: center; gap: 6px; }
