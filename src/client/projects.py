@@ -62,14 +62,22 @@ class ProjectHost:
 
     # ---- paths ------------------------------------------------------------------
 
-    def _source(self, value: str) -> Path:
+    def _source(self, value: str, project_id: str = "", git_url: str | None = None, exists: bool = True) -> Path:
         src = self.executor._path(value)
-        home = mensarium_home().resolve()
-        if src == home or src.is_relative_to(home):
-            raise ToolError("a project cannot live inside ~/.mensarium")
-        if not src.is_dir():
+        if git_url:
+            # A repository given by URL lives in our own clone under the projects root, nowhere else.
+            if src != self._clone(project_id):
+                raise ToolError("a cloned project must live in its own clone folder")
+        else:
+            home = mensarium_home().resolve()
+            if src == home or src.is_relative_to(home):
+                raise ToolError("a project cannot live inside ~/.mensarium")
+        if exists and not src.is_dir():
             raise ToolError(f"{value} is not a directory on this device")
         return src
+
+    def _clone(self, project_id: str) -> Path:
+        return self.root / _safe_id(project_id) / "src"
 
     def _shadow(self, project_id: str) -> Path:
         return self.root / _safe_id(project_id) / "shadow.git"
@@ -120,7 +128,7 @@ class ProjectHost:
             return status
         try:
             async with self._lock(req.project_id):
-                result = await self._snapshot(req.project_id, req.source_path, req.kind, req.include_remotes, req.fetch_origin, req.size_limit_mb, req.file_limit_mb)
+                result = await self._snapshot(req.project_id, req.source_path, req.kind, req.include_remotes, req.fetch_origin, req.size_limit_mb, req.file_limit_mb, req.git_url)
         except (ToolError, ExecTimeout, OSError) as e:
             status.detail = str(e)
             return status
@@ -129,14 +137,21 @@ class ProjectHost:
         return status
 
     async def _snapshot(
-        self, project_id: str, source_path: str, kind: ProjectKind | None, include_remotes: bool, fetch_origin: bool, size_limit_mb: int, file_limit_mb: int
+        self, project_id: str, source_path: str, kind: ProjectKind | None, include_remotes: bool, fetch_origin: bool, size_limit_mb: int, file_limit_mb: int, git_url: str | None = None
     ) -> dict[str, Any]:
-        src = self._source(source_path)
+        src = self._source(source_path, project_id, git_url, exists=not git_url)
+        if git_url:
+            kind = "repo"
+            if not (src / ".git").exists():
+                await self._clone_repo(git_url, src)
+            elif fetch_origin:
+                # The clone is ours alone, so its checkout may follow origin; a chat branch never lives here.
+                await self._git("pull", "--ff-only", "--quiet", cwd=src)
         kind = kind or ("repo" if (src / ".git").exists() else "folder")
         base = self._base(kind, project_id)
         if kind == "folder":
             await self._ensure_shadow(project_id, src)
-        elif fetch_origin:
+        elif fetch_origin and not git_url:
             await self._git("fetch", "--all", "--prune", "--quiet", cwd=src, check=False)
         head = await self._rev(base, "HEAD", src)
         previous = await self._rev(base, SNAPSHOT_REF, src)
@@ -190,6 +205,14 @@ class ProjectHost:
             branch = out.strip() or None if code == 0 else None
         return {"kind": kind, "head_sha": head, "snapshot_sha": snapshot, "branch": branch, "refs": refs, "size_bytes": total, "skipped": skipped}
 
+    async def _clone_repo(self, git_url: str, dst: Path) -> None:
+        ensure_private_dir(dst.parent)
+        shutil.rmtree(dst, ignore_errors=True)
+        code, out, err = await self._call("clone", "--quiet", "--", git_url, str(dst), cwd=dst.parent)
+        if code != 0:
+            shutil.rmtree(dst, ignore_errors=True)
+            raise ToolError((err or out).strip().splitlines()[-1][:500] if (err or out).strip() else f"git clone failed with code {code}")
+
     # ---- ops --------------------------------------------------------------------
 
     async def op(self, req: ProjectOp) -> ProjectOpStatus:
@@ -225,7 +248,7 @@ class ProjectHost:
         return {"data": {"path": str(path), "parent": parent, "git": (path / ".git").exists(), "entries": entries}}
 
     async def _checkout(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
-        src = self._source(str(a["source_path"]))
+        src = self._source(str(a["source_path"]), project_id, a.get("git_url"))
         kind: ProjectKind = a["kind"]
         base = self._base(kind, project_id)
         branch = _branch(str(a["branch"]))
@@ -237,7 +260,7 @@ class ProjectHost:
             return {"head_sha": (await self._git("rev-parse", "HEAD", cwd=wt)).strip()}
         start = str(a["start"])
         if start == "snapshot":
-            snap = await self._snapshot(project_id, str(a["source_path"]), kind, bool(a.get("include_remotes", True)), bool(a.get("fetch_origin", False)), int(a.get("size_limit_mb", 1024)), int(a.get("file_limit_mb", 100)))
+            snap = await self._snapshot(project_id, str(a["source_path"]), kind, bool(a.get("include_remotes", True)), False, int(a.get("size_limit_mb", 1024)), int(a.get("file_limit_mb", 100)), a.get("git_url"))
             start = str(snap["snapshot_sha"])
         ensure_private_dir(wt.parent.parent)
         ensure_private_dir(wt.parent)
@@ -280,7 +303,7 @@ class ProjectHost:
         branch = _branch(str(a["branch"])) if wt and a.get("delete_branch") and a.get("branch") else None
         cwd: Path | None
         try:
-            cwd = self._source(str(a["source_path"]))
+            cwd = self._source(str(a["source_path"]), project_id, a.get("git_url"))
         except ToolError:
             cwd = self.root if kind == "folder" else None
         if wt and wt.exists():
@@ -295,6 +318,8 @@ class ProjectHost:
             await self._git("update-ref", "-d", SNAPSHOT_REF, cwd=cwd, check=False)
         if a.get("delete_shadow") and kind == "folder":
             shutil.rmtree(self._shadow(project_id), ignore_errors=True)
+        if a.get("delete_clone") and a.get("git_url") and not task_id:
+            shutil.rmtree(self._clone(project_id), ignore_errors=True)
         for d in (project_dir / "wt", project_dir):
             if d.exists() and not any(d.iterdir()):
                 d.rmdir()

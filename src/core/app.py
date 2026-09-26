@@ -271,7 +271,9 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         await plugins.start()
         catalog = Catalog(cfg.plugins.catalog_url)
         orchestrator = Orchestrator(repo, hub, bus, provider, cfg, workspace_id, paths.artifacts, memory, plugins, skills, catalog)
+        device = await ensure_device(repo, paths, cfg, public_key_b64(key), workspace_id)
         projects = ProjectManager(repo, workspace_id, hub, cfg.execution.request_ttl_s)
+        projects.device_id = device[0].target_id if device else None
         await projects.start()
         orchestrator.projects = projects
         await orchestrator.recover_after_restart()
@@ -285,7 +287,6 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         automations = AutomationManager(repo, workspace_id, orchestrator, channels, cfg.server.public_url)
         orchestrator.automations = automations
         await automations.start()
-        device = await ensure_device(repo, paths, cfg, public_key_b64(key), workspace_id)
         device_agent: asyncio.Task[None] | None = None
         if device:
             # The worker dials the Core's own port, which starts listening once startup is over.

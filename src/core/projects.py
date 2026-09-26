@@ -36,6 +36,8 @@ class ProjectManager:
         self.hub = hub
         self.ttl_s = max(ttl_s, OP_TIMEOUT_S)
         self.jobs: dict[str, asyncio.Task[None]] = {}
+        # The Core's own device: repositories given by URL are cloned there.
+        self.device_id: str | None = None
 
     # ---- lifecycle --------------------------------------------------------------
 
@@ -56,8 +58,8 @@ class ProjectManager:
     def view(self, p: dict[str, Any]) -> dict[str, Any]:
         keys = (
             "id", "name", "kind", "source_target_id", "source_name", "source_path", "default_executor_id", "default_base",
-            "include_remotes", "fetch_origin", "size_limit_mb", "file_limit_mb", "head_sha", "snapshot_sha", "default_branch",
-            "last_sync_at", "size_bytes", "status", "error", "created_at", "updated_at", "chats",
+            "git_url", "include_remotes", "fetch_origin", "size_limit_mb", "file_limit_mb", "head_sha", "snapshot_sha",
+            "default_branch", "last_sync_at", "size_bytes", "status", "error", "created_at", "updated_at", "chats",
         )
         return {k: p.get(k) for k in keys} | {
             "skipped": p.get("skipped") or [],
@@ -111,6 +113,7 @@ class ProjectManager:
             project_id=str(p["id"]),
             source_path=str(p["source_path"]),
             kind=kind,
+            git_url=p.get("git_url"),
             include_remotes=bool(p.get("include_remotes", True)),
             fetch_origin=bool(p.get("fetch_origin", False)),
             size_limit_mb=int(p.get("size_limit_mb") or 1024),
@@ -126,6 +129,7 @@ class ProjectManager:
         return {
             "source_path": p["source_path"],
             "kind": p["kind"],
+            "git_url": p.get("git_url"),
             "include_remotes": bool(p.get("include_remotes", True)),
             "fetch_origin": bool(p.get("fetch_origin", False)),
             "size_limit_mb": int(p.get("size_limit_mb") or 1024),
@@ -154,28 +158,39 @@ class ProjectManager:
         return status.data
 
     async def create(self, body: ProjectCreate) -> dict[str, Any]:
-        target = self._supports(await self.repo.get_target(body.source_target_id))
-        if await self.repo.find_project(body.source_target_id, body.source_path):
-            raise ProjectError("this folder is already a project")
         project_id = new_id("prj")
+        if body.git_url:
+            if not self.device_id:
+                raise ProjectError("the Core has no device of its own; enable it in the Core config")
+            target = self._supports(await self.repo.get_target(self.device_id))
+            hello = self.hub.hello(str(target["id"]))
+            source_path = f"{hello.capabilities.projects_root if hello else ''}/{project_id}/src"
+        else:
+            target = self._supports(await self.repo.get_target(str(body.source_target_id)))
+            source_path = str(body.source_path)
+            if await self.repo.find_project(str(target["id"]), source_path):
+                raise ProjectError("this folder is already a project")
         now = now_iso()
         await self.repo.create_project(
             {
                 "id": project_id,
                 "workspace_id": self.workspace_id,
                 "name": body.name.strip(),
-                "kind": "folder",
+                "kind": "repo" if body.git_url else "folder",
                 "source_target_id": target["id"],
-                "source_path": body.source_path,
+                "source_path": source_path,
+                "git_url": body.git_url,
                 "include_remotes": int(body.include_remotes),
-                "fetch_origin": int(body.fetch_origin),
+                "fetch_origin": int(body.fetch_origin or bool(body.git_url)),
                 "status": "creating",
                 "created_at": now,
                 "updated_at": now,
             }
         )
-        await self.repo.audit(self.workspace_id, "user", "project.created", {"project_id": project_id, "target_id": target["id"], "path": body.source_path})
-        self._start_refresh(project_id, detect=True)
+        await self.repo.audit(
+            self.workspace_id, "user", "project.created", {"project_id": project_id, "target_id": target["id"], "path": source_path, "git_url": body.git_url}
+        )
+        self._start_refresh(project_id, detect=not body.git_url)
         return self.view(await self.get(project_id))
 
     async def sync(self, project_id: str) -> dict[str, Any]:
@@ -244,7 +259,7 @@ class ProjectManager:
     async def delete_row(self, project_id: str, remove_shadow: bool) -> None:
         p = await self.precheck_delete(project_id, remove_shadow)
         if remove_shadow or p["kind"] == "repo":
-            await self._cleanup(str(p["source_target_id"]), project_id, "", {**self._snapshot_args(p), "delete_shadow": remove_shadow})
+            await self._cleanup(str(p["source_target_id"]), project_id, "", {**self._snapshot_args(p), "delete_shadow": remove_shadow, "delete_clone": bool(p.get("git_url"))})
         await self.repo.delete_project(project_id)
         await self.repo.audit(self.workspace_id, "user", "project.deleted", {"project_id": project_id})
 

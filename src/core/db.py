@@ -17,6 +17,7 @@ COLUMN_MIGRATIONS = [
     ("tasks", "plan", "TEXT NOT NULL DEFAULT '[]'"),
     ("tasks", "automation_id", "TEXT"),
     ("tasks", "project_id", "TEXT"),
+    ("projects", "git_url", "TEXT"),
     ("tasks", "branch", "TEXT"),
     ("tasks", "base_ref", "TEXT"),
     ("tasks", "base_sha", "TEXT"),

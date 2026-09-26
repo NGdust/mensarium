@@ -3203,13 +3203,14 @@ async function viewProjectNew() {
   const data = await get('/v1/projects');
   state.projects = data.items;
   const title = tr('New project');
-  const desc = tr('A folder on one of your devices. Every chat in the project works in its own copy, so chats never disturb each other or your files.');
+  const desc = tr('A folder on one of your devices, or a git repository cloned on the Core host. Every chat in the project works in its own copy, so chats never disturb each other or your files.');
   const usable = data.devices.filter((d) => d.online && d.projects);
-  if (!usable.length) {
+  const coreDevice = data.devices.find((d) => state.targets.some((t) => t.id === d.id && t.core_host)) || null;
+  if (!usable.length && !coreDevice) {
     page(shell, title, desc, null, h('div', { class: 'empty rows' }, tr('No online device supports projects yet. Update the Mensarium client on the device you need.')));
     return;
   }
-  const preferred = usable.find((d) => d.id === state.gateway?.target_id) || usable[0];
+  const preferred = usable.find((d) => d.id === state.gateway?.target_id) || usable[0] || coreDevice;
   const device = h('select', { 'aria-label': tr('Device') }, data.devices.map((d) => h('option', { value: d.id, disabled: !d.online || !d.projects, selected: d.id === preferred.id },
     !d.online ? `${d.name} · ${tr('offline')}` : !d.projects ? `${d.name} · ${tr('update the client')}` : d.name)));
 
@@ -3220,10 +3221,12 @@ async function viewProjectNew() {
   const use = h('button', { class: 'btn btn-sm', disabled: true, onclick: () => choose() }, icon('check'), tr('Use this folder'));
   const chosenBox = h('div', { class: 'browser-chosen' });
   const name = h('input', { type: 'text', maxlength: 120, 'aria-label': tr('Name') });
+  const url = h('input', { type: 'text', maxlength: 1000, placeholder: 'https://github.com/user/repo.git', spellcheck: 'false', autocapitalize: 'off', 'aria-label': tr('Repository address') });
   let cur = null;
   let chosen = null;
   let autoName = '';
   let seq = 0;
+  let mode = usable.length ? 'folder' : 'git';
 
   // A failed listing keeps the last good folder on screen, so the user can go up or pick it.
   const browse = async (path) => {
@@ -3271,22 +3274,35 @@ async function viewProjectNew() {
       h('div', { class: 'row-desc' }, chosen.kind === 'repo'
         ? tr('Secret files such as .env and keys are left out of chat copies, but anything already committed to the repository history stays visible to the agent.')
         : tr('Secret files such as .env and keys are left out, and so are files over {0} MB. To leave out more, list them in a .mensariumignore file in the folder.', DEFAULT_FILE_LIMIT_MB)));
-    create.disabled = false;
+    syncCreate();
     name.focus();
   };
 
+  // Same rule as ProjectCreate on the Core: network transports only.
+  const gitOk = () => /^(https?:\/\/|ssh:\/\/|git:\/\/)\S+$|^[\w.-]+@[\w.-]+:\S+$/.test(url.value.trim()) && !url.value.trim().startsWith('-');
+  const gitReady = () => Boolean(coreDevice?.online && coreDevice?.projects);
+  const syncCreate = () => { create.disabled = mode === 'git' ? !(gitReady() && gitOk()) : !chosen; };
+  url.addEventListener('input', () => {
+    const repo = url.value.trim().replace(/\/+$/, '').split(/[/:]/).pop()?.replace(/\.git$/, '') || '';
+    if (repo && (!name.value.trim() || name.value === autoName)) { autoName = repo; name.value = repo; }
+    syncCreate();
+  });
+
   const create = h('button', { class: 'btn btn-primary', disabled: true, onclick: async () => {
-    if (!chosen) return;
     if (!name.value.trim()) { name.focus(); return; }
+    const body = mode === 'git'
+      ? { name: name.value.trim(), git_url: url.value.trim() }
+      : chosen ? { name: name.value.trim(), source_target_id: chosen.target_id, source_path: chosen.path } : null;
+    if (!body) return;
     create.disabled = true;
-    create.textContent = tr('Reading the folder…');
+    create.textContent = mode === 'git' ? tr('Cloning…') : tr('Reading the folder…');
     try {
-      const p = await post('/v1/projects', { name: name.value.trim(), source_target_id: chosen.target_id, source_path: chosen.path });
+      const p = await post('/v1/projects', body);
       state.projects = await get('/v1/projects').then((r) => r.items, () => [...state.projects, p]);
       go(`#/projects/${p.id}`);
     } catch (err) {
       fail(err);
-      create.disabled = false;
+      syncCreate();
       create.textContent = tr('Create');
     }
   } }, tr('Create'));
@@ -3296,19 +3312,37 @@ async function viewProjectNew() {
     pathEl.textContent = '';
     chosen = null;
     chosenBox.replaceChildren();
-    create.disabled = true;
+    syncCreate();
     browse('~');
   });
 
+  const folderForm = h('div', { class: 'plugin-form' },
+    field(tr('Device'), device),
+    h('div', { class: 'plugin-field' }, h('div', { class: 'plugin-field-head' }, h('span', {}, tr('Folder'))),
+      h('div', { class: 'browser' }, h('div', { class: 'browser-bar' }, up, pathEl, use), errorEl, list)),
+    chosenBox);
+  const gitNote = coreDevice && gitReady()
+    ? h('div', { class: 'row-desc' }, tr('Cloned on the Core host ({0}) with the git access set up there; secret files are left out of chat copies, but anything committed to the history stays visible to the agent.', coreDevice.name))
+    : h('p', { class: 'browser-error', role: 'alert' }, coreDevice ? tr('The Core device is offline or its git is missing; install git on the Core host.') : tr('The Core has no device of its own; enable it in the Core config.'));
+  const gitForm = h('div', { class: 'plugin-form' }, field(tr('Repository address'), url), gitNote);
+  const modeBox = h('div', {});
+  const tile = (key, ic, label, hint, enabled) => h('button', { class: 'source-tile', type: 'button', disabled: !enabled, title: enabled ? null : hint, onclick: () => { mode = key; render(); } }, icon(ic), h('span', { class: 'source-tile-label' }, label), h('span', { class: 'source-tile-hint' }, hint));
+  const tiles = h('div', { class: 'source-tiles' });
+  const render = () => {
+    tiles.replaceChildren(
+      tile('folder', 'folder', tr('Choose a folder'), tr('on one of your devices'), usable.length > 0),
+      tile('git', 'git', tr('Git repository'), tr('cloned on the Core host'), Boolean(coreDevice)));
+    tiles.children[mode === 'git' ? 1 : 0].classList.add('active');
+    modeBox.replaceChildren(mode === 'git' ? gitForm : folderForm);
+    syncCreate();
+    if (mode === 'git') url.focus();
+    else if (!cur) browse('~');
+  };
+
   page(shell, title, desc, null,
-    h('div', { class: 'plugin-form' },
-      field(tr('Device'), device),
-      h('div', { class: 'plugin-field' }, h('div', { class: 'plugin-field-head' }, h('span', {}, tr('Folder'))),
-        h('div', { class: 'browser' }, h('div', { class: 'browser-bar' }, up, pathEl, use), errorEl, list)),
-      chosenBox,
-      field(tr('Name'), name)),
+    h('div', { class: 'plugin-form' }, tiles, modeBox, field(tr('Name'), name)),
     h('div', { class: 'auto-actions' }, h('span', { class: 'spacer' }), h('a', { class: 'btn', href: '#/' }, tr('Cancel')), create));
-  browse('~');
+  render();
 }
 
 async function viewProject(id) {
@@ -3347,9 +3381,9 @@ async function viewProject(id) {
     desc.textContent = [ready ? kindLabel(p) : null, `${p.source_name || ''}:${p.source_path}`].filter(Boolean).join(' · ');
     newChatBtn.classList.toggle('hidden', !ready);
     const reread = busy || !p.source_online ? null
-      : h('button', { class: 'icon-btn', title: tr('Read the folder again'), 'aria-label': tr('Read the folder again'), onclick: (e) => sync(e.currentTarget) }, icon('refresh'));
+      : h('button', { class: 'icon-btn', title: p.git_url ? tr('Pull from origin and read again') : tr('Read the folder again'), 'aria-label': p.git_url ? tr('Pull from origin and read again') : tr('Read the folder again'), onclick: (e) => sync(e.currentTarget) }, icon('refresh'));
     body.replaceChildren(...[
-      busy ? h('div', { class: 'note-banner busy', role: 'status' }, h('span', { class: 'spinner' }), h('span', {}, tr('Reading the folder…'))) : null,
+      busy ? h('div', { class: 'note-banner busy', role: 'status' }, h('span', { class: 'spinner' }), h('span', {}, p.git_url && !p.snapshot_sha ? tr('Cloning the repository…') : tr('Reading the folder…'))) : null,
       !busy && p.status === 'error'
         ? h('div', { class: 'note-banner', role: 'alert' }, icon('alert'), h('span', {}, p.error || tr('Could not read the folder')),
           p.source_online ? h('button', { class: 'btn btn-sm', onclick: (e) => sync(e.currentTarget) }, icon('refresh'), tr('Retry')) : null)
@@ -3357,7 +3391,8 @@ async function viewProject(id) {
       section(tr('Source'), null, h('div', { class: 'rows' },
         row(tr('Device'), null, [h('span', { class: `dot${p.source_online ? ' ok' : ''}`, title: p.source_online ? null : tr('offline') }), p.source_name || p.source_target_id,
           p.source_online ? null : h('span', { class: 'market-meta' }, tr('offline'))]),
-        row(tr('Folder'), null, p.source_path, true),
+        p.git_url ? row(tr('Repository'), null, p.git_url, true) : null,
+        row(p.git_url ? tr('Clone') : tr('Folder'), null, p.source_path, true),
         row(tr('Last read'), null, [relTime(p.last_sync_at), reread]),
         ready && p.kind === 'repo' ? row(tr('Branch on the device'), null, p.default_branch || '—', true) : null,
         skipped.length ? row(tr('Skipped large files'), `${tp('{0} file|{0} files', skipped.length)} · ${tr('over {0} MB each', p.file_limit_mb || DEFAULT_FILE_LIMIT_MB)}`, h('div', { class: 'skipped' }, [...skipped.slice(0, 20), skipped.length > 20 ? '…' : null].filter(Boolean).join('\n')), true) : null)),
@@ -3395,7 +3430,7 @@ async function deleteProject(p, onDeleted = null) {
   const shadow = p.kind === 'folder' && p.snapshot_sha ? h('input', { type: 'checkbox' }) : null;
   const yes = await confirmDialog({
     title: tr('Delete project “{0}”?', p.name),
-    text: tr('Its chats are deleted too. Files in the source folder are not touched.'),
+    text: p.git_url ? tr('Its chats and the clone on the Core host are deleted. The remote repository is not touched.') : tr('Its chats are deleted too. Files in the source folder are not touched.'),
     action: tr('Delete'),
     danger: true,
     extra: shadow ? h('label', { class: 'check-label modal-check' }, shadow, tr('Also delete the hidden version history of this folder')) : null,

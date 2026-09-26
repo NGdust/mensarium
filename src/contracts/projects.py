@@ -1,7 +1,7 @@
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from mensarium.shared.redaction import SECRET_FILE_PATTERNS
 
@@ -15,6 +15,8 @@ BRANCH_PREFIX = "mensarium/"
 SECRET_EXCLUDES: tuple[str, ...] = (*SECRET_FILE_PATTERNS, ".netrc", ".npmrc", ".pypirc", "*.kdbx", "credentials*", "secrets.*")
 FOLDER_EXCLUDES = (".DS_Store", "Thumbs.db", "~$*", "*.tmp", ".~lock.*")
 KIND_LABELS = {"repo": "git repository", "folder": "folder"}
+# Only network transports: local paths, file:// and ext:: would let a clone reach into the device.
+GIT_URL_RE = re.compile(r"^(https?://|ssh://|git://)[^\s]+$|^[\w.-]+@[\w.-]+:[^\s]+$")
 
 
 class ProjectError(Exception):
@@ -27,20 +29,43 @@ def branch_name(task_id: str, text: str) -> str:
 
 
 class ProjectCreate(BaseModel):
+    """A folder on a device (`source_target_id` + `source_path`) or a repository to clone on the Core host (`git_url`)."""
+
     name: str = Field(min_length=1, max_length=120)
-    source_target_id: str = Field(max_length=100)
-    source_path: str = Field(min_length=1, max_length=1000)
+    source_target_id: str | None = Field(None, max_length=100)
+    source_path: str | None = Field(None, min_length=1, max_length=1000)
+    git_url: str | None = Field(None, min_length=1, max_length=1000)
     include_remotes: bool = True
     fetch_origin: bool = False
 
     @field_validator("source_path")
     @classmethod
-    def _strip_slash(cls, value: str) -> str:
+    def _strip_slash(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         path = value.strip()
         path = path.rstrip("/") or path[:1]
         if not path:
             raise ValueError("source_path is empty")
         return path
+
+    @field_validator("git_url")
+    @classmethod
+    def _check_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        url = value.strip()
+        if not GIT_URL_RE.fullmatch(url) or url.startswith("-"):
+            raise ValueError("git_url must be an https://, ssh://, git:// or user@host:path address")
+        return url
+
+    @model_validator(mode="after")
+    def _one_source(self) -> "ProjectCreate":
+        if (self.git_url is None) == (self.source_path is None):
+            raise ValueError("give either source_path with source_target_id or git_url")
+        if self.source_path is not None and not self.source_target_id:
+            raise ValueError("source_target_id is required with source_path")
+        return self
 
 
 class ProjectPatch(BaseModel):
@@ -64,6 +89,7 @@ class ProjectSnapshot(BaseModel):
     project_id: str
     source_path: str
     kind: ProjectKind | None = None
+    git_url: str | None = None
     include_remotes: bool = True
     fetch_origin: bool = False
     size_limit_mb: int = 1024

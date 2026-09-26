@@ -57,17 +57,25 @@ def _resolve_device(value: str) -> str:
 
 @projects_app.command("create")
 def projects_create(
-    device: Annotated[str, typer.Option(help="Device name or id with the folder")],
-    path: Annotated[str, typer.Option(help="Folder or git repository on the device")],
-    name: Annotated[str | None, typer.Option(help="Project name (default: the folder name)")] = None,
+    device: Annotated[str | None, typer.Option(help="Device name or id with the folder")] = None,
+    path: Annotated[str | None, typer.Option(help="Folder or git repository on the device")] = None,
+    git: Annotated[str | None, typer.Option(help="Repository address to clone on the Core host")] = None,
+    name: Annotated[str | None, typer.Option(help="Project name (default: the folder or repository name)")] = None,
 ) -> None:
-    """Create a project from a folder or git repository on a device."""
-    if not path.startswith(("/", "~")):
-        fail("--path must be absolute or start with ~")
+    """Create a project from a folder on a device or from a git repository cloned on the Core host."""
+    if git:
+        repo = PurePath(git.rstrip("/").rsplit(":", 1)[-1]).name.removesuffix(".git")
+        body: dict[str, Any] = {"name": name or repo or git, "git_url": git}
+    elif device and path:
+        if not path.startswith(("/", "~")):
+            fail("--path must be absolute or start with ~")
+            raise typer.Exit(1)
+        body = {"name": name or PurePath(path).name or path, "source_target_id": _resolve_device(device), "source_path": path}
+    else:
+        fail("give --git URL, or --device and --path")
         raise typer.Exit(1)
-    body = {"name": name or PurePath(path).name or path, "source_target_id": _resolve_device(device), "source_path": path}
     p = _run("POST", "/v1/projects", body)
-    ok(f"Created project {p['id']}; the device is reading the folder, check with `mensarium projects list`")
+    ok(f"Created project {p['id']}; {'cloning' if git else 'the device is reading the folder'}, check with `mensarium projects list`")
 
 
 @projects_app.command("sync")

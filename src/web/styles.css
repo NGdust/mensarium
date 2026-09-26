@@ -799,6 +799,18 @@ input.mono { font-family: var(--mono); font-size: 13px; }
 .runs .pill .dot { width: 6px; height: 6px; }
 
 /* projects */
+.source-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.source-tile {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 14px 16px; text-align: left;
+  border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface); color: var(--text-2); cursor: pointer; font: 13.5px var(--font);
+}
+.source-tile:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.source-tile.active { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); }
+.source-tile.active .icon { color: var(--accent-strong); }
+.source-tile:disabled { opacity: 0.45; cursor: default; }
+.source-tile .icon { width: 20px; height: 20px; color: var(--muted); }
+.source-tile-label { font-weight: 500; }
+.source-tile-hint { font-size: 12px; color: var(--muted); }
 .browser { display: flex; flex-direction: column; gap: 8px; }
 .browser-bar { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .browser-path { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text-2); overflow-wrap: anywhere; }
