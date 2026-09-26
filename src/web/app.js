@@ -528,7 +528,7 @@ function limitsModal() {
   state.limitsRender = () => { if (body.isConnected) render(); };
   openModal(
     h('div', { class: 'modal-head' }, h('h2', {}, tr('Usage limits')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
-    h('p', { class: 'row-desc' }, tr('Claude Code reports its windows only alongside real requests, so refreshing it makes a tiny haiku call.')),
+    h('p', { class: 'row-desc' }, tr('The Core checks the limits on its own: Codex and OpenRouter every 10 minutes, Claude Code every 30 minutes with a tiny haiku call. Refresh checks right now.')),
     body,
     h('div', { class: 'modal-actions' }, h('span', { class: 'spacer' }), h('button', { class: 'btn', onclick: (e) => refreshLimits(null, e.currentTarget) }, icon('refresh'), tr('Refresh all')), h('button', { class: 'btn btn-primary', onclick: closeLayer }, tr('Close'))),
   ).classList.add('modal-wide');

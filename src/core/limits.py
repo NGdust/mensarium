@@ -10,11 +10,13 @@ from mensarium.core.providers import Providers
 from mensarium.llm_providers.base import LLMError
 from mensarium.llm_providers.factory import PROVIDER_KINDS, AnyProvider
 from mensarium.llm_providers.router import ProviderRouter
-from mensarium.shared.timeutil import now_iso
+from mensarium.shared.timeutil import now_iso, parse_iso, utcnow
 
 log = logging.getLogger(__name__)
 
 POLL_EVERY_S = 600
+FIRST_POLL_DELAY_S = 30
+PROBE_EVERY_S = 1800
 UNSUPPORTED_NOTE = {
     "ollama_cloud": "Ollama Cloud does not expose usage or limits through its API.",
     "ollama_local": "A local server has no usage limits.",
@@ -24,9 +26,10 @@ UNSUPPORTED_NOTE = {
 PASSIVE_NOTE = {
     "openai": "Known after the first request: OpenAI reports limits only in response headers.",
     "openai_compatible": "Known after the first request, if the server sends x-ratelimit headers.",
-    "claude_code": "Claude Code reports its windows alongside real requests; Refresh makes a tiny haiku call.",
+    "claude_code": "Claude Code reports its windows alongside real requests; the Core probes it with a tiny haiku call every 30 minutes.",
 }
 POLLED_KINDS = {"codex_cli", "openrouter"}
+PROBED_KINDS = {"claude_code"}
 
 
 class LimitsStore:
@@ -76,14 +79,28 @@ class LimitsStore:
             "providers": [s.model_dump() | {"max_used": s.max_used} for s in items],
         }
 
-    async def refresh(self, pid: str | None = None, *, polled_only: bool = False) -> None:
+    async def refresh(self, pid: str | None = None, *, scheduled: bool = False) -> None:
+        """Manual refresh polls every supported provider; the scheduled one skips providers that only report limits
+        on real requests, and probes Claude only when its snapshot is older than PROBE_EVERY_S."""
         for candidate in list(self.providers.cfg.llm.providers):
             if pid and candidate != pid:
                 continue
             kind = self.providers.kind(candidate, self.providers.cfg.llm.providers[candidate])
-            if kind in UNSUPPORTED_NOTE or (polled_only and kind not in POLLED_KINDS):
+            if kind in UNSUPPORTED_NOTE:
                 continue
+            if scheduled:
+                if kind in PROBED_KINDS:
+                    if self._age_s(candidate) < PROBE_EVERY_S:
+                        continue
+                elif kind not in POLLED_KINDS:
+                    continue
             await self._refresh_one(candidate, kind)
+
+    def _age_s(self, pid: str) -> float:
+        snap = self.snapshots.get(pid)
+        if not snap or not snap.checked_at or snap.error:
+            return float("inf")
+        return (utcnow() - parse_iso(snap.checked_at)).total_seconds()
 
     async def _refresh_one(self, pid: str, kind: str) -> None:
         snap = self._base(pid)
@@ -109,9 +126,10 @@ class LimitsStore:
             self.snapshots[pid] = snap
 
     async def run_forever(self) -> None:
+        await asyncio.sleep(FIRST_POLL_DELAY_S)
         while True:
             try:
-                await self.refresh(polled_only=True)
+                await self.refresh(scheduled=True)
             except Exception:
                 log.exception("limits poll failed")
             await asyncio.sleep(POLL_EVERY_S)

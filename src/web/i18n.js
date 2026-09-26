@@ -303,7 +303,7 @@ const RU = {
   'checked {0}': 'проверено {0}',
   'No data yet.': 'Данных пока нет.',
   'This provider does not report limits.': 'Этот провайдер не отдаёт лимиты.',
-  'Claude Code reports its windows only alongside real requests, so refreshing it makes a tiny haiku call.': 'Claude Code сообщает окна только вместе с реальными запросами, поэтому его обновление делает крошечный запрос к haiku.',
+  'The Core checks the limits on its own: Codex and OpenRouter every 10 minutes, Claude Code every 30 minutes with a tiny haiku call. Refresh checks right now.': 'Core проверяет лимиты сам: Codex и OpenRouter раз в 10 минут, Claude Code раз в 30 минут крошечным запросом к haiku. «Обновить» проверяет прямо сейчас.',
   'Command on the Core host': 'Команда на хосте Core',
   'Check that the command works and is logged in.': 'Проверьте, что команда работает и вход выполнен.',
   'Found on the Core host': 'Найдено на хосте Core',
