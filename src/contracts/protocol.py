@@ -43,6 +43,7 @@ class Capabilities(BaseModel):
 class TargetHello(BaseModel):
     type: Literal["target.hello"] = "target.hello"
     protocol_version: str = PROTOCOL_VERSION
+    session: Literal["worker", "gateway"] = "worker"
     target: TargetInfo
     capabilities: Capabilities
     policy: TargetPolicy

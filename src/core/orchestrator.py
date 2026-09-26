@@ -22,13 +22,13 @@ from mensarium.contracts.protocol import (
 )
 from mensarium.contracts.skills import SkillError
 from mensarium.core.catalog import Catalog
+from mensarium.core.client_hub import ClientHub, TargetUnavailable
 from mensarium.core.config import CoreConfig
 from mensarium.core.events import EventBus
 from mensarium.core.memory import Memory, NoteError
 from mensarium.core.plugins import PluginError, PluginManager, Toolbox
 from mensarium.core.repo import TERMINAL_STATUSES, Repo
 from mensarium.core.skills import SkillStore
-from mensarium.core.target_hub import TargetHub, TargetUnavailable
 from mensarium.llm_providers.base import LLMError, LLMProvider
 from mensarium.policy_engine.engine import Decision, evaluate
 from mensarium.shared.ids import new_id
@@ -101,7 +101,7 @@ class Orchestrator:
     def __init__(
         self,
         repo: Repo,
-        hub: TargetHub,
+        hub: ClientHub,
         bus: EventBus,
         provider: LLMProvider,
         cfg: CoreConfig,

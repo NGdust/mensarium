@@ -29,6 +29,7 @@ from mensarium.core import distribution, pairing
 from mensarium.core.automations import AutomationManager
 from mensarium.core.catalog import Catalog
 from mensarium.core.channels import ChannelError, ChannelManager
+from mensarium.core.client_hub import ClientHub, TargetUnavailable
 from mensarium.core.config import CoreConfig, CorePaths, load_config, read_secret, save_config
 from mensarium.core.db import Database
 from mensarium.core.dreaming import Dreamer, DreamError
@@ -41,7 +42,6 @@ from mensarium.core.providers import ProviderError, Providers
 from mensarium.core.releases import ReleaseError, fetch_latest, spawn_update, updater
 from mensarium.core.repo import Repo
 from mensarium.core.skills import SkillStore
-from mensarium.core.target_hub import TargetHub, TargetUnavailable
 from mensarium.llm_providers.router import ProviderRouter
 from mensarium.shared.crypto import fingerprint, load_or_create_private_key, public_key_b64
 from mensarium.shared.ids import new_id
@@ -59,7 +59,7 @@ class Core:
     paths: CorePaths
     db: Database
     repo: Repo
-    hub: TargetHub
+    hub: ClientHub
     bus: EventBus
     orchestrator: Orchestrator
     provider: ProviderRouter
@@ -227,7 +227,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             await repo.upsert_profile(workspace_id, profile.model_dump())
         await db.execute("UPDATE targets SET status = 'offline' WHERE status = 'online'")
         key = load_or_create_private_key(paths.signing_key)
-        hub = TargetHub(repo, key)
+        hub = ClientHub(repo, key)
         bus = EventBus(repo)
         memory = Memory(repo)
         skills = SkillStore(repo, workspace_id, paths.skills)
