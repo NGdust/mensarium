@@ -892,7 +892,10 @@ body.core-offline #app { padding-top: 34px; }
 .sidebar-foot-row { display: flex; align-items: center; gap: 4px; }
 .sidebar-foot-row > .nav-item { flex: 1; min-width: 0; }
 .limits-list { display: flex; flex-direction: column; gap: 14px; }
-.limits-head { display: flex; align-items: center; margin-bottom: 8px; }
+.modal .limits-list { margin-bottom: 18px; }
+.modal.modal-wide > .modal-actions { padding-bottom: 2px; }
+.icon-btn.spinning .icon { animation: spin 0.8s linear infinite; }
+.lang-select { height: 36px; padding: 0 30px 0 12px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--text); font: inherit; font-size: 13.5px; }
 .limit-provider { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: var(--r); background: var(--surface-2); }
 .limit-provider-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
 .limit-row { display: flex; flex-direction: column; gap: 4px; }

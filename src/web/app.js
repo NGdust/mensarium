@@ -8,7 +8,7 @@ const $app = document.getElementById('app');
 const $toasts = document.getElementById('toasts');
 const $layer = document.getElementById('layer');
 
-const state = { system: null, gateway: null, coreOffline: false, limits: null, targets: [], tasks: [], shell: null, lastChat: '#/', updates: new Map() };
+const state = { system: null, gateway: null, coreOffline: false, limits: null, limitsBusy: new Set(), targets: [], tasks: [], shell: null, lastChat: '#/', updates: new Map() };
 let viewCleanups = [];
 let shellCleanups = [];
 
@@ -469,6 +469,11 @@ function languageSwitch(compact = false) {
     }, compact ? code.toUpperCase() : name)));
 }
 
+function languageSelect() {
+  return h('select', { class: 'lang-select', 'aria-label': tr('Language'), onchange: (e) => { if (e.target.value !== lang) setLang(e.target.value); } },
+    Object.entries(LANGUAGES).map(([code, name]) => h('option', { value: code, selected: code === lang }, name)));
+}
+
 // ---------- usage limits ----------
 
 async function loadLimits() {
@@ -478,11 +483,13 @@ async function loadLimits() {
   return state.limits;
 }
 
-async function refreshLimits(providerId, btn) {
-  if (btn) btn.disabled = true;
-  try { state.limits = await post('/v1/limits/refresh', providerId ? { provider_id: providerId } : {}); renderLimitBanners(); state.limitsRender?.(); }
+async function refreshLimits(providerId) {
+  if (state.limitsBusy.has(providerId)) return;
+  state.limitsBusy.add(providerId);
+  state.limitsRender?.();
+  try { state.limits = await post('/v1/limits/refresh', { provider_id: providerId }); renderLimitBanners(); }
   catch (err) { fail(err); }
-  finally { if (btn) btn.disabled = false; }
+  finally { state.limitsBusy.delete(providerId); state.limitsRender?.(); }
 }
 
 function untilText(iso) {
@@ -518,7 +525,7 @@ function limitsBody() {
       h('strong', {}, p.title, p.provider_id !== p.kind ? h('code', { class: 'provider-id' }, p.provider_id) : null, p.active ? h('span', { class: 'pill accent' }, tr('active')) : null),
       h('span', { class: 'spacer' }),
       p.checked_at ? h('span', { class: 'market-meta', title: p.source }, tr('checked {0}', relTime(p.checked_at))) : null,
-      p.supported ? h('button', { class: 'icon-btn', title: tr('Refresh'), 'aria-label': tr('Refresh'), onclick: (e) => refreshLimits(p.provider_id, e.currentTarget) }, icon('refresh')) : null),
+      p.supported ? h('button', { class: `icon-btn${state.limitsBusy.has(p.provider_id) ? ' spinning' : ''}`, title: tr('Refresh'), 'aria-label': tr('Refresh'), disabled: state.limitsBusy.has(p.provider_id), onclick: () => refreshLimits(p.provider_id) }, icon('refresh')) : null),
     p.windows.length ? p.windows.map((w) => meter(w, d.threshold)) : h('p', { class: 'row-desc' }, p.error ? tr('Error: {0}', p.error) : p.note || (p.supported ? tr('No data yet.') : tr('This provider does not report limits.')))));
 }
 
@@ -529,9 +536,9 @@ function limitsModal() {
   state.limitsRender = () => { if (body.isConnected) render(); };
   openModal(
     h('div', { class: 'modal-head' }, h('h2', {}, tr('Usage limits')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
-    h('p', { class: 'row-desc' }, tr('The Core checks the limits on its own: Codex and OpenRouter every 10 minutes, Claude Code every 30 minutes with a tiny haiku call. Refresh checks right now.')),
+    h('p', { class: 'row-desc' }, tr('The Core checks the limits on its own: Codex and OpenRouter every 10 minutes, Claude Code every 30 minutes with a tiny haiku call. The arrow next to a provider checks it right now.')),
     body,
-    h('div', { class: 'modal-actions' }, h('span', { class: 'spacer' }), h('button', { class: 'btn', onclick: (e) => refreshLimits(null, e.currentTarget) }, icon('refresh'), tr('Refresh all')), h('button', { class: 'btn btn-primary', onclick: closeLayer }, tr('Close'))),
+    h('div', { class: 'modal-actions' }, h('span', { class: 'spacer' }), h('button', { class: 'btn btn-primary', onclick: closeLayer }, tr('Close'))),
   ).classList.add('modal-wide');
   loadLimits();
 }
@@ -1570,11 +1577,9 @@ async function settingsOverview(shell) {
   const renderLimits = () => limitsBox.replaceChildren(...limitsBody());
   renderLimits();
   state.limitsRender = () => { if (limitsBox.isConnected) renderLimits(); };
-  page(shell, tr('Overview'), tr('Where the main agent is reachable, and how to check that devices are talking to it.'), logout,
+  page(shell, tr('Overview'), tr('Where the main agent is reachable, and how to check that devices are talking to it.'), [languageSelect(), logout],
     h('div', { class: 'hero' }, orb('md'), h('div', { class: 'hero-text' }, h('h2', {}, 'Mensarium Core'), h('p', {}, tr('Version {0}', s.version))), coreUpdate),
-    section(tr('Usage limits'), tr('How much of each connected provider\'s quota is used. The active provider warns above the chat input from {0}%.', Math.round((state.limits?.threshold || 0.75) * 100)),
-      h('div', { class: 'limits-head' }, h('span', { class: 'spacer' }), h('button', { class: 'btn btn-sm', onclick: (e) => refreshLimits(null, e.currentTarget) }, icon('refresh'), tr('Refresh'))),
-      limitsBox),
+    section(tr('Usage limits'), tr('How much of each connected provider\'s quota is used. The active provider warns above the chat input from {0}%.', Math.round((state.limits?.threshold || 0.75) * 100)), limitsBox),
     section(tr('Connection'), null, h('div', { class: 'rows' },
       row(tr('Core address'), tr('Clients connect to it; the web UI runs on the clients.'), cmdValue(url), true),
       row(tr('Key fingerprint'), tr('Check it against what the installer showed on the device during pairing.'), s.core_key_fingerprint, true),
@@ -1583,7 +1588,6 @@ async function settingsOverview(shell) {
       row(tr('Update Mensarium'), tr('Downloads the latest version and restarts the service.'), cmdValue('mensarium update'), true),
       row(tr('Login token'), tr('Shows the gateway token; run it on this machine.'), cmdValue('mensarium client gateway token'), true),
     )),
-    section(tr('Language'), tr('Interface language. The agent answers in the language you write to it.'), languageSwitch()),
     section(tr('Backup'), tr('An archive with the database, keys, secrets, and settings, encrypted with a password you set. The same archive is used to move Core to another server.'), h('div', { class: 'rows' },
       row(tr('Create a backup'), tr('Saves the archive to the current folder.'), cmdValue('mensarium core backup -o mensarium.pab'), true),
       row(tr('Restore from a backup'), tr('Stops Core, replaces its data with the archive\'s contents, and starts it again. The previous data stays alongside it, in the core.before-restore-… folder.'), cmdValue('mensarium core restore mensarium.pab'), true),
