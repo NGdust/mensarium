@@ -89,10 +89,12 @@ def install(base: str, latest: dict[str, Any]) -> list[str]:
         raise UpdateError(f"install failed: {result.stderr.strip()[-800:]}")
 
     restarted = []
-    configured = {"core": CorePaths().config.exists(), "client": ClientPaths().config.exists()}
-    if configured["client"] and service.migrate_legacy_client():
-        restarted.append("client")
-    for role in ("core", "client"):
+    configured = {"core": CorePaths().config.exists(), "client": ClientPaths().config.exists(), "gateway": False}
+    if configured["client"]:
+        configured["gateway"] = load_client_config(ClientPaths()).gateway.enabled
+        if service.migrate_legacy_client():
+            restarted.append("client")
+    for role in ("core", "client", "gateway"):
         if configured[role] and role not in restarted and service.is_installed(role):  # type: ignore[arg-type]
             service.restart(role)  # type: ignore[arg-type]
             restarted.append(role)

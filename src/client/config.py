@@ -13,6 +13,17 @@ DEFAULT_COMMAND_ALLOWLIST = [
 ]  # fmt: skip
 
 
+class WorkerConfig(BaseModel):
+    enabled: bool = True
+
+
+class GatewayConfig(BaseModel):
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 8790
+    allowed_hosts: list[str] = Field(default_factory=list)
+
+
 class ClientConfig(BaseModel):
     server: str
     ws_url: str
@@ -28,6 +39,8 @@ class ClientConfig(BaseModel):
     allow_remote_plugins: bool = True
     allow_shell: bool = True
     limits: TargetLimits = Field(default_factory=TargetLimits)
+    worker: WorkerConfig = Field(default_factory=WorkerConfig)
+    gateway: GatewayConfig = Field(default_factory=GatewayConfig)
 
     @property
     def policy(self) -> TargetPolicy:
@@ -44,6 +57,9 @@ class ClientPaths:
         self.audit = self.root / "audit.jsonl"
         self.plugins = self.root / "plugins.json"
         self.permissions = self.root / "permissions.json"
+        self.secrets = self.root / "secrets"
+        self.gateway_token = self.secrets / "gateway-token"
+        self.gateway_link = self.secrets / "gateway-link"
         self.backups = self.root / "backups"
 
     def ensure(self) -> None:

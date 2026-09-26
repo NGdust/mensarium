@@ -16,7 +16,7 @@ from mensarium.cli.automations import automations_app
 from mensarium.cli.plugins import mcp_app, plugins_app, target_plugins
 from mensarium.cli.skills import skills_app
 from mensarium.cli.ui import console, fail, ok, summary, use_select_event_loop, warn
-from mensarium.client.config import ClientPaths, load_client_config
+from mensarium.client.config import ClientConfig, ClientPaths, load_client_config
 from mensarium.core.config import CorePaths, load_config, read_secret
 from mensarium.shared.logging import setup_logging
 from mensarium.shared.paths import mensarium_home
@@ -24,7 +24,9 @@ from mensarium.shared.paths import mensarium_home
 app = typer.Typer(help="Mensarium: portable agent harness (Core + clients)", no_args_is_help=True)
 core_app = typer.Typer(help="Main agent (Core) commands", no_args_is_help=True)
 client_app = typer.Typer(help="Client commands: this machine as a device of the Core", no_args_is_help=True)
+gateway_app = typer.Typer(help="Web UI of this client: served locally, talks to the Core over the client connection", no_args_is_help=True)
 service_app = typer.Typer(help="Background service management", no_args_is_help=True)
+client_app.add_typer(gateway_app, name="gateway")
 app.add_typer(core_app, name="core")
 app.add_typer(client_app, name="client")
 app.add_typer(client_app, name="target", hidden=True, help="Deprecated alias of `client`")
@@ -143,9 +145,14 @@ def status() -> None:
         tcfg = load_client_config(tpaths)
         rows += [
             ("Client", f"{tcfg.name} ({tcfg.target_id})"),
-            ("Client service", "running" if service.is_running("client") else "stopped"),
             ("Client Core", tcfg.server),
+            ("Worker", ("running" if service.is_running("client") else "stopped") if tcfg.worker.enabled else "disabled"),
         ]
+        if tcfg.gateway.enabled:
+            rows += [
+                ("Gateway", "running" if service.is_running("gateway") else "stopped"),
+                ("Gateway URL", f"http://{'127.0.0.1' if tcfg.gateway.host in ('127.0.0.1', '0.0.0.0') else tcfg.gateway.host}:{tcfg.gateway.port}"),
+            ]
     if len(rows) == 2:
         rows.append(("Status", "nothing configured; run `mensarium setup`"))
     summary("Mensarium status", rows)
@@ -157,7 +164,7 @@ def uninstall(
 ) -> None:
     """Stop services and remove them (optionally purge all data)."""
     use_select_event_loop()
-    for role in ("core", "client"):
+    for role in ("core", "client", "gateway"):
         if service.is_installed(role):  # type: ignore[arg-type]
             service.uninstall(role)  # type: ignore[arg-type]
             ok(f"{role} service removed")
@@ -386,11 +393,92 @@ def client_run() -> None:
     except FileNotFoundError as e:
         fail(str(e))
         raise typer.Exit(1) from e
+    if not cfg.worker.enabled:
+        fail("the worker is disabled on this client; enable it with `mensarium client setup`")
+        raise typer.Exit(1)
     agent = ClientAgent(cfg, paths, load_or_create_private_key(paths.key))
     try:
         asyncio.run(agent.run_forever())
     except KeyboardInterrupt:
         pass
+
+
+# ---- client gateway ---------------------------------------------------------
+
+
+def _gateway_config() -> tuple[ClientPaths, ClientConfig]:
+    paths = ClientPaths()
+    try:
+        cfg = load_client_config(paths)
+    except FileNotFoundError as e:
+        fail(str(e))
+        raise typer.Exit(1) from e
+    return paths, cfg
+
+
+def _gateway_url(cfg: ClientConfig) -> str:
+    if cfg.gateway.host in ("127.0.0.1", "0.0.0.0", "localhost"):
+        host = f"127.0.0.1:{cfg.gateway.port}"
+    else:
+        host = f"{cfg.gateway.host}:{cfg.gateway.port}"
+    return f"http://{host}"
+
+
+@gateway_app.command("run")
+def gateway_run() -> None:
+    """Run the gateway in the foreground: the web UI on this machine."""
+    from mensarium.client.gateway.server import run_gateway
+
+    setup_logging("INFO")
+    paths, cfg = _gateway_config()
+    if not cfg.gateway.enabled:
+        fail("the gateway is disabled on this client; enable it with `mensarium client setup`")
+        raise typer.Exit(1)
+    try:
+        asyncio.run(run_gateway(cfg, paths))
+    except KeyboardInterrupt:
+        pass
+
+
+@gateway_app.command("token")
+def gateway_token(
+    rotate: Annotated[bool, typer.Option("--rotate", help="Replace the token; open browser sessions are logged out")] = False,
+) -> None:
+    """Print the token for logging into the web UI of this gateway."""
+    from mensarium.client.gateway import auth
+
+    paths, _ = _gateway_config()
+    console.print(auth.rotate_token(paths) if rotate else auth.load_or_create_token(paths))
+
+
+@gateway_app.command("open")
+def gateway_open() -> None:
+    """Open the web UI in the browser with a one-time login link."""
+    import webbrowser
+
+    from mensarium.client.gateway import auth
+
+    paths, cfg = _gateway_config()
+    url = f"{_gateway_url(cfg)}/login?link={auth.write_link(paths)}"
+    console.print(url, soft_wrap=True, highlight=False)
+    webbrowser.open(url)
+
+
+@gateway_app.command("status")
+def gateway_status() -> None:
+    """Show whether the gateway runs and is connected to the Core."""
+    _, cfg = _gateway_config()
+    rows: list[tuple[str, str]] = [("Enabled", "yes" if cfg.gateway.enabled else "no"), ("URL", _gateway_url(cfg))]
+    try:
+        state = httpx.get(f"{_gateway_url(cfg)}/v1/gateway", timeout=2).json()
+        rows += [("Gateway", "running"), ("Core", "connected" if state.get("online") else "offline")]
+        if state.get("rejected"):
+            rows.append(("Rejected", f"{state['rejected']}; pair this client again"))
+    except (httpx.HTTPError, ValueError):
+        rows.append(("Gateway", "not running"))
+    if service.is_installed("gateway"):
+        rows.append(("Service", "running" if service.is_running("gateway") else "stopped"))
+    summary("Gateway", rows)
 
 
 # ---- service ----------------------------------------------------------------

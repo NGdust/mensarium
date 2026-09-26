@@ -9,8 +9,9 @@ from typing import Literal
 from mensarium import __version__
 from mensarium.shared.paths import mensarium_home
 
-Unit = Literal["core", "client"]
-COMMANDS: dict[str, list[str]] = {"core": ["core", "serve"], "client": ["client", "run"]}
+Unit = Literal["core", "client", "gateway"]
+COMMANDS: dict[str, list[str]] = {"core": ["core", "serve"], "client": ["client", "run"], "gateway": ["client", "gateway", "run"]}
+LOG_DIRS = {"core": "core", "client": "client", "gateway": "client"}
 LEGACY_LABEL, LEGACY_UNIT = "com.mensarium.target", "mensarium-target.service"
 APP_BUNDLE_ID = "com.mensarium.agent"
 INFO_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
@@ -65,7 +66,7 @@ def mensarium_bin() -> str:
 
 
 def log_file(role: Unit) -> Path:
-    path = mensarium_home() / role / f"{role}.log"
+    path = mensarium_home() / LOG_DIRS[role] / f"{role}.log"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -166,7 +167,7 @@ WantedBy={'multi-user.target' if _is_root() else 'default.target'}
     stop(role)
     with log.open("a") as out:
         proc = subprocess.Popen(argv, stdout=out, stderr=out, start_new_session=True, env={**os.environ, **env})
-    (mensarium_home() / role / f"{role}.pid").write_text(str(proc.pid))
+    (mensarium_home() / LOG_DIRS[role] / f"{role}.pid").write_text(str(proc.pid))
     return f"background process (pid {proc.pid}); it will not restart after reboot"
 
 
@@ -177,7 +178,7 @@ def stop(role: Unit) -> None:
     elif kind == "systemd":
         _systemctl("stop", _unit_name(role))
     else:
-        pid_file = mensarium_home() / role / f"{role}.pid"
+        pid_file = mensarium_home() / LOG_DIRS[role] / f"{role}.pid"
         if pid_file.exists():
             try:
                 os.kill(int(pid_file.read_text()), 15)
@@ -246,7 +247,7 @@ def is_installed(role: Unit) -> bool:
         return _plist_path(role).exists()
     if kind == "systemd":
         return (_systemd_user_dir() / _unit_name(role)).exists()
-    return (mensarium_home() / role / f"{role}.pid").exists()
+    return (mensarium_home() / LOG_DIRS[role] / f"{role}.pid").exists()
 
 
 def is_running(role: Unit) -> bool:
@@ -256,7 +257,7 @@ def is_running(role: Unit) -> bool:
         return "state = running" in out
     if kind == "systemd":
         return _systemctl("is-active", _unit_name(role)).stdout.strip() == "active"
-    pid_file = mensarium_home() / role / f"{role}.pid"
+    pid_file = mensarium_home() / LOG_DIRS[role] / f"{role}.pid"
     if not pid_file.exists():
         return False
     try:
