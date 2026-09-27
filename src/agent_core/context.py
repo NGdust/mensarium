@@ -141,7 +141,11 @@ def build_system_prompt(
             "\n## Planning\n"
             "For a task with several steps, write the steps with plan.update before you start, mark a step in_progress "
             "when you begin it and done when it is finished, and add or remove steps as you learn more. The user sees the "
-            "plan above the chat input. Skip the plan for a question or a single quick action.\n"
+            "plan above the chat input. Update it immediately at each phase transition, before executing the first "
+            "action of the next phase: mark the completed step done and the next step in_progress in the same update. "
+            "For example, once edits are complete, update the plan before running verification; do not leave the "
+            "editing step in_progress throughout testing. Keep unfinished or blocked work pending, and never mark "
+            "a step done without evidence. Skip the plan for a question or a single quick action.\n"
         )
     if "agent.spawn" in tools:
         prompt += (

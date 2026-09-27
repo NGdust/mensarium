@@ -1498,8 +1498,11 @@ async function viewChat(taskId) {
         if (!work?.actions) say(tr('Thinking'), live);
         break;
       case 'llm.response':
+        if (p.text && p.tool_call) {
+          finishWork();
+          agentMsg(h('div', { class: 'prose', html: markdown(p.text) }));
+        }
         stamp(ev);
-        if (p.text && p.tool_call) logAdd(h('div', { class: 'work-thought prose', html: markdown(p.text) }));
         break;
       case 'tool_call.denied':
         stamp(ev);

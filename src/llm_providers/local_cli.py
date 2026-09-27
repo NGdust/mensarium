@@ -14,7 +14,6 @@ from typing import Any
 CLAUDE_MODELS = ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"]
 CLAUDE_DEFAULT_MODEL = "claude-sonnet-5"
 CLAUDE_PROBE_MODEL = "claude-haiku-4-5"
-CODEX_MODELS = ["gpt-5-codex", "gpt-5"]
 RPC_TIMEOUT_S = 30
 CANDIDATE_DIRS = (
     "~/.local/bin", "~/.claude/local", "~/.claude/bin", "/opt/homebrew/bin", "/usr/local/bin", "~/.npm-global/bin",
@@ -71,45 +70,64 @@ def codex_rpc(command: str, method: str, params: dict[str, Any] | None = None, c
         {"id": 2, "method": method, "params": params or {}},
     ]
     proc = subprocess.Popen(
-        [command, "app-server", "--stdio"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, cwd=cwd
+        [command, "app-server", "--stdio"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd=cwd
     )
     assert proc.stdin and proc.stdout
     try:
         for m in messages:
-            proc.stdin.write(json.dumps(m) + "\n")
+            proc.stdin.write((json.dumps(m) + "\n").encode())
         proc.stdin.flush()
         deadline = time.monotonic() + RPC_TIMEOUT_S
+        buffer = b""
         while time.monotonic() < deadline:
-            ready, _, _ = select.select([proc.stdout], [], [], 1)
+            ready, _, _ = select.select([proc.stdout], [], [], min(1, max(0, deadline - time.monotonic())))
             if not ready:
                 continue
-            line = proc.stdout.readline()
-            if not line:
+            chunk = os.read(proc.stdout.fileno(), 65536)
+            if not chunk:
                 break
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if msg.get("id") == 2:
-                if msg.get("error"):
-                    raise RuntimeError(str(msg["error"].get("message") or msg["error"]))
-                result: dict[str, Any] = msg.get("result") or {}
-                return result
+            buffer += chunk
+            while b"\n" in buffer:
+                line, buffer = buffer.split(b"\n", 1)
+                try:
+                    msg = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if msg.get("id") == 2:
+                    if msg.get("error"):
+                        raise RuntimeError(str(msg["error"].get("message") or msg["error"]))
+                    result: dict[str, Any] = msg.get("result") or {}
+                    return result
         raise RuntimeError("codex app-server did not answer")
     finally:
-        proc.kill()
+        if proc.poll() is None:
+            proc.kill()
         proc.wait()
+        proc.stdin.close()
+        proc.stdout.close()
 
 
 def codex_models(command: str) -> list[str]:
-    """Models the logged-in Codex account can use, from the app-server; the config default first."""
-    try:
-        data = codex_rpc(command, "model/list").get("data") or []
-        models = [str(m.get("id") or m.get("model")) for m in data if not m.get("hidden") and (m.get("id") or m.get("model"))]
-    except (OSError, RuntimeError):
-        models = []
-    default = codex_config_model()
-    ordered = ([default] if default else []) + models + (CODEX_MODELS if not models else [])
+    """Return the account catalog; never invent models when discovery fails."""
+    data: list[dict[str, Any]] = []
+    cursor = None
+    seen_cursors: set[str] = set()
+    while True:
+        page = codex_rpc(command, "model/list", {"cursor": cursor} if cursor else {})
+        data.extend(page.get("data") or [])
+        cursor = page.get("nextCursor")
+        if not cursor:
+            break
+        if cursor in seen_cursors:
+            raise RuntimeError("codex model/list returned a repeated cursor")
+        seen_cursors.add(cursor)
+    visible = [m for m in data if not m.get("hidden") and (m.get("model") or m.get("id"))]
+    models = [str(m.get("model") or m["id"]) for m in visible]
+    if not models:
+        raise RuntimeError("codex model/list returned no available models; check Codex login")
+    configured = codex_config_model()
+    defaults = [str(m.get("model") or m["id"]) for m in visible if m.get("isDefault")]
+    ordered = ([configured] if configured in models else []) + defaults + models
     return list(dict.fromkeys(ordered))
 
 
@@ -138,8 +156,11 @@ def _claude(path: str) -> LocalCli:
 
 
 def _codex(path: str) -> LocalCli:
-    models = codex_models(path)
-    cli = LocalCli(kind="codex_cli", title="Codex CLI", path=path, models=models, default_model=models[0])
+    try:
+        models = codex_models(path)
+    except (OSError, RuntimeError):
+        models = []
+    cli = LocalCli(kind="codex_cli", title="Codex CLI", path=path, models=models, default_model=models[0] if models else "")
     code, out = _run(path, "--version")
     cli.version = out.replace("codex-cli", "").strip().split()[0] if code == 0 and out else ""
     code, out = _run(path, "login", "status")

@@ -28,8 +28,6 @@ from mensarium.llm_providers.base import LLMError
 from mensarium.llm_providers.local_cli import (
     CLAUDE_MODELS,
     CLAUDE_PROBE_MODEL,
-    CODEX_MODELS,
-    codex_config_model,
     codex_models,
     codex_rpc,
 )
@@ -307,14 +305,17 @@ class ClaudeCodeProvider(CliProvider):
 class CodexCliProvider(CliProvider):
     kind = "codex_cli"
     title = "Codex CLI"
-    models = list(CODEX_MODELS)
+    models: list[str] = []
 
     def __init__(self, name: str, command: str, default_model: str, timeout_s: int = 180, max_retries: int = 1) -> None:
-        super().__init__(name, command, default_model or codex_config_model() or CODEX_MODELS[0], timeout_s, max_retries)
-        self.models = list(CODEX_MODELS)
+        super().__init__(name, command, default_model, timeout_s, max_retries)
+        self.models = []
 
     async def list_models(self) -> list[ModelInfo]:
-        self.models = await asyncio.to_thread(codex_models, self.command)
+        try:
+            self.models = await asyncio.to_thread(codex_models, self.command)
+        except (OSError, RuntimeError) as e:
+            raise LLMError(f"cannot discover Codex models: {e}") from e
         return [ModelInfo(id=m) for m in self.models]
 
     def login_status(self) -> tuple[bool, str]:
@@ -352,6 +353,15 @@ class CodexCliProvider(CliProvider):
         return windows
 
     async def _call(self, model: str, system: str, prompt: str, timeout_s: int) -> ModelResponse:
+        if not self.models or model not in self.models:
+            await self.list_models()
+        if not model:
+            model = self.models[0]
+        if model not in self.models:
+            raise LLMError(
+                f"Codex model '{model}' is unavailable for this account. "
+                f"Select an available model in Settings -> Providers or the chat: {', '.join(self.models)}"
+            )
         workdir = Path(self.workdir())
         schema_file = workdir / "answer-schema.json"
         schema_file.write_text(json.dumps(ANSWER_SCHEMA))

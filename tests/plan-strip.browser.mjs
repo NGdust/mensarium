@@ -20,6 +20,15 @@ try {
     const snapshot = () => ({ hidden: plan.el.hidden, spinners: plan.el.querySelectorAll('.spinner').length });
     plan.setStatus('PLANNING');
     const running = snapshot();
+    plan.set([
+      { title: 'Editing complete', status: 'done' },
+      { title: 'Verification started', status: 'in_progress' },
+    ]);
+    assertTransition();
+    function assertTransition() {
+      if (!plan.el.textContent.includes('Verification started')) throw new Error('Plan did not render the next phase immediately');
+      if (plan.el.querySelectorAll('.spinner').length !== 1) throw new Error('Plan must show exactly one active phase');
+    }
     plan.setStatus('FAILED');
     const failed = snapshot();
     plan.setStatus('PLANNING');
