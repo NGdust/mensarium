@@ -26,7 +26,7 @@ UNSUPPORTED_NOTE = {
 PASSIVE_NOTE = {
     "openai": "Known after the first request: OpenAI reports limits only in response headers.",
     "openai_compatible": "Known after the first request, if the server sends x-ratelimit headers.",
-    "claude_code": "Claude Code reports its windows alongside real requests; the Core probes it with a tiny haiku call every 30 minutes.",
+    "claude_code": "Claude subscription usage is fetched through the OAuth usage API every 30 minutes without generating tokens, including when quota is exhausted.",
 }
 POLLED_KINDS = {"codex_cli", "openrouter"}
 PROBED_KINDS = {"claude_code"}

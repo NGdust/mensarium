@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from mensarium.contracts.limits import LimitWindow
 from mensarium.contracts.llm import (
     ChatRequest,
@@ -27,7 +29,6 @@ from mensarium.contracts.llm import (
 from mensarium.llm_providers.base import LLMError
 from mensarium.llm_providers.local_cli import (
     CLAUDE_MODELS,
-    CLAUDE_PROBE_MODEL,
     codex_models,
     codex_rpc,
 )
@@ -297,8 +298,60 @@ class ClaudeCodeProvider(CliProvider):
             self._set_limits(windows, "claude rate_limit_event")
 
     async def fetch_limits(self) -> list[LimitWindow] | None:
-        """A tiny haiku call: Claude Code only reports its windows alongside a real request."""
-        await self._call(CLAUDE_PROBE_MODEL, "Answer with the single word: pong", "pong", 120)
+        """Read subscription usage without generating tokens, even when quota is exhausted."""
+        config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+        try:
+            raw = await asyncio.to_thread((config_dir / ".credentials.json").read_text)
+            credentials = json.loads(raw)
+            oauth = credentials.get("claudeAiOauth") if isinstance(credentials, dict) else None
+            token = oauth.get("accessToken") if isinstance(oauth, dict) else None
+        except (OSError, ValueError):
+            raise LLMError("Cannot read Claude OAuth credentials for usage polling; log in with `claude` on the Core host.") from None
+        if not isinstance(token, str) or not token.strip():
+            raise LLMError("Claude usage polling requires subscription OAuth credentials; log in with `claude` on the Core host.")
+        try:
+            async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
+                response = await client.get(
+                    "https://api.anthropic.com/api/oauth/usage",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "anthropic-beta": "oauth-2025-04-20",
+                        "Accept": "application/json",
+                    },
+                )
+        except httpx.HTTPError:
+            raise LLMError("Claude usage request failed: network error or timeout.") from None
+        if response.status_code in (401, 403):
+            raise LLMError("Claude usage authorization failed; renew login with `claude` on the Core host.")
+        if response.status_code != 200:
+            raise LLMError(f"Claude usage request failed (HTTP {response.status_code}).")
+        try:
+            data = response.json()
+            if not isinstance(data, dict):
+                raise ValueError
+            labels = {"five_hour": "5 hours", "seven_day": "7 days"}
+            windows = []
+            for key, value in data.items():
+                if key == "extra_usage" or not isinstance(value, dict) or value.get("utilization") is None:
+                    continue
+                utilization = value["utilization"]
+                if isinstance(utilization, bool) or not isinstance(utilization, (int, float)):
+                    raise ValueError
+                if not 0 <= utilization < float("inf"):
+                    raise ValueError
+                reset = value.get("resets_at")
+                if reset is not None and not isinstance(reset, str):
+                    raise ValueError
+                windows.append(LimitWindow(
+                    label=labels.get(str(key), str(key)),
+                    used_percent=round(utilization, 1),
+                    resets_at=reset,
+                ))
+            if not windows:
+                raise ValueError
+        except (ValueError, TypeError):
+            raise LLMError("Claude usage API returned an invalid or empty usage response.") from None
+        self._set_limits(windows, "claude OAuth usage")
         return self.limits
 
 
