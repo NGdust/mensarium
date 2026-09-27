@@ -98,7 +98,7 @@ class Repo:
     async def list_tasks(self, limit: int = 100) -> list[dict[str, Any]]:
         return await self.db.fetchall(
             "SELECT t.*, g.name AS target_name FROM tasks t LEFT JOIN targets g ON g.id = t.target_id "
-            "WHERE t.parent_id IS NULL AND t.automation_id IS NULL ORDER BY t.updated_at DESC LIMIT ?",
+            "WHERE t.parent_id IS NULL AND t.automation_id IS NULL AND t.project_id IS NULL ORDER BY t.updated_at DESC LIMIT ?",
             (limit,),
         )
 
