@@ -40,7 +40,7 @@ def builtin_profiles() -> list[AgentProfile]:
     out = []
     for f in pkg.iterdir():
         if f.name.endswith(".yaml"):
-            profile = AgentProfile.model_validate(yaml.safe_load(f.read_text()))
+            profile = AgentProfile.parse_obj(yaml.safe_load(f.read_text()))
             if profile.instructions_ref and not profile.instructions:
                 profile.instructions = (pkg / profile.instructions_ref).read_text()
             out.append(profile)

@@ -98,6 +98,15 @@ def build_system_prompt(
         f"- programs allowed for shell.exec: {allow}\n"
         f"- available tools: {', '.join(tools) or '(none)'}\n"
     )
+    # Load optional markdown instruction files (global and project‑specific) and append them.
+    try:
+        from .md_loader import load_md_docs_sync
+        md_section = load_md_docs_sync(project, {"name": target_name})
+        if md_section:
+            prompt += "\n\n## Markdown Instructions\n" + md_section
+    except Exception:
+        # If loading fails we simply continue without additional docs.
+        pass
     prompt += (
         "\n## Access mode: FULL\n"
         "The user enabled full device access. Device actions do not need confirmation. You may access any path, "
