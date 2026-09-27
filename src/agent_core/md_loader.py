@@ -45,3 +45,44 @@ def load_md_docs_sync(project: dict | None, target: dict) -> str:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
     return loop.run_until_complete(load_md_docs(project, target))
+
+
+async def save_md_doc(filename: str, content: str, project: dict | None = None) -> bool:
+    """Save content to a markdown instruction file.
+    If project is provided, saves to project's workdir (only AGENTS.md).
+    Otherwise, saves to the global repository root.
+    """
+    try:
+        if project and filename == "AGENTS.md":
+            workdir = project.get("workdir")
+            if not workdir:
+                return False
+            path = os.path.join(workdir, filename)
+        else:
+            # Global files
+            path = os.path.join(os.getcwd(), filename)
+        
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content.strip())
+        return True
+    except Exception:
+        return False
+
+
+async def read_single_md_doc(filename: str, project: dict | None = None) -> str:
+    """Read a single markdown instruction file."""
+    try:
+        if project and filename == "AGENTS.md":
+            workdir = project.get("workdir")
+            if not workdir:
+                return ""
+            path = os.path.join(workdir, filename)
+        else:
+            path = os.path.join(os.getcwd(), filename)
+            
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read().strip()
+    except Exception:
+        pass
+    return ""
