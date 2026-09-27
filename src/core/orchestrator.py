@@ -323,6 +323,9 @@ class Orchestrator:
         return task
 
     async def _add_user_message(self, task_id: str, text: str) -> None:
+        # Plans belong to one user turn, not to the lifetime of a chat.
+        await self.repo.update_task(task_id, {"plan": []})
+        await self.bus.emit(task_id, "task.plan", {"items": []})
         await self.repo.add_step(task_id, "user", {"input": {"text": text}})
         await self.bus.emit(task_id, "user.message", {"text": text})
 
@@ -343,7 +346,10 @@ class Orchestrator:
             await self.hub.cancel(target_id, request_id)
 
     async def _set_status(self, task_id: str, status: str, reason: str = "", **extra: Any) -> None:
-        await self.repo.update_task(task_id, {"status": status, "status_reason": reason, **extra})
+        clear_plan = status in TERMINAL_STATUSES and status != "PAUSED"
+        await self.repo.update_task(task_id, {"status": status, "status_reason": reason, **extra, **({"plan": []} if clear_plan else {})})
+        if clear_plan:
+            await self.bus.emit(task_id, "task.plan", {"items": []})
         await self.bus.emit(task_id, "task.status", {"status": status, "reason": reason})
 
     def _start(self, task_id: str) -> None:

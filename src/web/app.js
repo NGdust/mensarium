@@ -918,8 +918,7 @@ function modelSwitch(initial, { onPick }) {
   };
 }
 
-// The agent's plan for the current task, pinned above the composer; folds by itself once every step is done
-// or the task stops running, so a crashed or paused task does not keep spinning its current step.
+// Plan for one user turn. A paused turn keeps its folded plan; finished turns and new messages clear it.
 function planStrip(items = []) {
   let current = items;
   let active = true;
@@ -933,7 +932,7 @@ function planStrip(items = []) {
   el.append(head, list);
   const set = (next) => {
     current = next;
-    if (!next.length) { el.hidden = true; return; }
+    if (!next.length) { el.hidden = true; list.replaceChildren(); count.textContent = ''; return; }
     const done = next.filter((i) => i.status === 'done').length;
     el.hidden = false;
     count.textContent = `${done}/${next.length}`;
@@ -945,7 +944,10 @@ function planStrip(items = []) {
     head.setAttribute('aria-expanded', String(open));
   };
   set(items);
-  return { el, set, setActive(value) { if (value !== active) { active = value; set(current); } } };
+  return { el, set, setStatus(status) {
+    active = isRunning(status);
+    set(!active && status !== 'PAUSED' ? [] : current);
+  } };
 }
 
 // Sub-agents of a chat: a counter chip next to the model, a modal with each agent's assignment, activity and report.
@@ -1178,7 +1180,7 @@ async function viewChat(taskId) {
 
   function setStatus(status) {
     task.status = status;
-    plan.setActive(isRunning(status));
+    plan.setStatus(status);
     const hints = { WAITING_APPROVAL: tr('The agent is waiting for your decision above'), EXECUTING: tr('The agent is running an action…'), OBSERVING: tr('The agent is reading the result…') };
     if (isRunning(status)) c.setAgent('running', hints[status] || tr('The agent is thinking…'));
     else c.setAgent(RESUMABLE.includes(status) ? 'paused' : 'idle');
@@ -1455,6 +1457,7 @@ async function viewChat(taskId) {
     const ev = { created_at: createdAt };
     switch (event) {
       case 'user.message':
+        plan.set([]); // Also clears stale plans while replaying events from older server versions.
         finishWork();
         lastAgent = false;
         add(h('div', { class: 'msg-user' }, h('div', { class: 'bubble-user' }, p.text)));
