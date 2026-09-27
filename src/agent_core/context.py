@@ -3,7 +3,7 @@ from typing import Any
 
 from mensarium.agent_core.profile import AgentProfile
 from mensarium.contracts.llm import Message
-from mensarium.contracts.protocol import TargetPolicy
+from mensarium.contracts.protocol import AccessMode, TargetPolicy
 
 KEEP_FULL_OBSERVATIONS = 8
 MAX_OBSERVATION_CHARS = 8000
@@ -79,8 +79,12 @@ def build_system_prompt(
     agent_label: str | None = None,
     unattended: bool = False,
     project: dict[str, Any] | None = None,
+    mode: AccessMode = "ask",
 ) -> str:
+    unrestricted = mode == "full" and policy.allow_full_access
     allow = ", ".join(policy.command_allowlist) if policy.command_allowlist else "(none)"
+    if unrestricted:
+        allow = "any installed program, including absolute executable paths"
     root = project["workdir"] if project else (policy.roots[0] if policy.roots else "(none)")
     prompt = (
         f"{profile.instructions.strip()}\n\n"
@@ -90,9 +94,22 @@ def build_system_prompt(
         f"- name: {target_name}\n"
         f"- platform: {platform}\n"
         f"- workspace root (base for relative paths): {root}\n"
-        f"- allowed roots: {', '.join(policy.roots)}\n"
+        f"- allowed roots: {'/ (entire device)' if unrestricted else ', '.join(policy.roots)}\n"
         f"- programs allowed for shell.exec: {allow}\n"
         f"- available tools: {', '.join(tools) or '(none)'}\n"
+    )
+    prompt += (
+        "\n## Access mode: FULL\n"
+        "The user enabled full device access. Device actions do not need confirmation. You may access any path, "
+        "including configuration and secret files when needed for the task, execute any program, use the process "
+        "environment, and run system administration commands (including sudo) within the OS account permissions. "
+        "Do not ask for approval of device actions or claim that workspace roots or program allowlists restrict you. "
+        "OS permissions and unavailable or explicitly disabled tools still apply; this mode does not supply passwords. "
+        "Core tools explicitly marked as requiring confirmation still wait for it.\n"
+        if unrestricted else
+        "\n## Access mode: ASK\n"
+        "Stay within the allowed roots and program allowlist. Secret files and privileged commands are blocked. "
+        "Device actions requiring approval wait for the user.\n"
     )
     if outdated_agent:
         prompt += (
@@ -104,6 +121,10 @@ def build_system_prompt(
         prompt += UNATTENDED_BLOCK
     if project:
         block = FOLDER_BLOCK if project["kind"] == "folder" else PROJECT_BLOCK
+        if unrestricted:
+            block = block.replace("work only here;", "default directory;")
+            block = block.replace("Do not switch branches, do not touch other ", "Keep project edits in this copy by default. Do not switch branches or touch other ")
+            block = block.replace("say so plainly instead of installing toolchains.", "install dependencies or toolchains when needed to complete the user’s task.")
         prompt += block.format(**project)
     if "plugins.find" in tools:
         prompt += (

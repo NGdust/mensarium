@@ -47,7 +47,7 @@ log = logging.getLogger(__name__)
 OBSERVATION_LIMIT = 12000
 ARTIFACT_THRESHOLD = 4000
 REPORT_LIMIT = 6000
-FULL_ACCESS_SINCE = (0, 3, 0)
+FULL_ACCESS_SINCE = (0, 52, 0)
 FULL_ACCESS_ERRORS = {
     "outdated": "full access is not available: the agent on this device is outdated, update it",
     "disabled": "full access is disabled in this device's config (allow_full_access)",
@@ -535,6 +535,7 @@ class Orchestrator:
                     task.get("label"),
                     unattended=bool(task.get("automation_id")) and sum(s["kind"] == "user" for s in steps) == 1,
                     project=project_block,
+                    mode=current["mode"] if full_access(target) == "allowed" else "ask",
                 ),
                 messages=messages,
                 temperature=profile.llm.temperature,
@@ -674,6 +675,9 @@ class Orchestrator:
             return
         target_tools = (target.get("capabilities") or {}).get("tools", [])
         workdir = self.workdirs.get(task_id)
+        mode: AccessMode = (await self._task(task_id))["mode"]
+        if mode == "full" and full_access(target) != "allowed":
+            mode = "ask"
         decision: Decision = evaluate(
             call.tool,
             call.arguments,
@@ -684,6 +688,7 @@ class Orchestrator:
             disabled_tools=target.get("disabled_tools") or [],
             registry=toolbox.registry,
             workdir=workdir,
+            mode=mode,
             projects_root=(target.get("capabilities") or {}).get("projects_root") if workdir else None,
         )
         if project and project["kind"] == "folder" and call.tool.startswith("git."):
@@ -711,7 +716,6 @@ class Orchestrator:
                 "status": "proposed",
             }
         )
-        mode: AccessMode = (await self._task(task_id))["mode"]
         in_core = decision.runs_on == "core"
         if mode == "full" and not in_core and not policy.allow_full_access:
             mode = "ask"

@@ -47,21 +47,21 @@ def _shell_display(a: dict[str, Any]) -> str:
 _SPECS = [
     ToolSpec(
         "files.list",
-        "List files and directories inside an allowed workspace root.",
+        "List files and directories inside the workspace (any device path in Full mode).",
         "read",
         TOOL_ARGS["files.list"],
         lambda a: f"ls {a['path']} (depth {a['depth']})",
     ),
     ToolSpec(
         "files.read",
-        "Read a text file inside an allowed workspace root. Secrets are redacted.",
+        "Read a text file inside the workspace (any device path in Full mode). Secrets are redacted in Ask mode.",
         "read",
         TOOL_ARGS["files.read"],
         lambda a: f"read {a['path']}:{a['start_line']}+{a['max_lines']}",
     ),
     ToolSpec(
         "files.search",
-        "Search file contents (ripgrep) inside an allowed workspace root.",
+        "Search file contents (ripgrep) inside the workspace (any device path in Full mode).",
         "read",
         TOOL_ARGS["files.search"],
         lambda a: f"search {a['query']!r} in {a['path']}" + (f" ({a['glob']})" if a.get("glob") else ""),
@@ -132,7 +132,7 @@ _SPECS = [
     ),
     ToolSpec(
         "files.delete",
-        "Delete one file or an empty directory. Not recursive. Always confirmed by the user.",
+        "Delete one file or an empty directory. Not recursive. Requires confirmation in Ask mode.",
         "destructive",
         TOOL_ARGS["files.delete"],
         lambda a: f"delete {a['path']}",
@@ -153,7 +153,7 @@ _SPECS = [
     ),
     ToolSpec(
         "process.kill",
-        "Stop a process of the device's user by pid (SIGTERM, or SIGKILL with force). Always confirmed by the user.",
+        "Stop a process of the device's user by pid (SIGTERM, or SIGKILL with force). Requires confirmation in Ask mode.",
         "destructive",
         TOOL_ARGS["process.kill"],
         lambda a: f"kill {a['pid']}" + (" -9" if a.get("force") else ""),
@@ -174,8 +174,8 @@ _SPECS = [
     ),
     ToolSpec(
         "shell.exec",
-        "Run one allowlisted program in a workspace directory. No shell: pipes, redirects, `&&`, "
-        "`cd` and globs do not work; use `cwd` instead. Every call requires explicit user approval.",
+        "Run one program in a directory (workspace and program allowlist restrictions apply in Ask mode). No shell: pipes, redirects, `&&`, "
+        "`cd` and globs do not work; use `cwd` instead. Calls require user approval in Ask mode; Full mode executes immediately.",
         "execute",
         TOOL_ARGS["shell.exec"],
         _shell_display,
@@ -183,7 +183,7 @@ _SPECS = [
     ToolSpec(
         "shell.bash",
         "Run a bash script in a workspace directory: pipes, redirects, loops, `&&` and any installed program. "
-        "The user reviews and approves every script; sudo and other privileged commands are refused.",
+        "Ask mode requires approval and refuses privileged commands; Full mode permits any command within OS permissions.",
         "execute",
         TOOL_ARGS["shell.bash"],
         lambda a: f"$ {a['script'] if len(a['script']) <= 200 else a['script'][:200] + '…'}  (cwd: {a['cwd']})"

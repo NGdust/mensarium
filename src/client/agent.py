@@ -249,6 +249,8 @@ class ClientAgent:
             return "policy snapshot mismatch; core must refresh target policy"
         if req.tool not in self.tools:
             return f"tool {req.tool} is not enabled on this target"
+        if req.mode == "full" and not self.cfg.allow_full_access:
+            return "full access is disabled on this device"
         if req.workdir:
             try:
                 self.executor.workdir(req.workdir)
@@ -361,7 +363,7 @@ class ClientAgent:
         else:
             try:
                 workdir = self.executor.workdir(req.workdir) if req.workdir else None
-                output = await self.executor.run(req.tool, req.arguments, workdir)
+                output = await self.executor.run(req.tool, req.arguments, workdir, mode=req.mode)
                 status = "succeeded" if output.exit_code in (0, None) else "failed"
             except ToolError as e:
                 status, error = "failed", str(e)

@@ -422,7 +422,7 @@ def ask_device_access(
 
     full_access = ask(
         questionary.confirm(
-            "Allow full-access mode on this machine (the agent runs commands without asking when a chat is switched to it)?",
+            "Allow full-access mode on this machine (all files and programs, including system commands, without asking, within OS permissions)?",
             default=full_access,
             style=STYLE,
         )

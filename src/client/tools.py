@@ -23,7 +23,7 @@ from mensarium import __version__
 from mensarium.client import desktop
 from mensarium.client.config import ClientConfig
 from mensarium.client.desktop import DesktopError
-from mensarium.contracts.protocol import ToolOutput
+from mensarium.contracts.protocol import AccessMode, ToolOutput
 from mensarium.contracts.tools import (
     AppOpenArgs,
     FilesCopyArgs,
@@ -61,6 +61,7 @@ MAX_READ_BYTES = 2_000_000
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".ruff_cache", ".pytest_cache", "dist", "build", ".next", ".idea"}  # fmt: skip
 SECRET_ENV = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|PRIVATE|CREDENTIAL|_KEY$)", re.I)
 GIT_SAFE_FLAGS = ("-c", "color.ui=never", "-c", "commit.gpgSign=false", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
+_FULL_ACCESS: ContextVar[bool] = ContextVar("mensarium_full_access", default=False)
 _WORKDIR: ContextVar[Path | None] = ContextVar("mensarium_workdir", default=None)
 
 
@@ -82,11 +83,13 @@ class Executor:
         if not p.is_absolute():
             p = (_WORKDIR.get() or self.roots[0]) / p
         resolved = p.resolve()
-        if not any(resolved == r or resolved.is_relative_to(r) for r in self.roots):
+        if not _FULL_ACCESS.get() and not any(resolved == r or resolved.is_relative_to(r) for r in self.roots):
             raise ToolError(f"path {value!r} resolves outside the allowed roots")
         return resolved
 
     def _is_secret(self, path: Path) -> bool:
+        if _FULL_ACCESS.get():
+            return False
         if path.is_relative_to(self.projects_root):
             rel = path.relative_to(self.projects_root)
             return any(part.lower() in GIT_DIRS for part in rel.parts) or is_secret_path(str(rel))
@@ -107,7 +110,10 @@ class Executor:
             return text, False
         return data[:limit].decode(errors="ignore") + "\n...[truncated by target]", True
 
-    async def run(self, tool: str, args: dict[str, Any], workdir: Path | None = None) -> ToolOutput:
+    async def run(self, tool: str, args: dict[str, Any], workdir: Path | None = None, *, mode: AccessMode = "ask") -> ToolOutput:
+        if mode == "full" and not self.cfg.allow_full_access:
+            raise ToolError("full access is disabled on this device")
+        access_token = _FULL_ACCESS.set(mode == "full")
         token = _WORKDIR.set(workdir)
         try:
             handler = {
@@ -148,6 +154,11 @@ class Executor:
                 raise ToolError(str(e)) from e
         finally:
             _WORKDIR.reset(token)
+            _FULL_ACCESS.reset(access_token)
+
+    @staticmethod
+    def _redact(text: str) -> str:
+        return text if _FULL_ACCESS.get() else redact(text)
 
     async def files_list(self, raw: dict[str, Any]) -> ToolOutput:
         a = FilesListArgs.model_validate(raw)
@@ -166,7 +177,7 @@ class Executor:
                     return
                 if e.is_dir():
                     lines.append(f"{prefix}{e.name}/")
-                    if depth > 1 and e.name not in SKIP_DIRS and e.name not in SECRET_DIRS:
+                    if depth > 1 and e.name not in SKIP_DIRS and (e.name not in SECRET_DIRS or _FULL_ACCESS.get()):
                         walk(e, depth - 1, prefix + "  ")
                 else:
                     lines.append(f"{prefix}{e.name}")
@@ -193,7 +204,7 @@ class Executor:
         width = len(str(end))
         body = "\n".join(f"{i:>{width}}| {line}" for i, line in enumerate(chunk, a.start_line))
         header = f"{path} (lines {a.start_line}-{end} of {len(all_lines)})\n"
-        text, truncated = self._limit(header + redact(body))
+        text, truncated = self._limit(header + self._redact(body))
         return ToolOutput(exit_code=0, stdout=text, truncated=truncated or end < len(all_lines))
 
     async def files_search(self, raw: dict[str, Any]) -> ToolOutput:
@@ -206,9 +217,11 @@ class Executor:
                 argv.append("--fixed-strings")
             if a.glob:
                 argv += ["--glob", a.glob]
-            for pat in SECRET_FILE_PATTERNS:
+            if _FULL_ACCESS.get():
+                argv.append("--hidden")
+            for pat in (() if _FULL_ACCESS.get() else SECRET_FILE_PATTERNS):
                 argv += ["--glob", f"!{pat}"]
-            for d in SECRET_DIRS:
+            for d in (() if _FULL_ACCESS.get() else SECRET_DIRS):
                 argv += ["--glob", f"!{d}/"]
             argv += ["--", a.query, str(base)]
             code, out, err = await _run(argv, cwd=base, timeout=60)
@@ -221,7 +234,7 @@ class Executor:
         text = "\n".join(shown) or "(no matches)"
         if len(lines) > a.max_results:
             text += f"\n...[{len(lines) - a.max_results} more matches]"
-        text, truncated = self._limit(redact(text))
+        text, truncated = self._limit(self._redact(text))
         return ToolOutput(exit_code=0, stdout=text, truncated=truncated)
 
     async def _git(self, repo: str, *args: str) -> ToolOutput:
@@ -232,8 +245,8 @@ class Executor:
         if not git:
             raise ToolError("git is not installed")
         code, out, err = await _run([git, *GIT_SAFE_FLAGS, *args], cwd=cwd, timeout=60)
-        text, truncated = self._limit(redact(out))
-        return ToolOutput(exit_code=code, stdout=text, stderr=redact(err), truncated=truncated)
+        text, truncated = self._limit(self._redact(out))
+        return ToolOutput(exit_code=code, stdout=text, stderr=self._redact(err), truncated=truncated)
 
     async def git_status(self, raw: dict[str, Any]) -> ToolOutput:
         a = GitStatusArgs.model_validate(raw)
@@ -256,7 +269,7 @@ class Executor:
             text, is_error = await self.mcp.call(str(raw.get("server")), str(raw.get("tool")), args, self.cfg.limits.max_exec_seconds)
         except McpError as e:
             raise ToolError(str(e)) from e
-        out, truncated = self._limit(redact(text))
+        out, truncated = self._limit(self._redact(text))
         return ToolOutput(exit_code=1 if is_error else 0, stdout=out, truncated=truncated)
 
     # ---- files: metadata and writing -----------------------------------------
@@ -326,12 +339,12 @@ class Executor:
         def walk() -> tuple[list[str], bool]:
             out: list[str] = []
             for root, dirs, files in os.walk(base):
-                dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and d not in SECRET_DIRS and (a.include_hidden or not d.startswith(".")))
+                dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and (d not in SECRET_DIRS or _FULL_ACCESS.get()) and (a.include_hidden or not d.startswith(".")))
                 for name in sorted(files):
                     rel = os.path.relpath(os.path.join(root, name), base)
                     if not a.include_hidden and name.startswith("."):
                         continue
-                    if is_secret_path(rel):
+                    if self._is_secret(base / rel):
                         continue
                     if matcher.match(name if by_name else rel):
                         out.append(rel)
@@ -378,7 +391,7 @@ class Executor:
         updated = text.replace(a.old, a.new) if a.replace_all else text.replace(a.old, a.new, 1)
         await asyncio.to_thread(self._write_atomic, path, updated)
         diff = "".join(difflib.unified_diff(text.splitlines(True), updated.splitlines(True), str(path), str(path), n=2))
-        out, truncated = self._limit(redact(diff))
+        out, truncated = self._limit(self._redact(diff))
         return ToolOutput(exit_code=0, stdout=f"replaced {count if a.replace_all else 1} occurrence(s)\n{out}", truncated=truncated)
 
     async def files_mkdir(self, raw: dict[str, Any]) -> ToolOutput:
@@ -416,7 +429,7 @@ class Executor:
         src, dst = self._pair(a.source, a.destination, a.overwrite)
         dst.parent.mkdir(parents=True, exist_ok=True)
         if src.is_dir():
-            await asyncio.to_thread(shutil.copytree, src, dst, dirs_exist_ok=a.overwrite, ignore=shutil.ignore_patterns(*SECRET_FILE_PATTERNS, *SECRET_DIRS))
+            await asyncio.to_thread(shutil.copytree, src, dst, dirs_exist_ok=a.overwrite, ignore=None if _FULL_ACCESS.get() else shutil.ignore_patterns(*SECRET_FILE_PATTERNS, *SECRET_DIRS))
         else:
             await asyncio.to_thread(shutil.copy2, src, dst)
         return ToolOutput(exit_code=0, stdout=f"copied {src} -> {dst}")
@@ -477,12 +490,12 @@ class Executor:
         text = "PID PPID USER %CPU %MEM ELAPSED COMMAND\n" + "\n".join(shown) if shown else "(no processes match)"
         if len(rows) > a.limit:
             text += f"\n...[{len(rows) - a.limit} more]"
-        text, truncated = self._limit(redact(text))
+        text, truncated = self._limit(self._redact(text))
         return ToolOutput(exit_code=0, stdout=text, truncated=truncated)
 
     async def process_kill(self, raw: dict[str, Any]) -> ToolOutput:
         a = ProcessKillArgs.model_validate(raw)
-        if a.pid in (os.getpid(), os.getppid()):
+        if not _FULL_ACCESS.get() and a.pid in (os.getpid(), os.getppid()):
             raise ToolError("refusing to stop the device agent itself")
         ps = shutil.which("ps")
         if not ps:
@@ -491,7 +504,7 @@ class Executor:
         if code != 0 or not out.strip():
             raise ToolError(f"no process with pid {a.pid}")
         uid, _, command = out.strip().partition(" ")
-        if uid.strip() != str(os.getuid()):
+        if not _FULL_ACCESS.get() and uid.strip() != str(os.getuid()):
             raise ToolError(f"process {a.pid} belongs to another user")
         try:
             os.kill(a.pid, signal.SIGKILL if a.force else signal.SIGTERM)
@@ -515,7 +528,7 @@ class Executor:
         code, out, err = await _run(argv, cwd=self.roots[0], timeout=30)
         if code not in (0, 1):
             raise ToolError(f"{Path(argv[0]).name} failed: {err.strip()[:200]}")
-        text, truncated = self._limit(redact(out.strip() or "(no listening ports visible to this user)"))
+        text, truncated = self._limit(self._redact(out.strip() or "(no listening ports visible to this user)"))
         return ToolOutput(exit_code=0, stdout=text, truncated=truncated)
 
     async def net_http(self, raw: dict[str, Any]) -> ToolOutput:
@@ -539,7 +552,7 @@ class Executor:
         except httpx.HTTPError as e:
             raise ToolError(f"request failed: {e}") from e
         text = "\n".join(head) + "\n\n" + body[: a.max_chars] + ("\n...[truncated]" if len(body) > a.max_chars else "")
-        text, truncated = self._limit(redact(text))
+        text, truncated = self._limit(self._redact(text))
         return ToolOutput(exit_code=0 if resp.status_code < 400 else 1, stdout=text, truncated=truncated)
 
     async def shell_bash(self, raw: dict[str, Any]) -> ToolOutput:
@@ -553,10 +566,10 @@ class Executor:
         if not shell:
             raise ToolError("no bash or sh on this device")
         timeout = min(a.timeout_s, self.cfg.limits.max_exec_seconds)
-        env = {k: v for k, v in os.environ.items() if not SECRET_ENV.search(k)}
+        env = dict(os.environ) if _FULL_ACCESS.get() else {k: v for k, v in os.environ.items() if not SECRET_ENV.search(k)}
         code, out, err = await _run([shell, "-c", a.script], cwd=cwd, timeout=timeout, stdin=a.stdin, env=env)
-        out, t1 = self._limit(redact(out))
-        err, t2 = self._limit(redact(err))
+        out, t1 = self._limit(self._redact(out))
+        err, t2 = self._limit(self._redact(err))
         return ToolOutput(exit_code=code, stdout=out, stderr=err, truncated=t1 or t2)
 
     # ---- desktop -----------------------------------------------------------------
@@ -569,7 +582,7 @@ class Executor:
         return ToolOutput(exit_code=0, stdout=f"screenshot of display {a.display}, {size}, coordinates on it map to screen points.{note}", images=[image])
 
     async def screen_windows(self, raw: dict[str, Any]) -> ToolOutput:
-        text, truncated = self._limit(redact(await desktop.windows()))
+        text, truncated = self._limit(self._redact(await desktop.windows()))
         return ToolOutput(exit_code=0, stdout=text, truncated=truncated)
 
     async def input_mouse(self, raw: dict[str, Any]) -> ToolOutput:
@@ -602,17 +615,17 @@ class Executor:
         argv = shlex.split(a.command)
         if not argv:
             raise ToolError("empty command")
-        allow = self.cfg.command_allowlist
+        allow = ["*"] if _FULL_ACCESS.get() else self.cfg.command_allowlist
         if "*" not in allow and ("/" in argv[0] or argv[0] not in allow):
             raise ToolError(f"program {argv[0]!r} is not in the target command allowlist")
         program = shutil.which(argv[0], path=os.environ.get("PATH"))
         if program is None and "/" not in argv[0]:
             raise ToolError(f"program {argv[0]!r} not found on PATH")
         timeout = min(a.timeout_s, self.cfg.limits.max_exec_seconds)
-        env = {k: v for k, v in os.environ.items() if not SECRET_ENV.search(k)}
+        env = dict(os.environ) if _FULL_ACCESS.get() else {k: v for k, v in os.environ.items() if not SECRET_ENV.search(k)}
         code, out, err = await _run([program or argv[0], *argv[1:]], cwd=cwd, timeout=timeout, stdin=a.stdin, env=env)
-        out, t1 = self._limit(redact(out))
-        err, t2 = self._limit(redact(err))
+        out, t1 = self._limit(self._redact(out))
+        err, t2 = self._limit(self._redact(err))
         return ToolOutput(exit_code=code, stdout=out, stderr=err, truncated=t1 or t2)
 
 
@@ -697,7 +710,7 @@ def _py_search(base: Path, a: FilesSearchArgs, is_secret: Callable[[Path], bool]
     pattern = re.compile(a.query if a.regex else re.escape(a.query))
     out: list[str] = []
     for root, dirs, files in os.walk(base):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and d not in SECRET_DIRS]
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and (d not in SECRET_DIRS or _FULL_ACCESS.get())]
         for name in files:
             if a.glob and not fnmatch.fnmatch(name, a.glob):
                 continue

@@ -17,6 +17,7 @@ lint:
 	MYPYPATH=.dev .venv/bin/mypy -p mensarium
 
 test: lint
+	.venv/bin/python -m unittest discover -s tests -v
 
 schemas:
 	.venv/bin/python -c "from pathlib import Path; from mensarium.contracts.schemas import export; export(Path('schemas'))"

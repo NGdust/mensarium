@@ -329,7 +329,7 @@ const RISK = {
 };
 const MODES = {
   ask: { label: tr('Ask before acting'), icon: 'shield', cls: 'accent', desc: tr('Reads right away. Running programs, changing files, and network access wait for your approval.') },
-  full: { label: tr('Full access'), icon: 'bolt', cls: 'full', desc: tr('The agent does everything without asking. Only sudo and system settings are off-limits.') },
+  full: { label: tr('Full access'), icon: 'bolt', cls: 'full', desc: tr('Any file, program or system command without asking, within OS permissions.') },
 };
 const TEMPLATES = [
   ['cpu', tr('Device resources'), tr('Check the device resources: CPU load, memory, free disk space, uptime. List the top processes by CPU and memory and say whether anything looks off.')],
@@ -837,7 +837,7 @@ function modeSwitch(initial, { target, onPick }) {
         if (key === current) return;
         if (key === 'full' && !await confirmDialog({
           title: tr('Turn on full access?'),
-          text: tr('The agent will run commands, change files, and access the network on “{0}” without asking. You can switch back to approval mode anytime.', target()?.name || tr('the device')),
+          text: tr('The agent will access all files, run any program and system command, and use the network on “{0}” without asking, within the OS account permissions. You can switch back anytime.', target()?.name || tr('the device')),
           action: tr('Turn on'),
         })) return;
         try { await onPick(key); mode = key; render(); } catch (err) { fail(err); }

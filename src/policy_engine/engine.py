@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from mensarium.contracts.protocol import TargetPolicy
+from mensarium.contracts.protocol import AccessMode, TargetPolicy
 from mensarium.contracts.tools import PATH_FIELDS, WRITE_PATH_TOOLS
 from mensarium.shared.redaction import GIT_DIRS, is_secret_path
 from mensarium.tool_runtime.commands import render
@@ -144,6 +144,7 @@ def evaluate(
     registry: Mapping[str, ToolSpec] = REGISTRY,
     workdir: str | None = None,
     projects_root: str | None = None,
+    mode: AccessMode = "ask",
 ) -> Decision:
     """`arguments` and `exec_tool` of an allowed decision are what is sent to the device (or run in Core)."""
     spec = registry.get(tool)
@@ -173,6 +174,7 @@ def evaluate(
             runs_on="core",
         )
 
+    unrestricted = mode == "full" and target_policy.allow_full_access
     exec_tool = tool
     if spec.mcp:
         exec_tool = "mcp.call"
@@ -198,19 +200,21 @@ def evaluate(
             return _deny(f"tool {tool!r} runs through shell.exec, which is disabled for this device")
     if exec_tool not in target_tools:
         return _deny(f"target does not support tool {exec_tool!r}")
-    if not target_policy.roots:
+    roots = ["/"] if unrestricted else target_policy.roots
+    base = workdir or (target_policy.roots[0] if target_policy.roots else "/")
+    if not roots:
         return _deny("target has no allowed roots")
     try:
         for f in PATH_FIELDS.get(exec_tool, ()):
             if args.get(f) is not None:
-                args[f] = _normalize_path(args[f], target_policy.roots, workdir)
+                args[f] = _normalize_path(args[f], roots, base)
     except ValueError as e:
         return _deny(str(e))
 
     risk: Risk = spec.risk
-    if exec_tool in ("files.read", "files.list", "files.search", "files.stat", "files.find") and _is_secret(args["path"], projects_root):
+    if not unrestricted and exec_tool in ("files.read", "files.list", "files.search", "files.stat", "files.find") and _is_secret(args["path"], projects_root):
         return _deny("access to secret files is not allowed")
-    if exec_tool in WRITE_PATH_TOOLS and any(_is_secret(args[f], projects_root) for f in PATH_FIELDS[exec_tool]):
+    if not unrestricted and exec_tool in WRITE_PATH_TOOLS and any(_is_secret(args[f], projects_root) for f in PATH_FIELDS[exec_tool]):
         return _deny("secret files and folders cannot be changed by the agent")
     if exec_tool == "shell.bash":
         risk = max(classify_script(args["script"]), risk, key=RISK_ORDER.index)
@@ -226,19 +230,19 @@ def evaluate(
         program = posixpath.basename(argv[0])
         if program == "cd":
             return _deny("`cd` is not supported; pass the directory in `cwd`")
-        allow = target_policy.command_allowlist
+        allow = ["*"] if unrestricted else target_policy.command_allowlist
         if "*" not in allow and "/" in argv[0]:
             return _deny("run programs by name, not by path")
         if "*" not in allow and program not in allow:
             return _deny(f"program {program!r} is not in the target command allowlist")
         risk = max(classify_command(argv), risk, REGISTRY["shell.exec"].risk, key=RISK_ORDER.index)
-    if risk == "privileged":
+    if risk == "privileged" and not unrestricted:
         return _deny("privileged actions are denied", risk)
 
     return Decision(
         allowed=True,
         risk=risk,
-        requires_approval=risk in required_risks,
+        requires_approval=not unrestricted and risk in required_risks,
         arguments=args,
         display=spec.display(args),
         exec_tool=exec_tool,
