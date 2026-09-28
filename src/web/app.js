@@ -385,15 +385,16 @@ const DEFAULT_FILE_LIMIT_MB = 100;
 
 function closeLayer() { $layer.replaceChildren(); }
 
-function openPopover(anchor, items, cls = '') {
+function openPopover(anchor, items, cls = '', align = 'left') {
   closeLayer();
   const pop = h('div', { class: `popover ${cls}`, role: 'menu' }, items);
   $layer.append(h('div', { style: 'position:fixed;inset:0;z-index:49', onclick: closeLayer }), pop);
   const place = () => {
     const r = anchor.getBoundingClientRect();
     const top = r.top - pop.offsetHeight - 8 > 8 ? r.top - pop.offsetHeight - 8 : r.bottom + 8;
+    const left = align === 'right' ? r.right - pop.offsetWidth : r.left;
     pop.style.top = `${top}px`;
-    pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8))}px`;
+    pop.style.left = `${Math.max(8, Math.min(left, innerWidth - pop.offsetWidth - 8))}px`;
   };
   place();
   return place;
@@ -749,14 +750,14 @@ function ensureAppShell() {
 // ---------- composer ----------
 
 // The round button sends a message; while the agent works it becomes a pulsing stop, on a pause it resumes.
-function composer({ placeholder, chips, above, onSend, onStop, onResume }) {
+function composer({ placeholder, chips, tail, above, onSend, onStop, onResume }) {
   const ta = h('textarea', { rows: 1, placeholder, 'aria-label': placeholder });
   const send = h('button', { class: 'send', disabled: true });
   const notice = h('div', { class: 'composer-notice' }, limitBanner() || '');
   const box = h('div', { class: 'composer' },
     notice,
     h('div', { class: 'composer-input' }, ta),
-    h('div', { class: 'composer-bar' }, chips, h('span', { class: 'spacer' }), send),
+    h('div', { class: 'composer-bar' }, chips, h('span', { class: 'spacer' }), tail, send),
   );
   let mode = 'idle';
   let hint = '';
@@ -996,6 +997,56 @@ function agentsPanel() {
   };
 }
 
+// Chip with the tokens this chat spent (its sub-agents included); the popover breaks them down per model.
+function fmtTokens(n) {
+  const [value, unit] = n >= 1e6 ? [n / 1e6, 'M'] : n >= 1e3 ? [n / 1e3, 'K'] : [n || 0, ''];
+  return `${value.toLocaleString(locale, { maximumFractionDigits: unit && value < 100 ? 1 : 0 })}${unit}`;
+}
+
+function usageMeter(taskId) {
+  let data = null;
+  let timer = null;
+  let place = null;
+  const chip = h('button', { class: 'chip chip-usage', hidden: true, 'aria-haspopup': 'dialog' });
+  const body = h('div', { class: 'usage-body' });
+  const cells = (u) => [u.calls, u.prompt_tokens, u.cached_tokens, u.cache_write_tokens, u.completion_tokens]
+    .map((n, i) => h('td', { title: (n || 0).toLocaleString(locale) }, i ? fmtTokens(n) : String(n || 0)));
+  const render = () => {
+    const total = data.total.prompt_tokens + data.total.completion_tokens;
+    chip.hidden = !data.total.calls;
+    chip.title = tr('Tokens in this chat: {0}', total.toLocaleString(locale));
+    chip.setAttribute('aria-label', chip.title);
+    chip.replaceChildren(icon('gauge'), h('span', { class: 'chip-label' }, fmtTokens(total)));
+    if (!body.isConnected) return;
+    body.replaceChildren(
+      h('div', { class: 'usage-head' }, h('strong', {}, tr('Tokens in this chat')),
+        data.agents ? h('span', { class: 'popover-sub' }, tp('with {0} sub-agent|with {0} sub-agents', data.agents)) : null),
+      h('div', { class: 'usage-scroll' }, h('table', { class: 'usage-table' },
+        h('thead', {}, h('tr', {}, [tr('Model'), tr('Calls'), tr('Input'), tr('From cache'), tr('To cache'), tr('Output')].map((x) => h('th', {}, x)))),
+        h('tbody', {}, data.models.map((m) => h('tr', {},
+          h('td', { title: m.model || '' }, m.model || '—', h('span', { class: 'usage-provider' }, m.provider || '')), cells(m)))),
+        data.models.length > 1 ? h('tfoot', {}, h('tr', {}, h('td', {}, tr('Total')), cells(data.total))) : null)),
+      data.last_prompt_tokens ? h('div', { class: 'usage-last' }, tr('Last request: {0} input tokens', fmtTokens(data.last_prompt_tokens))) : null,
+      h('p', { class: 'usage-note' }, tr('Input is every token the model read, the cached part included. From cache: the repeated part of the history the provider served from its prompt cache, much cheaper than plain input. To cache: what the provider stored for the next steps; Claude Code bills it above plain input.')));
+    place?.();
+  };
+  const refresh = async () => {
+    try { data = await get(`/v1/tasks/${taskId}/usage`); } catch { return; }
+    render();
+  };
+  chip.addEventListener('click', () => {
+    place = openPopover(chip, body, 'usage-pop', 'right');
+    render();
+    refresh();
+  });
+  viewCleanups.push(() => clearTimeout(timer));
+  return {
+    el: chip,
+    refresh,
+    later() { clearTimeout(timer); timer = setTimeout(refresh, 800); },
+  };
+}
+
 // ---------- new chat ----------
 
 async function viewNewChat(projectId = null) {
@@ -1152,9 +1203,11 @@ async function viewChat(taskId) {
   });
   const plan = planStrip(task.plan || []);
   const agents = agentsPanel();
+  const usage = usageMeter(taskId);
   const c = composer({
     placeholder: tr('Reply to the agent'),
     chips: [modeCtl.el, modelCtl.el, agents.el],
+    tail: usage.el,
     above: plan.el,
     onSend: (text) => post(`/v1/tasks/${taskId}/messages`, { input: text }),
     onStop: () => act('pause'),
@@ -1490,6 +1543,7 @@ async function viewChat(taskId) {
         break;
       case 'agent.event':
         handleAgent(p.agent_id, p.event, p.payload || {}, ev, live);
+        if (live && p.event === 'llm.response') usage.later();
         break;
       case 'llm.request':
         stamp(ev);
@@ -1501,6 +1555,7 @@ async function viewChat(taskId) {
           agentMsg(h('div', { class: 'prose', html: markdown(p.text) }));
         }
         stamp(ev);
+        if (live) usage.later();
         break;
       case 'tool_call.denied':
         stamp(ev);
@@ -1562,6 +1617,7 @@ async function viewChat(taskId) {
     };
   };
   connect();
+  usage.refresh();
   viewCleanups.push(() => { closed = true; if (es) es.close(); });
   if (!c.textarea.disabled) c.textarea.focus();
 }

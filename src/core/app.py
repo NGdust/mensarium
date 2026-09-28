@@ -51,7 +51,7 @@ from mensarium.core.plugins import PluginError, PluginManager
 from mensarium.core.projects import ProjectManager
 from mensarium.core.providers import ProviderError, Providers
 from mensarium.core.releases import ReleaseError, fetch_latest, spawn_update, updater
-from mensarium.core.repo import Repo
+from mensarium.core.repo import USAGE_FIELDS, Repo
 from mensarium.core.skills import SkillStore
 from mensarium.llm_providers.router import ProviderRouter
 from mensarium.shared.crypto import fingerprint, load_or_create_private_key, public_key_b64
@@ -1199,6 +1199,19 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         if not t:
             raise HTTPException(404, "task not found")
         return task_view(t)
+
+    @app.get("/v1/tasks/{task_id}/usage")
+    async def task_usage(task_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        if not await c.repo.get_task(task_id):
+            raise HTTPException(404, "task not found")
+        ids = [task_id] + [t["id"] for t in await c.repo.list_children(task_id)]
+        models = await c.repo.usage_by_model(ids)
+        return {
+            "models": models,
+            "total": {k: sum(int(m[k]) for m in models) for k in ("calls", *USAGE_FIELDS)},
+            "last_prompt_tokens": await c.repo.last_prompt_tokens(ids),
+            "agents": len(ids) - 1,
+        }
 
     @app.post("/v1/tasks/{task_id}/mode")
     async def set_mode(task_id: str, body: ModeBody, c: Core = Depends(auth)) -> dict[str, Any]:

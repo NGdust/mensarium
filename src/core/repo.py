@@ -1,12 +1,14 @@
 import json
 from typing import Any
 
+from mensarium.contracts.llm import TokenUsage
 from mensarium.core.db import Database
 from mensarium.shared.crypto import canonical_json, sha256_hex
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import now_iso
 
 TERMINAL_STATUSES = {"SUCCEEDED", "FAILED", "FAILED_RECOVERABLE", "CANCELED", "PAUSED"}
+USAGE_FIELDS = tuple(TokenUsage.model_fields)
 
 
 class Repo:
@@ -144,6 +146,26 @@ class Repo:
 
     async def list_steps(self, task_id: str) -> list[dict[str, Any]]:
         return await self.db.fetchall("SELECT * FROM task_steps WHERE task_id = ? ORDER BY sequence", (task_id,))
+
+    async def usage_by_model(self, task_ids: list[str]) -> list[dict[str, Any]]:
+        """Token usage of the tasks' model calls per provider and model, the most recently used model last."""
+        marks = ",".join("?" for _ in task_ids)
+        return await self.db.fetchall(
+            "SELECT provider, model_id AS model, COUNT(*) AS calls, "
+            + ", ".join(f"COALESCE(SUM(json_extract(usage, '$.{k}')), 0) AS {k}" for k in USAGE_FIELDS)
+            + f", MAX(created_at) AS last_at FROM task_steps WHERE kind = 'llm' AND task_id IN ({marks}) "
+            "GROUP BY provider, model_id ORDER BY last_at",
+            tuple(task_ids),
+        )
+
+    async def last_prompt_tokens(self, task_ids: list[str]) -> int:
+        marks = ",".join("?" for _ in task_ids)
+        row = await self.db.fetchone(
+            "SELECT COALESCE(json_extract(usage, '$.prompt_tokens'), 0) AS n FROM task_steps "
+            f"WHERE kind = 'llm' AND task_id IN ({marks}) ORDER BY created_at DESC LIMIT 1",
+            tuple(task_ids),
+        )
+        return int(row["n"]) if row else 0
 
     async def count_steps(self, task_id: str, kind: str) -> int:
         row = await self.db.fetchone(
