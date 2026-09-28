@@ -765,25 +765,42 @@ function fmtBytes(n) {
 
 const fileKind = (a) => (a.type === 'image' || (a.mime || '').startsWith('image/') ? 'image' : 'fileText');
 
-// One block per attached file: a thumbnail for pictures, an icon with the name and size for the rest.
+// One block per attached file: a small thumbnail for pictures (click opens it large), an icon with the name and
+// size for the rest (click downloads).
 function attachmentList(files) {
   if (!files?.length) return null;
   return h('div', { class: 'attachments' }, files.map((a) => {
     const url = `/v1/artifacts/${a.id}`;
     const image = fileKind(a) === 'image';
-    return h('a', { class: `attachment${image ? ' is-image' : ''}`, href: url, target: '_blank', rel: 'noopener', title: a.name },
+    const body = [
       image ? h('img', { src: url, alt: a.name, loading: 'lazy' }) : icon('fileText'),
       h('span', { class: 'attachment-name' }, a.name),
-      h('span', { class: 'attachment-meta' }, fmtBytes(a.size)));
+      h('span', { class: 'attachment-meta' }, fmtBytes(a.size)),
+    ];
+    if (!image) return h('a', { class: 'attachment', href: url, target: '_blank', rel: 'noopener', title: a.name }, body);
+    return h('button', { class: 'attachment is-image', type: 'button', title: tr('Open the picture'), onclick: () => openPicture(url, a.name) }, body);
   }));
 }
 
-// Dictation through the browser's speech recognition; needs a secure page (https or localhost).
+function openPicture(url, name) {
+  const modal = openModal(
+    h('img', { class: 'picture-full', src: url, alt: name }),
+    h('div', { class: 'picture-foot' }, h('span', { class: 'attachment-name' }, name), h('span', { class: 'spacer' }),
+      h('a', { class: 'btn', href: url, target: '_blank', rel: 'noopener' }, tr('Open in a new tab')),
+      h('button', { class: 'btn', onclick: closeLayer }, tr('Close'))),
+  );
+  modal.classList.add('modal-picture');
+}
+
+// Dictation through the browser's speech recognition. Chrome, Edge and Safari have it; the page must be secure
+// (https or localhost), otherwise the browser never grants the microphone.
 const SpeechApi = window.SpeechRecognition || window.webkitSpeechRecognition;
-const canDictate = () => Boolean(SpeechApi && window.isSecureContext);
+const dictationProblem = () => (!window.isSecureContext ? tr('The microphone works only on a secure page: open the interface over https or from localhost.')
+  : !SpeechApi ? tr('This browser has no speech recognition; use Chrome, Edge or Safari.') : '');
 
 function dictation(ta, onChange) {
-  const btn = h('button', { class: 'mic', type: 'button', title: tr('Dictate'), 'aria-label': tr('Dictate'), 'aria-pressed': 'false' }, icon('mic'));
+  const problem = dictationProblem();
+  const btn = h('button', { class: `mic${problem ? ' unavailable' : ''}`, type: 'button', title: problem || tr('Dictate'), 'aria-label': tr('Dictate'), 'aria-pressed': 'false' }, icon('mic'));
   let rec = null;
   let base = '';
   const stop = () => { rec?.stop(); };
@@ -794,6 +811,7 @@ function dictation(ta, onChange) {
     btn.title = tr('Dictate');
   };
   const start = () => {
+    if (problem) { toast(problem, true); return; }
     rec = new SpeechApi();
     rec.lang = locale;
     rec.continuous = true;
@@ -828,12 +846,12 @@ function composer({ placeholder, chips, tail, above, onSend, onStop, onResume })
   const picker = h('input', { type: 'file', multiple: true, hidden: true, 'aria-hidden': 'true' });
   const attach = h('button', { class: 'icon-btn attach', type: 'button', title: tr('Attach files'), 'aria-label': tr('Attach files'), onclick: () => picker.click() }, icon('paperclip'));
   const strip = h('div', { class: 'attach-strip' });
-  const mic = canDictate() ? dictation(ta, () => { grow(); sync(); }) : null;
+  const mic = dictation(ta, () => { grow(); sync(); });
   const box = h('div', { class: 'composer' },
     notice,
     strip,
     h('div', { class: 'composer-input' }, ta),
-    h('div', { class: 'composer-bar' }, attach, chips, h('span', { class: 'spacer' }), tail, mic?.el, send),
+    h('div', { class: 'composer-bar' }, attach, chips, h('span', { class: 'spacer' }), tail, mic.el, send),
     picker,
   );
   let mode = 'idle';
@@ -856,7 +874,7 @@ function composer({ placeholder, chips, tail, above, onSend, onStop, onResume })
     send.disabled = busy || (a === 'send' && !ta.value.trim() && !files.length);
     ta.disabled = mode === 'running';
     attach.disabled = busy || mode === 'running';
-    if (mic) mic.disabled = busy || mode === 'running';
+    mic.disabled = busy || mode === 'running';
     ta.placeholder = mode === 'running' ? hint : mode === 'paused' ? tr('Resume the agent or write what to do next') : placeholder;
   };
   const grow = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, 240)}px`; };
@@ -910,7 +928,7 @@ function composer({ placeholder, chips, tail, above, onSend, onStop, onResume })
   const submit = () => {
     const text = ta.value.trim();
     if ((!text && !files.length) || mode === 'running' || busy) return;
-    mic?.stop();
+    mic.stop();
     return run(async () => {
       const ids = [];
       for (const f of files) ids.push(await upload(f));

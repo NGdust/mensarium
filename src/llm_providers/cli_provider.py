@@ -5,6 +5,7 @@ forced into a JSON object by the CLI's schema option, then turned into a native 
 session: each step resumes it with only the messages it has not seen, so the CLI serves the rest from its cache."""
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import json
@@ -74,7 +75,27 @@ FORMAT_RULES = (
 )
 
 
-def _content_text(content: str | list[dict[str, Any]] | None) -> str:
+Image = tuple[str, str]  # (media type, base64 data)
+
+
+def _image(part: dict[str, Any]) -> Image | None:
+    url = str((part.get("image_url") or {}).get("url") or "")
+    if not url.startswith("data:") or ";base64," not in url:
+        return None
+    media, data = url[5:].split(";base64,", 1)
+    return media or "image/png", data
+
+
+def collect_images(messages: list[Message]) -> list[Image]:
+    """Pictures in the messages, in transcript order; the transcript refers to them as [image N]."""
+    out: list[Image] = []
+    for m in messages:
+        if isinstance(m.content, list):
+            out += [img for part in m.content if part.get("type") == "image_url" and (img := _image(part))]
+    return out
+
+
+def _content_text(content: str | list[dict[str, Any]] | None, counter: list[int] | None = None) -> str:
     if content is None:
         return ""
     if isinstance(content, str):
@@ -84,7 +105,11 @@ def _content_text(content: str | list[dict[str, Any]] | None) -> str:
         if part.get("type") == "text":
             parts.append(str(part.get("text", "")))
         elif part.get("type") == "image_url":
-            parts.append("[image omitted: this provider cannot see images]")
+            if counter is not None and _image(part):
+                counter[0] += 1
+                parts.append(f"[image {counter[0]}: attached to this request]")
+            else:
+                parts.append("[image omitted: this provider cannot see images]")
     return "\n".join(parts)
 
 
@@ -99,9 +124,10 @@ def render_tools(tools: list[ToolDefinition]) -> str:
 
 def render_transcript(messages: list[Message]) -> str:
     out = []
+    counter = [0]
     for m in messages:
         if m.role == "user":
-            out.append(f"### User\n{_content_text(m.content)}")
+            out.append(f"### User\n{_content_text(m.content, counter)}")
         elif m.role == "assistant":
             calls = m.tool_calls or []
             if calls:
@@ -320,7 +346,7 @@ class CliProvider:
             try:
                 resp = await self._call(
                     model, system, prompt, timeout, resume=session.id if session else None, persist=bool(key),
-                    on_text=text if on_text and not streamed else None,
+                    on_text=text if on_text and not streamed else None, images=collect_images(unseen),
                 )  # fmt: skip
             except LLMError as e:
                 if session:
@@ -378,10 +404,10 @@ class CliProvider:
 
     async def _call(
         self, model: str, system: str, prompt: str, timeout_s: int, resume: str | None = None, persist: bool = False,
-        on_text: Callable[[str], None] | None = None,
+        on_text: Callable[[str], None] | None = None, images: list[Image] | None = None,
     ) -> ModelResponse:
         """One CLI run. `resume` continues that session with `prompt`; `persist` keeps a new session for resuming;
-        `on_text` gets the answer text as it is written, when the CLI can stream it."""
+        `on_text` gets the answer text as it is written, when the CLI can stream it; `images` go with the prompt."""
         raise NotImplementedError
 
     async def fetch_limits(self) -> list[LimitWindow] | None:
@@ -430,7 +456,7 @@ class ClaudeCodeProvider(CliProvider):
 
     async def _call(
         self, model: str, system: str, prompt: str, timeout_s: int, resume: str | None = None, persist: bool = False,
-        on_text: Callable[[str], None] | None = None,
+        on_text: Callable[[str], None] | None = None, images: list[Image] | None = None,
     ) -> ModelResponse:
         # No --json-schema: it registers a tool, and with any tool present the model starts calling our action names
         # as functions. With no tools at all it can only write text, which holds the JSON object.
@@ -441,6 +467,12 @@ class ClaudeCodeProvider(CliProvider):
         ]  # fmt: skip
         if on_text:
             args.append("--include-partial-messages")
+        if images:
+            # Pictures travel only as content blocks of a stream-json user message.
+            args += ["--input-format", "stream-json"]
+            content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+            content += [{"type": "image", "source": {"type": "base64", "media_type": media, "data": data}} for media, data in images]
+            prompt = json.dumps({"type": "user", "message": {"role": "user", "content": content}}) + "\n"
         new_session = None if resume or not persist else str(uuid.uuid4())
         if resume:
             args += ["--resume", resume]
@@ -632,9 +664,9 @@ class CodexCliProvider(CliProvider):
 
     async def _call(
         self, model: str, system: str, prompt: str, timeout_s: int, resume: str | None = None, persist: bool = False,
-        on_text: Callable[[str], None] | None = None,
+        on_text: Callable[[str], None] | None = None, images: list[Image] | None = None,
     ) -> ModelResponse:
-        """`codex exec --json` reports whole items only, so the answer is not streamed."""
+        """`codex exec --json` reports whole items only, so the answer is not streamed; pictures go as `--image` files."""
         if not self.models or model not in self.models:
             await self.list_models()
         if not model:
@@ -648,9 +680,17 @@ class CodexCliProvider(CliProvider):
         schema_file = workdir / "answer-schema.json"
         schema_file.write_text(json.dumps(ANSWER_SCHEMA))
         last = workdir / f"last-{new_id('msg')}.txt"
+        pictures = []
+        for media, data in images or []:
+            path = workdir / f"img-{new_id('img')}.{media.rsplit('/', 1)[-1].replace('jpeg', 'jpg')}"
+            try:
+                path.write_bytes(base64.b64decode(data))
+            except (ValueError, TypeError):
+                continue
+            pictures += ["--image", str(path)]
         common = [
             "--json", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "-m", model,
-            "--output-last-message", str(last), "--output-schema", str(schema_file),
+            "--output-last-message", str(last), "--output-schema", str(schema_file), *pictures,
         ]  # fmt: skip
         if resume:
             args = ["exec", "resume", resume, *common, "-c", 'sandbox_mode="read-only"', "-"]
@@ -658,7 +698,11 @@ class CodexCliProvider(CliProvider):
         else:
             args = ["exec", *common, *([] if persist else ["--ephemeral"]), "--color", "never", "-s", "read-only", "-C", str(workdir), "-"]
             stdin = "## System instructions\n" + system + "\n\n## Conversation\n" + prompt
-        code, out, err = await self._exec(args, stdin, timeout_s)
+        try:
+            code, out, err = await self._exec(args, stdin, timeout_s)
+        finally:
+            for item in pictures[1::2]:
+                Path(item).unlink(missing_ok=True)
         usage: dict[str, Any] = {}
         failure = thread = ""
         for line in out.splitlines():

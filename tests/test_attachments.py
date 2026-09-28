@@ -9,6 +9,7 @@ from mensarium.contracts.llm import Message
 from mensarium.core.attachments import MAX_TEXT_CHARS, AttachmentError, AttachmentStore, extract_text, safe_name, sniff
 from mensarium.core.db import Database
 from mensarium.core.repo import Repo
+from mensarium.llm_providers.cli_provider import collect_images, render_transcript
 from mensarium.shared.timeutil import now_iso
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
@@ -189,3 +190,16 @@ class ContextTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class CliImagesTests(unittest.TestCase):
+    def test_transcript_numbers_pictures_and_collects_them(self):
+        messages = [
+            Message(role="user", content=[{"type": "text", "text": "Look:"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]),
+            Message(role="assistant", content="ok"),
+            Message(role="user", content=[{"type": "text", "text": "And this"}, {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,BBBB"}}, {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}}]),
+        ]
+        text = render_transcript(messages)
+        self.assertIn("Look:\n[image 1: attached to this request]", text)
+        self.assertIn("And this\n[image 2: attached to this request]\n[image omitted", text)
+        self.assertEqual(collect_images(messages), [("image/png", "AAAA"), ("image/jpeg", "BBBB")])
