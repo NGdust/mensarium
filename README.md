@@ -4,7 +4,7 @@
 
 Mensarium is a self-hosted agent harness. You install **Core** on a server or a laptop, pair your other computers, and give the agent work from a browser or Telegram. The model never touches a machine directly: it only proposes an action, Core checks it against a policy, asks you when the action changes something, and sends the machine a signed request. Everything, from chats to keys and the activity log, stays on your hardware.
 
-<img src="landing/shots/hero-approval.jpg" alt="A chat on the device forge: the agent read the backup log and the cron file and waits for approval to edit it" width="100%">
+<img src="landing/shots/architecture.png" alt="Core on atlas in the middle: tasks come from the browser and approvals from Telegram, signed requests go to the machines atlas, studio, forge and pi, and the model is Claude Code, Codex, Ollama or an OpenAI-compatible API" width="100%">
 
 - **One place for the agent.** Core talks to the model, keeps memory, plugins, skills, automations and a hash-chained activity log, and serves the web UI.
 - **All your machines.** Mac and Linux machines join with a one-time code. They dial out to Core, open no ports, and run only requests Core signed.
