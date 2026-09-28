@@ -1183,7 +1183,10 @@ function contextView(ctx) {
           h('span', { class: 'ctx-name' }, tr(CONTEXT_PARTS[p.key] || p.key), p.count ? h('span', { class: 'ctx-count' }, p.count) : null),
           h('span', { class: 'ctx-tokens' }, fmtTokens(p.tokens)),
           h('span', { class: 'ctx-pct' }, pct(p.tokens)))))),
-    h('div', { class: 'ctx-foot' }, tr('History is compacted past {0} tokens', fmtTokens(ctx.history_limit))));
+    h('div', { class: 'ctx-foot' },
+      h('span', {}, tr('History is compacted past {0} tokens', fmtTokens(ctx.history_limit))),
+      ctx.window ? h('span', { class: ctx.tokens > ctx.window ? 'ctx-window over' : 'ctx-window', title: ctx.window.toLocaleString(locale) },
+        tr(ctx.tokens > ctx.window ? 'Does not fit the model window of {0}' : 'Model window {0}', fmtTokens(ctx.window))) : null));
   const focus = (key) => view.querySelectorAll('[data-part]').forEach((e) => e.classList.toggle('dim', Boolean(key) && e.dataset.part !== key));
   view.addEventListener('mouseover', (e) => focus(e.target.closest('[data-part]')?.dataset.part));
   view.addEventListener('mouseleave', () => focus(null));

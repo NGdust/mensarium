@@ -131,6 +131,20 @@ def codex_models(command: str) -> list[str]:
     return list(dict.fromkeys(ordered))
 
 
+def codex_context_windows() -> dict[str, int]:
+    """Tokens per request of the account's Codex models: the catalog Codex caches, cut to the share it lets a turn use."""
+    path = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "models_cache.json"
+    try:
+        models = json.loads(path.read_text()).get("models") or []
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return {
+        str(m["slug"]): int(m["context_window"]) * int(m.get("effective_context_window_percent") or 100) // 100
+        for m in models
+        if isinstance(m, dict) and m.get("slug") and m.get("context_window")
+    }
+
+
 def codex_config_model() -> str:
     cfg = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "config.toml"
     if cfg.exists():

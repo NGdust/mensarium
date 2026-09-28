@@ -14,6 +14,7 @@ from mensarium.agent_core.context import (
     build_messages,
     build_system_prompt,
     context_parts,
+    fit_history,
     has_images,
     strip_images,
 )
@@ -556,28 +557,34 @@ class Orchestrator:
             await self._set_status(task_id, "PLANNING")
             llm_steps += 1
             steps = await self.repo.list_steps(task_id)
-            messages = build_messages(steps, profile.llm.max_context_tokens, await self._recent_images(steps))
-            if has_images(messages) and client.vision_model:
-                model = client.vision_model
+            images = await self._recent_images(steps)
             instructions = self.instructions.prompt_files()
             tool_defs = [toolbox.registry[t].definition() for t in available]
+            system = build_system_prompt(
+                profile,
+                target["name"],
+                target["platform"],
+                policy,
+                available,
+                skills,
+                memory,
+                outdated,
+                task.get("label"),
+                unattended=bool(task.get("automation_id")) and sum(s["kind"] == "user" for s in steps) == 1,
+                project=project_block,
+                mode=current["mode"] if full_access(target) == "allowed" else "ask",
+                instructions=instructions,
+            )
+            messages = build_messages(steps, profile.llm.max_context_tokens, images)
+            if has_images(messages) and client.vision_model:
+                model = client.vision_model
+            window = await client.context_window(model)
+            history = fit_history(profile.llm.max_context_tokens, window, system, tool_defs, profile.llm.max_output_tokens)
+            if history < profile.llm.max_context_tokens:
+                messages = build_messages(steps, history, images)
             request = ChatRequest(
                 model=model,
-                system=build_system_prompt(
-                    profile,
-                    target["name"],
-                    target["platform"],
-                    policy,
-                    available,
-                    skills,
-                    memory,
-                    outdated,
-                    task.get("label"),
-                    unattended=bool(task.get("automation_id")) and sum(s["kind"] == "user" for s in steps) == 1,
-                    project=project_block,
-                    mode=current["mode"] if full_access(target) == "allowed" else "ask",
-                    instructions=instructions,
-                ),
+                system=system,
                 messages=messages,
                 temperature=profile.llm.temperature,
                 max_output_tokens=profile.llm.max_output_tokens,
@@ -585,8 +592,7 @@ class Orchestrator:
                 metadata={"task_id": task_id, "trace_id": task["trace_id"]},
             )
             context = context_parts(
-                request.system, tool_defs, set(toolbox.owners), request.messages, instructions, skills, memory,
-                profile.llm.max_context_tokens,
+                request.system, tool_defs, set(toolbox.owners), request.messages, instructions, skills, memory, history, window
             )
             llm_request = await self.bus.emit(task_id, "llm.request", {"step": llm_steps})
             draft = self.bus.draft(task_id, llm_request["seq"])

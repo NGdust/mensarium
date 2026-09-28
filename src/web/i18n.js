@@ -55,6 +55,8 @@ const RU = {
   'Chat history': 'История чата',
   'Free until compaction': 'Свободно до сжатия',
   'History is compacted past {0} tokens': 'История сжимается, когда превысит {0} токенов',
+  'Model window {0}': 'Окно модели {0}',
+  'Does not fit the model window of {0}': 'Не помещается в окно модели ({0})',
   'Report': 'Отчёт',
   '{0} agents, {1} running': 'Агентов: {0}, работают: {1}',
   '{0} agent|{0} agents': '{0} агент|{0} агента|{0} агентов',

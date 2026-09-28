@@ -16,6 +16,8 @@ INSTRUCTION_FILE_CHARS = 20000
 INSTRUCTIONS_PROMPT_CHARS = 60000
 MAX_AGENTS = 4
 CHARS_PER_TOKEN = 4
+WINDOW_MARGIN = 0.1
+MIN_HISTORY_TOKENS = 2000
 
 SUBAGENT_BLOCK = (
     "## You are a sub-agent named \"{label}\"\n"
@@ -412,6 +414,7 @@ def context_parts(
     skills: list[tuple[str, str]],
     memory: str | None,
     max_context_tokens: int,
+    window: int | None = None,
 ) -> dict[str, Any]:
     """Characters of each part of a model request, kept with its step to show what fills the chat's context."""
     plugins = [t for t in tools if t.name in plugin_tools]
@@ -430,7 +433,19 @@ def context_parts(
             {"key": "messages", "chars": _chars(messages)},
         ],
         "history_budget": max_context_tokens * CHARS_PER_TOKEN,
+        "window": window,
     }
+
+
+def fit_history(max_context_tokens: int, window: int | None, system: str, tools: list[ToolDefinition], max_output_tokens: int) -> int:
+    """History budget in tokens: the profile's, cut so the whole request and the answer fit the model's window.
+
+    Estimated at CHARS_PER_TOKEN with WINDOW_MARGIN of the window to spare. Never below MIN_HISTORY_TOKENS, so a model
+    whose window cannot even hold the system prompt and tools still gets the latest messages."""
+    if not window:
+        return max_context_tokens
+    room = int(window * (1 - WINDOW_MARGIN)) - max_output_tokens - (len(system) + _tool_chars(tools)) // CHARS_PER_TOKEN
+    return max(MIN_HISTORY_TOKENS, min(max_context_tokens, room))
 
 
 def _tool_chars(tools: list[ToolDefinition]) -> int:
@@ -450,5 +465,6 @@ def context_usage(context: dict[str, Any], prompt_tokens: int) -> dict[str, Any]
         "limit": round((chars - history + max(history, context["history_budget"])) * rate),
         "history_limit": round(context["history_budget"] * rate),
         "estimated": not prompt_tokens,
+        "window": context.get("window"),
         "parts": [{"key": p["key"], "count": p.get("count"), "tokens": round(p["chars"] * rate)} for p in parts],
     }

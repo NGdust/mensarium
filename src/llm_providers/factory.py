@@ -48,4 +48,5 @@ def build_provider(
         timeout_s=timeout_s,
         max_retries=max_retries,
         vision_model=vision_model,
+        kind=kind or name,
     )

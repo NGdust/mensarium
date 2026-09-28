@@ -1,8 +1,9 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from mensarium.agent_core.context import build_system_prompt, context_parts, context_usage
+from mensarium.agent_core.context import MIN_HISTORY_TOKENS, build_system_prompt, context_parts, context_usage, fit_history
 from mensarium.agent_core.profile import builtin_profiles
 from mensarium.contracts.llm import Message, ToolDefinition
 from mensarium.contracts.protocol import TargetPolicy
@@ -66,7 +67,8 @@ class ContextBreakdownTests(unittest.TestCase):
         self.assertEqual(sum(p["chars"] for k, p in parts.items() if k not in ("tools", "plugins", "messages")), len(system))
         self.assertEqual((parts["tools"]["count"], parts["plugins"]["count"], parts["memory"]["count"]), (2, 1, 2))
         self.assertEqual(parts["messages"]["chars"], len("hello") + len("hi"))
-        self.assertEqual(ctx["history_budget"], 4000)
+        self.assertEqual((ctx["history_budget"], ctx["window"]), (4000, None))
+        self.assertEqual(context_parts(system, tools, set(), messages, [], [], None, 1000, 131072)["window"], 131072)
         bare = context_parts("prompt", [], set(), [], [], [], None, 1000)
         self.assertEqual([p["chars"] for p in bare["parts"]], [6, 0, 0, 0, 0, 0, 0])
 
@@ -77,8 +79,18 @@ class ContextBreakdownTests(unittest.TestCase):
         self.assertEqual([p["tokens"] for p in usage["parts"]], [1500, 500, 2000])
         self.assertEqual((usage["tokens"], usage["limit"], usage["history_limit"], usage["estimated"]), (4000, 8000, 6000, False))
         self.assertEqual(usage["parts"][1]["count"], 5)
-        estimate = context_usage({**ctx, "history_budget": 2000}, 0)
-        self.assertEqual((estimate["tokens"], estimate["limit"], estimate["estimated"]), (2000, 2000, True))
+        self.assertIsNone(usage["window"])
+        estimate = context_usage({**ctx, "history_budget": 2000, "window": 8192}, 0)
+        self.assertEqual((estimate["tokens"], estimate["limit"], estimate["estimated"], estimate["window"]), (2000, 2000, True, 8192))
+
+    def test_history_is_cut_to_the_model_window(self):
+        tools = [ToolDefinition(name="files.read", description="d" * 3950, parameters={})]
+        system = "s" * 36000
+        self.assertEqual(fit_history(12000, None, system, tools, 2000), 12000)
+        self.assertEqual(fit_history(12000, 1_000_000, system, tools, 2000), 12000)
+        fixed = (len(system) + len(json.dumps(tools[0].model_dump(), ensure_ascii=False))) // 4
+        self.assertEqual(fit_history(12000, 20000, system, tools, 2000), 18000 - 2000 - fixed)
+        self.assertEqual(fit_history(12000, 8192, system, tools, 2000), MIN_HISTORY_TOKENS)
 
 
 if __name__ == "__main__":

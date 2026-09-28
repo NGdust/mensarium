@@ -87,6 +87,9 @@ class ProviderRouter:
     async def healthcheck(self) -> ProviderHealth:
         return await self.current.healthcheck()
 
+    async def context_window(self, model: str, provider_id: str | None = None) -> int | None:
+        return await self.get(provider_id).context_window(model)
+
     async def aclose(self) -> None:
         for handle in self._retiring:
             handle.cancel()

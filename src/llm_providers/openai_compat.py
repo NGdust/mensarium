@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
@@ -25,6 +26,8 @@ from mensarium.shared.toolargs import parse_tool_arguments
 log = logging.getLogger(__name__)
 
 RETRY_STATUS = {429, 500, 502, 503, 504}
+WINDOW_TTL_S = 600
+WINDOW_MISS_TTL_S = 60
 
 
 def _parse_duration(text: str) -> float | None:
@@ -122,8 +125,10 @@ class OpenAICompatibleProvider:
         timeout_s: int = 90,
         max_retries: int = 2,
         vision_model: str | None = None,
+        kind: str = "openai_compatible",
     ) -> None:
         self.name = name
+        self.kind = kind
         self.base_url = base_url.rstrip("/")
         self.default_model = default_model
         self.vision_model = vision_model
@@ -135,6 +140,7 @@ class OpenAICompatibleProvider:
         self.limits_at: str | None = None
         self.limits_source = ""
         self._model_limits: dict[str, list[LimitWindow]] = {}
+        self._windows: dict[str, tuple[int | None, float]] = {}
 
     async def _request(self, method: str, path: str, model: str | None = None, **kwargs: Any) -> dict[str, Any]:
         attempt = 0
@@ -157,6 +163,44 @@ class OpenAICompatibleProvider:
     async def list_models(self) -> list[ModelInfo]:
         data = await self._request("GET", "/models")
         return [ModelInfo(id=m["id"]) for m in data.get("data", [])]
+
+    async def context_window(self, model: str) -> int | None:
+        """Tokens the model takes per request as the server reports it, None when it does not say; cached a while."""
+        model = model or self.default_model
+        window, at = self._windows.get(model, (None, float("-inf")))
+        if time.monotonic() - at < (WINDOW_TTL_S if window else WINDOW_MISS_TTL_S):
+            return window
+        try:
+            window = await self._probe_window(model)
+        except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+            window = None
+        self._windows[model] = (window, time.monotonic())
+        return window
+
+    async def _probe_window(self, model: str) -> int | None:
+        root = self.base_url.removesuffix("/v1")
+        if self.kind == "ollama_local":
+            # The size the server loaded the model with, which is usually far below the model's own maximum.
+            running = (await self._probe(f"{root}/api/ps")).get("models") or []
+            return next((int(m["context_length"]) for m in running if model in (m.get("name"), m.get("model")) and m.get("context_length")), None)
+        if self.kind == "ollama_cloud":
+            info = (await self._probe(f"{root}/api/show", {"model": model})).get("model_info") or {}
+            return next((int(v) for k, v in info.items() if k.endswith(".context_length")), None)
+        if self.kind == "llama_cpp":
+            settings = (await self._probe(f"{root}/props")).get("default_generation_settings") or {}
+            return int(settings.get("n_ctx") or 0) or None
+        if self.kind == "lmstudio":
+            info = await self._probe(f"{root}/api/v0/models/{model}")
+            return int(info.get("loaded_context_length") or info.get("max_context_length") or 0) or None
+        listed = (await self._probe("/models")).get("data") or []
+        entry: dict[str, Any] = next((m for m in listed if m.get("id") == model), {})
+        return next((int(entry[k]) for k in ("context_length", "max_model_len", "context_window") if entry.get(k)), None)
+
+    async def _probe(self, url: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        resp = await (self._client.post(url, json=body, timeout=10) if body else self._client.get(url, timeout=10))
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else {}
 
     async def healthcheck(self) -> ProviderHealth:
         try:

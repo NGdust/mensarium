@@ -559,7 +559,9 @@ a.chip:hover { text-decoration: none; }
 .ctx-tokens { color: var(--text); }
 .ctx-pct { color: var(--muted); }
 .ctx .dim { opacity: 0.22; }
-.ctx-foot { margin-top: 12px; font-size: 12px; color: var(--muted); }
+.ctx-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; margin-top: 12px; font-size: 12px; color: var(--muted); }
+.ctx-window { color: var(--text-2); }
+.ctx-window.over { color: var(--danger); }
 @media (max-width: 520px) {
   .usage-table th, .usage-table td { padding: 5px 3px; }
   .usage-table td:first-child { max-width: 92px; }

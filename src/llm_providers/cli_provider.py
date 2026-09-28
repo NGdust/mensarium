@@ -37,6 +37,7 @@ from mensarium.contracts.llm import (
 from mensarium.llm_providers.base import LLMError
 from mensarium.llm_providers.local_cli import (
     CLAUDE_MODELS,
+    codex_context_windows,
     codex_models,
     codex_rpc,
 )
@@ -247,10 +248,14 @@ class CliProvider:
         self.limits_source = ""
         self._workdir: str | None = None
         self.sessions: OrderedDict[str, CliSession] = OrderedDict()
+        self.windows: dict[str, int] = {}
 
     @property
     def base_url(self) -> str:
         return self.command
+
+    async def context_window(self, model: str) -> int | None:
+        return self.windows.get(model or self.default_model)
 
     def workdir(self) -> str:
         """An empty directory the agent runs in, so it sees nothing of the Core host even if it looks around."""
@@ -444,11 +449,15 @@ class ClaudeCodeProvider(CliProvider):
         else:
             args.append("--no-session-persistence")
         try:
-            return await self._run_claude(args, prompt, timeout_s, on_text)
+            resp = await self._run_claude(args, prompt, timeout_s, on_text)
         except LLMError:
             if new_session:
                 self._discard(new_session)
             raise
+        usage = resp.raw_provider_response.get("modelUsage") or {}
+        if window := max((int(u.get("contextWindow") or 0) for u in usage.values() if isinstance(u, dict)), default=0):
+            self.windows[model] = window
+        return resp
 
     async def _run_claude(self, args: list[str], prompt: str, timeout_s: int, on_text: Callable[[str], None] | None = None) -> ModelResponse:
         stream = AnswerStream(on_text) if on_text else None
@@ -580,6 +589,12 @@ class CodexCliProvider(CliProvider):
         except (OSError, RuntimeError) as e:
             raise LLMError(f"cannot discover Codex models: {e}") from e
         return [ModelInfo(id=m) for m in self.models]
+
+    async def context_window(self, model: str) -> int | None:
+        model = model or self.default_model or (self.models[0] if self.models else "")
+        if model not in self.windows:
+            self.windows.update(await asyncio.to_thread(codex_context_windows))
+        return self.windows.get(model)
 
     def login_status(self) -> tuple[bool, str]:
         import subprocess
