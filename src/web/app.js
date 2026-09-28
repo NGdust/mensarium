@@ -1075,7 +1075,7 @@ function usageMeter(taskId) {
     chip.replaceChildren(icon('gauge'), h('span', { class: 'chip-label' }, fmtTokens(total)));
     if (!body.isConnected) return;
     body.replaceChildren(
-      data.context ? contextView(data.context) : null,
+      ...(data.context ? [contextView(data.context)] : []),
       h('div', { class: 'usage-head' }, h('strong', {}, tr('Tokens in this chat')),
         data.agents ? h('span', { class: 'popover-sub' }, tp('with {0} sub-agent|with {0} sub-agents', data.agents)) : null),
       h('div', { class: 'usage-scroll' }, h('table', { class: 'usage-table' },
