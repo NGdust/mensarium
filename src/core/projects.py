@@ -198,6 +198,20 @@ class ProjectManager:
             raise ProjectError(status.detail or "cannot read the changes")
         return {"ready": True, **status.data}
 
+    async def revert(self, task: dict[str, Any], path: str) -> None:
+        if not task.get("project_id") or task.get("parent_id") or not task.get("base_sha"):
+            raise ProjectError("this chat has no working copy")
+        target_id = str(task["target_id"])
+        self._supports(await self.repo.get_target(target_id))
+        if not self.can(target_id, "revert"):
+            raise ProjectError("this device's client is outdated; update it to revert files")
+        try:
+            status = await self._op(target_id, str(task["project_id"]), str(task["id"]), "revert", {"base_sha": task["base_sha"], "path": path}, DIFF_TIMEOUT_S)
+        except TargetUnavailable as e:
+            raise ProjectError(str(e)) from e
+        if status.state != "ok":
+            raise ProjectError(status.detail or "cannot revert the file")
+
     async def docs(self, project_id: str) -> dict[str, Any]:
         p = await self.get(project_id)
         target = self._supports(await self.repo.get_target(str(p["source_target_id"])))

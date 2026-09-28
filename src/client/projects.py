@@ -23,7 +23,7 @@ from mensarium.contracts.projects import (
     ProjectSnapshotStatus,
 )
 from mensarium.shared.paths import ensure_private_dir, mensarium_home
-from mensarium.shared.redaction import SECRET_DIRS
+from mensarium.shared.redaction import SECRET_DIRS, is_secret_path
 
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "Mensarium",
@@ -241,7 +241,7 @@ class ProjectHost:
             return status
         handler = {
             "browse": self._browse, "checkout": self._checkout, "commit": self._commit, "status": self._status, "remove": self._remove,
-            "branches": self._branches, "diff": self._diff, "docs": self._docs,
+            "branches": self._branches, "diff": self._diff, "docs": self._docs, "revert": self._revert,
         }[req.op]
         lock = contextlib.nullcontext() if req.op in ("browse", "branches", "diff", "docs") else self._lock(req.project_id)
         try:
@@ -402,6 +402,21 @@ class ProjectHost:
             binary = added == "-"
             files.append({"path": path, "status": kinds.get(path, "M")[:1], "added": 0 if binary else int(added), "deleted": 0 if binary else int(deleted), "binary": binary})
         return {"changed": len(files), "data": {"files": files[:DIFF_FILES], "truncated": len(files) > DIFF_FILES}}
+
+    # Puts one file back to the chat's start: an added file goes away, a changed or deleted one comes back.
+    async def _revert(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
+        wt = self._worktree(project_id, task_id)
+        if not wt.is_dir():
+            raise ToolError("the worktree for this chat is missing on this device")
+        base, path = str(a["base_sha"]), str(a["path"])
+        if not SHA_RE.fullmatch(base):
+            raise ToolError("invalid base commit")
+        if is_secret_path(path):
+            raise ToolError("secret files are not reverted from here")
+        spec = f":(literal){path}"
+        await self._git("add", "-A", "--", spec, cwd=wt)
+        await self._git("restore", f"--source={base}", "--staged", "--worktree", "--", spec, cwd=wt)
+        return {"head_sha": (await self._git("rev-parse", "HEAD", cwd=wt)).strip()}
 
     async def _remove(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
         kind: ProjectKind = a["kind"]

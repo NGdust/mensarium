@@ -118,6 +118,10 @@ class TaskCreate(BaseModel):
     branch: str | None = Field(None, min_length=1, max_length=200)
 
 
+class RevertBody(BaseModel):
+    path: str = Field(min_length=1, max_length=1000)
+
+
 class ModeBody(BaseModel):
     mode: AccessMode
 
@@ -1247,6 +1251,14 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             "context": context,
             "agents": len(ids) - 1,
         }
+
+    @app.post("/v1/tasks/{task_id}/changes/revert")
+    async def revert_task_file(task_id: str, body: RevertBody, c: Core = Depends(auth)) -> dict[str, bool]:
+        try:
+            await c.orchestrator.revert_file(task_id, body.path)
+        except TaskError as e:
+            raise task_error(e) from e
+        return {"ok": True}
 
     @app.post("/v1/tasks/{task_id}/mode")
     async def set_mode(task_id: str, body: ModeBody, c: Core = Depends(auth)) -> dict[str, Any]:

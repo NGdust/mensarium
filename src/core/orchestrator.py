@@ -477,7 +477,19 @@ class Orchestrator:
         await self.repo.audit(self.workspace_id, "core", "project.checkout", {"task_id": task["id"], "project_id": project["id"], "branch": task["branch"], "sha": status.head_sha})
         await self.bus.emit(task["id"], "task.project", {"kind": "checkout", "branch": task["branch"], "base": status.data.get("base"), "head_sha": status.head_sha})
 
-    async def _commit_turn(self, task_id: str) -> None:
+    async def revert_file(self, task_id: str, path: str) -> None:
+        task = await self._task(task_id)
+        if task_id in self.runners:
+            raise TaskError("the agent is working; wait for it to finish or pause it first")
+        assert self.projects
+        try:
+            await self.projects.revert(task, path)
+        except ProjectError as e:
+            raise TaskError(str(e)) from e
+        await self.repo.audit(self.workspace_id, "user", "project.revert", {"task_id": task_id, "path": path})
+        await self._commit_turn(task_id, f"mensarium: revert {path}"[:120], {"kind": "revert", "path": path})
+
+    async def _commit_turn(self, task_id: str, message: str | None = None, event: dict[str, Any] | None = None) -> None:
         task = await self.repo.get_task(task_id)
         if not task or not task.get("project_id") or task.get("parent_id") or not task.get("base_sha") or not self.projects:
             return
@@ -490,7 +502,7 @@ class Orchestrator:
         last = next((s for s in reversed(steps) if s["kind"] == "user"), None)
         text = str(((last or {}).get("input") or {}).get("text") or "agent turn").strip().splitlines()[0][:72]
         try:
-            status = await self.projects.commit(project, task, f"mensarium: {text}")
+            status = await self.projects.commit(project, task, message or f"mensarium: {text}")
         except TargetUnavailable as e:
             await self.bus.emit(task_id, "task.project", {"kind": "commit", "error": str(e)})
             return
@@ -500,7 +512,7 @@ class Orchestrator:
         if status.head_sha == task.get("head_sha"):
             return
         await self.repo.update_task(task_id, {"head_sha": status.head_sha})
-        await self.bus.emit(task_id, "task.project", {"kind": "commit", "head_sha": status.head_sha, "changed": status.changed})
+        await self.bus.emit(task_id, "task.project", {**(event or {"kind": "commit"}), "head_sha": status.head_sha, "changed": status.changed})
 
     async def _interruptible(self, task_id: str, coro: Any) -> Any:
         main = asyncio.ensure_future(coro)

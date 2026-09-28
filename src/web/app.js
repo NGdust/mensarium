@@ -1785,7 +1785,8 @@ async function viewChat(taskId) {
         break;
       case 'task.project':
         if (live) changes?.later(true);
-        if (p.kind === 'checkout') note(KIND_ICON[project?.kind] || 'folder', project?.kind === 'repo' && p.branch ? [tr('Working copy ready'), p.branch, p.base && p.base !== 'snapshot' ? tr('from {0}', p.base) : null].filter(Boolean).join(' · ') : tr('Working copy ready'));
+        if (p.kind === 'revert') note('refresh', tr('Changes to {0} reverted', p.path));
+        else if (p.kind === 'checkout') note(KIND_ICON[project?.kind] || 'folder', project?.kind === 'repo' && p.branch ? [tr('Working copy ready'), p.branch, p.base && p.base !== 'snapshot' ? tr('from {0}', p.base) : null].filter(Boolean).join(' · ') : tr('Working copy ready'));
         else if (p.error != null) note('alert', tr('Could not save this turn: {0}', p.error || tr('error')), 'error');
         else if (p.changed) note('file', tp('{0} file changed|{0} files changed', p.changed));
         break;
@@ -3661,7 +3662,7 @@ function changesPanel(taskId) {
     list.replaceChildren(...(files.length
       ? files.map((f) => {
         const cut = f.path.lastIndexOf('/');
-        return h('button', { class: 'change-row', title: f.path, onclick: () => openDiff(taskId, f, stat) },
+        return h('button', { class: 'change-row', title: f.path, onclick: () => openDiff(taskId, f, stat, load) },
           h('span', { class: `change-st st-${f.status}` }, f.status),
           h('span', { class: 'change-path' }, cut >= 0 ? h('span', { class: 'change-dir' }, f.path.slice(0, cut + 1)) : null, h('span', { class: 'change-name' }, f.path.slice(cut + 1))),
           h('span', { class: 'change-stat' }, ...stat(f)));
@@ -3690,18 +3691,37 @@ function changesPanel(taskId) {
   return { el, btn, later };
 }
 
-async function openDiff(taskId, f, stat) {
+async function openDiff(taskId, f, stat, onChange) {
   const body = h('div', { class: 'diff-body' }, h('div', { class: 'changes-empty' }, tr('Loading...')));
   const cut = f.path.lastIndexOf('/');
+  let patch = '';
+  const copyDiff = h('button', { class: 'icon-btn', title: tr('Copy the diff'), 'aria-label': tr('Copy the diff'), disabled: true, onclick: (e) => copy(patch, e.currentTarget) }, icon('copy'));
+  const revert = h('button', { class: 'btn btn-sm btn-danger', onclick: async () => {
+    const yes = await confirmDialog({
+      title: tr('Revert the changes to {0}?', f.path.slice(cut + 1)),
+      text: f.status === 'A' ? tr('The file was created in this chat and will be deleted.') : tr('The file goes back to how it was when the chat started.'),
+      action: tr('Revert'),
+      danger: true,
+    });
+    if (!yes) return;
+    try {
+      await post(`/v1/tasks/${taskId}/changes/revert`, { path: f.path });
+      toast(tr('Changes reverted'));
+      onChange();
+    } catch (err) { fail(err); }
+  } }, icon('refresh'), tr('Revert'));
   openModal(
     h('div', { class: 'modal-head diff-head' },
       h('h2', { title: f.path }, cut >= 0 ? h('span', { class: 'change-dir' }, f.path.slice(0, cut + 1)) : null, f.path.slice(cut + 1)),
       h('span', { class: 'change-stat' }, ...stat(f)),
+      copyDiff, revert,
       h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
     body,
   ).classList.add('modal-diff');
   try {
     const r = await get(`/v1/tasks/${taskId}/changes?path=${encodeURIComponent(f.path)}`);
+    patch = r.patch || '';
+    copyDiff.disabled = !patch;
     body.replaceChildren(...diffLines(r.patch || ''), r.truncated ? h('div', { class: 'changes-empty' }, tr('The diff is too long; only its beginning is shown.')) : '');
   } catch (err) {
     if (err instanceof AuthError) { fail(err); return; }

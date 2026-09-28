@@ -93,6 +93,22 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["state"], "ok", status["detail"])
         self.assertEqual([(f["name"], f["text"]) for f in status["data"]["files"]], [("AGENTS.md", "Run make test.\n")])
 
+    async def test_revert_restores_changed_deleted_and_drops_added_files(self) -> None:
+        status = await self.op("checkout", "task_r", branch="mensarium/r-1", start="default")
+        base = status["head_sha"]
+        wt = Path(os.environ["MENSARIUM_HOME"]) / "projects" / "prj_1" / "wt" / "task_r"
+        (wt / "app.py").write_text("changed\n")
+        (wt / "new.txt").write_text("new\n")
+        await self.op("commit", "task_r", message="turn", base_sha=base)
+        (wt / "app.py").unlink()
+        for path in ("app.py", "new.txt"):
+            status = await self.op("revert", "task_r", base_sha=base, path=path)
+            self.assertEqual(status["state"], "ok", status["detail"])
+        self.assertEqual((wt / "app.py").read_text(), "print('hi')\n")
+        self.assertFalse((wt / "new.txt").exists())
+        self.assertEqual((await self.op("diff", "task_r", base_sha=base))["data"]["files"], [])
+        self.assertEqual((await self.op("revert", "task_r", base_sha=base, path=".env"))["state"], "error")
+
 
 if __name__ == "__main__":
     unittest.main()
