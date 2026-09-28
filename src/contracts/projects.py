@@ -84,6 +84,14 @@ class ProjectPatch(BaseModel):
     file_limit_mb: int | None = Field(None, ge=1, le=2048)
     instructions: str | None = Field(None, max_length=INSTRUCTIONS_LIMIT)
 
+    @field_validator("default_base")
+    @classmethod
+    def _check_base(cls, value: str | None) -> str | None:
+        # "default" is the project's main branch as the device sees it.
+        if value is not None and value != "default" and not BRANCH_RE.fullmatch(value):
+            raise ValueError("default_base must be a branch name or default")
+        return value
+
 
 class BrowseBody(BaseModel):
     target_id: str = Field(max_length=100)

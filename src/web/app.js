@@ -3749,6 +3749,7 @@ const BRANCH_OK = /^(?![-/.])(?!.*\.\.)(?!.*\/\/)(?!.*\/\.)(?!.*@\{)(?!.*\.lock(
 function workspacePicker(project) {
   let branches = [];
   let main = null;
+  let repoMain = null;
   let current = null;
   let value = '';
   const label = h('span', { class: 'chip-label' });
@@ -3767,6 +3768,7 @@ function workspacePicker(project) {
     if (!r.default) return;
     branches = r.branches || [];
     main = r.default;
+    repoMain = r.main || r.default;
     current = r.current;
     el.classList.remove('hidden');
     render();
@@ -3785,7 +3787,8 @@ function workspacePicker(project) {
       closeLayer();
     };
     const tags = (b) => [
-      b.name === main ? h('span', { class: 'pill tag-kind' }, tr('main')) : null,
+      b.name === repoMain ? h('span', { class: 'pill tag-kind' }, tr('main')) : null,
+      b.name === main && main !== repoMain ? h('span', { class: 'pill tag-kind' }, tr('default')) : null,
       !b.remote && b.name === current ? h('span', { class: 'pill tag-kind' }, tr('on the device')) : null,
     ];
     const refresh = () => {
@@ -4049,12 +4052,36 @@ async function viewProject(id) {
         h('div', { class: 'row' }, h('div', { class: 'row-text' }, h('div', { class: 'row-title' }, h('code', {}, f.name)), h('div', { class: 'row-desc' }, fmtBytes(f.size))), h('div', { class: 'row-value' }, toggle)),
         body);
     };
+    const baseBox = h('div', {}, h('div', { class: 'row-desc' }, tr('Loading...')));
+    if (p.kind === 'repo') {
+      get(`/v1/projects/${id}/branches`).then((r) => {
+        const chosen = p.default_base && !['snapshot', 'default'].includes(p.default_base) ? p.default_base : 'default';
+        const names = (r.branches || []).map((b) => b.name);
+        if (chosen !== 'default' && !names.includes(chosen)) names.unshift(chosen);
+        const select = h('select', { class: 'base-select', 'aria-label': tr('Branch for new chats') },
+          h('option', { value: 'default', selected: chosen === 'default' }, tr('Main branch ({0})', r.main || r.default || '—')),
+          names.map((n) => h('option', { value: n, selected: n === chosen }, n)));
+        select.addEventListener('change', async () => {
+          select.disabled = true;
+          try {
+            show({ ...(await api(`/v1/projects/${id}`, { method: 'PUT', body: JSON.stringify({ default_base: select.value }) })), chats: p.chats });
+            toast(tr('Saved'));
+          } catch (err) { fail(err); }
+          select.disabled = false;
+        });
+        baseBox.replaceChildren(select);
+      }, (err) => baseBox.replaceChildren(h('div', { class: 'row-desc' }, err.message)));
+    }
     get(`/v1/projects/${id}/docs`).then(
       (r) => docs.replaceChildren(...(r.files.length ? r.files.map(docRow) : [h('div', { class: 'empty rows' }, tr('No AGENTS.md or CLAUDE.md in the project folder.'))])),
       (err) => docs.replaceChildren(h('div', { class: 'empty rows' }, err.message)));
     openModal(
       h('div', { class: 'modal-head' }, h('h2', {}, tr('About the project')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
       infoBody,
+      p.kind === 'repo' ? h('div', { class: 'info-section' },
+        h('h3', {}, tr('Branch for new chats')),
+        h('p', { class: 'row-desc' }, tr('A new chat gets its own branch from this one unless you pick another when you start it.')),
+        baseBox) : null,
       h('div', { class: 'info-section' },
         h('h3', {}, tr('Project instructions')),
         h('p', { class: 'row-desc' }, tr('Added to the system prompt of every chat in this project.')),

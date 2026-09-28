@@ -175,7 +175,10 @@ class ProjectManager:
             raise ProjectError(str(e)) from e
         if status.state != "ok":
             raise ProjectError(status.detail or "cannot list the branches")
-        return status.data
+        # "default" is where a new chat starts: the project's own choice, else the repository's main branch.
+        base = p.get("default_base")
+        main = status.data.get("default")
+        return {**status.data, "main": main, "default": base if base not in (None, "snapshot", "default") else main}
 
     async def changes(self, task: dict[str, Any], path: str | None = None) -> dict[str, Any]:
         if not task.get("project_id") or task.get("parent_id"):
