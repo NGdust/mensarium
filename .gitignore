@@ -12,7 +12,7 @@ dist/
 .docs/
 .claude/
 CLAUDE.md
-AGENTS.md
+/AGENTS.md
 .DS_Store
 PRODUCT.md
 DESIGN.md

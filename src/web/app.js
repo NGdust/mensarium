@@ -2533,11 +2533,12 @@ async function settingsInstructions(shell) {
       h('span', { class: 'market-icon' }, icon('file')),
       h('div', { class: 'row-text' },
         h('div', { class: 'row-title' }, h('code', {}, f.name),
-          f.missing ? h('span', { class: 'pill' }, tr('not set')) : f.content.length > limit ? h('span', { class: 'pill warn', title: tr('The agent sees only the first {0} characters', limit.toLocaleString(locale)) }, tr('too long')) : null),
+          f.custom ? null : h('span', { class: 'pill' }, tr('default')),
+          f.content.length > limit ? h('span', { class: 'pill warn', title: tr('The agent sees only the first {0} characters', limit.toLocaleString(locale)) }, tr('too long')) : null),
         h('div', { class: 'row-desc' }, desc)),
       h('div', { class: 'row-value' },
-        f.missing ? null : h('span', {}, tr('{0} characters, {1}', f.content.length.toLocaleString(locale), relTime(f.updated_at))),
-        h('button', { class: 'btn btn-sm', onclick: () => editor(f) }, f.missing ? tr('Create') : tr('Edit'))));
+        f.custom ? h('span', {}, tr('{0} characters, {1}', f.content.length.toLocaleString(locale), relTime(f.updated_at))) : null,
+        h('button', { class: 'btn btn-sm', onclick: () => editor(f) }, tr('Edit'))));
   }
 
   function editor(f) {
@@ -2551,21 +2552,23 @@ async function settingsInstructions(shell) {
     };
     body.addEventListener('input', updateCount);
     updateCount();
+    const put = async (content, done) => {
+      await api(`/v1/instructions/${f.name}`, { method: 'PUT', body: JSON.stringify({ content }) });
+      closeLayer();
+      toast(done);
+      await load();
+    };
     const save = h('button', { class: 'btn btn-primary' }, tr('Save'));
     save.addEventListener('click', async () => {
       save.disabled = true;
-      try {
-        await api(`/v1/instructions/${f.name}`, { method: 'PUT', body: JSON.stringify({ content: body.value }) });
-        closeLayer();
-        toast(body.value.trim() ? tr('Saved') : tr('Removed'));
-        await load();
-      } catch (err) { fail(err); } finally { save.disabled = false; }
+      try { await put(body.value, tr('Saved')); } catch (err) { fail(err); } finally { save.disabled = false; }
     });
+    const reset = f.custom ? h('button', { class: 'btn btn-sm', onclick: () => put('', tr('Back to the default')).catch(fail) }, tr('Reset to default')) : null;
     openModal(
       h('div', { class: 'modal-head' }, h('h2', {}, f.name), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
-      h('p', { class: 'row-desc' }, INSTRUCTION_DESC[f.name] ? INSTRUCTION_DESC[f.name]() : f.description, ' ', tr('The agent sees the first {0} characters at the start of every chat. Save it empty to remove the file.', limit.toLocaleString(locale))),
+      h('p', { class: 'row-desc' }, INSTRUCTION_DESC[f.name] ? INSTRUCTION_DESC[f.name]() : f.description, ' ', tr('The agent sees the first {0} characters at the start of every chat. Saving an empty text brings the default back.', limit.toLocaleString(locale))),
       h('div', { class: 'plugin-form' }, body, count),
-      h('div', { class: 'modal-actions' }, h('span', { class: 'spacer' }), h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
+      h('div', { class: 'modal-actions' }, reset, h('span', { class: 'spacer' }), h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
     ).classList.add('modal-wide');
     body.focus();
   }
@@ -2582,7 +2585,7 @@ async function settingsInstructions(shell) {
     render();
   }
 
-  page(shell, tr('Instructions'), tr('Markdown files the agent reads at the start of every chat: how to work, its persona and name, who you are. Same files as an OpenClaw workspace, so you can copy yours over. Missing files are skipped.'), null, list);
+  page(shell, tr('Instructions'), tr('Markdown files the agent reads at the start of every chat: how to work, its persona and name, who you are. Same files as an OpenClaw workspace, so you can copy yours over. Each comes with a default until you write your own.'), null, list);
   await load();
 }
 

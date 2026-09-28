@@ -5,7 +5,7 @@ from pathlib import Path
 from mensarium.agent_core.context import INSTRUCTION_FILE_CHARS, build_system_prompt
 from mensarium.agent_core.profile import builtin_profiles
 from mensarium.contracts.protocol import TargetPolicy
-from mensarium.core.instructions import FILES, InstructionError, InstructionStore
+from mensarium.core.instructions import FILES, InstructionError, InstructionStore, default_text
 
 
 class InstructionStoreTests(unittest.TestCase):
@@ -14,18 +14,21 @@ class InstructionStoreTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.store = InstructionStore(Path(self.tmp.name) / "instructions")
 
-    def test_lists_every_file_even_when_missing(self):
+    def test_defaults_are_used_until_the_user_writes_a_file(self):
         items = self.store.all()
         self.assertEqual([i["name"] for i in items], ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"])
-        self.assertTrue(all(i["missing"] and i["content"] == "" for i in items))
-        self.assertEqual(self.store.prompt_files(), [])
+        self.assertTrue(all(not i["custom"] and i["content"] == default_text(i["name"]) for i in items))
+        self.assertIn("Mensarium", default_text("IDENTITY.md"))
+        self.assertEqual([name for name, _, _ in self.store.prompt_files()], list(FILES))
 
-    def test_save_normalizes_text_and_empty_removes_the_file(self):
+    def test_save_normalizes_text_and_empty_brings_the_default_back(self):
         item = self.store.save("SOUL.md", "Be direct.\r\n\r\n  ")
-        self.assertFalse(item["missing"])
+        self.assertTrue(item["custom"])
         self.assertEqual(item["content"], "Be direct.\n")
-        self.assertEqual(self.store.prompt_files(), [("SOUL.md", FILES["SOUL.md"], "Be direct.")])
-        self.assertTrue(self.store.save("SOUL.md", "  \n")["missing"])
+        self.assertIn(("SOUL.md", FILES["SOUL.md"], "Be direct."), self.store.prompt_files())
+        item = self.store.save("SOUL.md", "  \n")
+        self.assertFalse(item["custom"])
+        self.assertEqual(item["content"], default_text("SOUL.md"))
         self.assertFalse((self.store.folder / "SOUL.md").exists())
 
     def test_rejects_other_names(self):

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -16,10 +17,15 @@ class InstructionError(Exception):
     pass
 
 
+def default_text(name: str) -> str:
+    return (resources.files("mensarium.instructions") / name).read_text(encoding="utf-8")
+
+
 class InstructionStore:
     """Markdown files the user edits in Settings; every chat gets them in the system prompt.
 
-    Same set and meaning as the OpenClaw workspace files, minus MEMORY.md: Mensarium keeps memory as notes."""
+    Same set and meaning as the OpenClaw workspace files, minus MEMORY.md: Mensarium keeps memory as notes.
+    A file the user has not written falls back to the bundled default."""
 
     def __init__(self, folder: Path) -> None:
         self.folder = folder
@@ -31,17 +37,17 @@ class InstructionStore:
 
     def read(self, name: str) -> str:
         path = self.path(name)
-        return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+        return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else default_text(name)
 
     def view(self, name: str) -> dict[str, Any]:
         path = self.path(name)
-        present = path.is_file()
-        stat = path.stat() if present else None
+        custom = path.is_file()
+        stat = path.stat() if custom else None
         return {
             "name": name,
             "description": FILES[name],
             "content": self.read(name),
-            "missing": not present,
+            "custom": custom,
             "size": stat.st_size if stat else 0,
             "updated_at": datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat() if stat else None,
         }
@@ -50,7 +56,7 @@ class InstructionStore:
         return [self.view(name) for name in FILES]
 
     def save(self, name: str, content: str) -> dict[str, Any]:
-        """An empty file is removed rather than kept, so the prompt block only lists files with text."""
+        """Empty content removes the user's file, so the default is used again."""
         path = self.path(name)
         text = content.replace("\r\n", "\n").strip()
         if text:
