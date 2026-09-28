@@ -420,6 +420,39 @@ a.chip:hover { text-decoration: none; }
   50% { box-shadow: 0 0 0 6px rgba(116, 69, 240, 0); transform: scale(0.94); }
 }
 .send .icon { width: 17px; height: 17px; stroke-width: 2.2; }
+.composer .attach { margin-left: -4px; }
+.composer.drop { border-color: var(--accent-line); background: rgba(116, 69, 240, 0.08); }
+.mic { width: 32px; height: 32px; flex: none; border-radius: 50%; border: 1px solid var(--line-strong); background: transparent; color: var(--muted); cursor: pointer; display: grid; place-items: center; transition: background 0.15s, color 0.15s, border-color 0.15s; }
+.mic:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.mic:disabled { opacity: 0.35; cursor: not-allowed; }
+.mic.listening { color: #fff; background: var(--danger); border-color: transparent; animation: mic-pulse 1.4s ease-in-out infinite; }
+.mic .icon { width: 16px; height: 16px; }
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.45); }
+  50% { box-shadow: 0 0 0 6px rgba(248, 113, 113, 0); }
+}
+.attach-strip:empty { display: none; }
+.attach-strip { display: flex; flex-direction: column; gap: 6px; margin: 0 4px 10px 0; }
+.attach-row { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 10px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--line); font-size: 13px; min-width: 0; }
+.attach-row > .icon { flex: none; color: var(--muted); }
+.attach-row img { width: 36px; height: 36px; object-fit: cover; border-radius: 6px; flex: none; }
+.attach-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach-meta { color: var(--muted); font: 12px var(--mono); flex: none; }
+.attach-row.uploading .attach-meta { color: var(--accent-strong); }
+.attach-row.failed { border-color: rgba(248, 113, 113, 0.5); }
+.attach-remove { width: 26px; height: 26px; }
+.attach-remove .icon { width: 14px; height: 14px; }
+.bubble-text { white-space: pre-wrap; }
+.bubble-text + .attachments { margin-top: 10px; }
+.attachments { display: flex; flex-direction: column; gap: 6px; white-space: normal; }
+.attachment { display: flex; align-items: center; gap: 10px; padding: 7px 12px 7px 10px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); color: var(--text); font-size: 13px; min-width: 0; }
+.attachment:hover { text-decoration: none; border-color: var(--accent-line); }
+.attachment > .icon { flex: none; color: var(--muted); }
+.attachment-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-meta { color: var(--muted); font: 12px var(--mono); flex: none; }
+.attachment.is-image { flex-wrap: wrap; padding: 6px; }
+.attachment.is-image img { display: block; width: 100%; max-height: 360px; object-fit: contain; border-radius: 8px; background: rgba(0, 0, 0, 0.25); }
+.attachment.is-image .attachment-name { padding-left: 4px; }
 
 .templates { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; max-width: var(--chat-w); margin: 0 auto 12px; }
 .template {

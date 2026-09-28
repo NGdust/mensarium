@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket
@@ -34,6 +34,7 @@ from mensarium.contracts.protocol import AccessMode, PairRequest, PairResponse
 from mensarium.contracts.skills import OS, SkillError, SkillMeta, SkillRequires
 from mensarium.core import distribution, pairing
 from mensarium.core.api_tunnel import ApiTunnel
+from mensarium.core.attachments import MAX_FILE_BYTES, MAX_FILES, AttachmentError
 from mensarium.core.automations import AutomationManager
 from mensarium.core.catalog import Catalog
 from mensarium.core.channels import ChannelError, ChannelManager
@@ -112,6 +113,7 @@ class TaskCreate(BaseModel):
     model: str | None = Field(None, min_length=1, max_length=200)
     provider: str | None = Field(None, min_length=1, max_length=100)
     project_id: str | None = Field(None, max_length=100)
+    attachments: list[str] = Field(default_factory=list, max_length=MAX_FILES)
 
 
 class ModeBody(BaseModel):
@@ -220,6 +222,7 @@ class SkillBody(BaseModel):
 
 class MessageBody(BaseModel):
     input: str
+    attachments: list[str] = Field(default_factory=list, max_length=MAX_FILES)
 
 
 class DecisionBody(BaseModel):
@@ -1182,12 +1185,13 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
 
     @app.post("/v1/tasks")
     async def create_task(body: TaskCreate, c: Core = Depends(auth)) -> dict[str, Any]:
-        if not body.input.strip():
+        if not body.input.strip() and not body.attachments:
             raise HTTPException(422, "input is empty")
         try:
             return task_view(
                 await c.orchestrator.create_task(
-                    body.profile_id, body.target_id, body.input, body.mode, body.model, project_id=body.project_id, provider=body.provider
+                    body.profile_id, body.target_id, body.input.strip(), body.mode, body.model, project_id=body.project_id,
+                    provider=body.provider, attachments=body.attachments,
                 )
             )
         except TaskError as e:
@@ -1242,10 +1246,10 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
 
     @app.post("/v1/tasks/{task_id}/messages")
     async def post_message(task_id: str, body: MessageBody, c: Core = Depends(auth)) -> dict[str, Any]:
-        if not body.input.strip():
+        if not body.input.strip() and not body.attachments:
             raise HTTPException(422, "input is empty")
         try:
-            return task_view(await c.orchestrator.post_message(task_id, body.input))
+            return task_view(await c.orchestrator.post_message(task_id, body.input.strip(), body.attachments))
         except TaskError as e:
             raise task_error(e) from e
 
@@ -1307,16 +1311,40 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     async def audit(limit: int = 200, c: Core = Depends(auth)) -> list[dict[str, Any]]:
         return await c.repo.list_audit(min(limit, 1000))
 
+    @app.post("/v1/attachments")
+    async def upload_attachment(request: Request, name: str = "file", c: Core = Depends(auth)) -> dict[str, Any]:
+        """A file for a chat message, sent as the raw body; its type is taken from the bytes, not from the browser."""
+        data = await request.body()
+        if len(data) > MAX_FILE_BYTES:
+            raise HTTPException(413, f"the file is larger than {MAX_FILE_BYTES // (1024 * 1024)} MB")
+        try:
+            return (await c.orchestrator.attachments.save(name, data)).model_dump(exclude={"text", "truncated"})
+        except AttachmentError as e:
+            raise HTTPException(415 if "unsupported" in str(e) else 422, str(e)) from e
+
     @app.get("/v1/artifacts/{artifact_id}")
     async def artifact(artifact_id: str, c: Core = Depends(auth)) -> Response:
         row = await c.repo.get_artifact(artifact_id)
         if not row:
             raise HTTPException(404, "artifact not found")
+        nosniff = {"X-Content-Type-Options": "nosniff"}
+        if row["kind"] == "upload":
+            meta = row["metadata"] if isinstance(row["metadata"], dict) else {}
+            path = Path(str(row["uri"]).removeprefix("file://"))
+            if path.parent != c.paths.artifacts or not path.exists():
+                raise HTTPException(404, "file not found")
+            filename = quote(str(meta.get("name") or "file"))
+            disposition = "inline" if meta.get("type") == "image" else "attachment"
+            return FileResponse(
+                path,
+                media_type=str(meta.get("mime") or "application/octet-stream"),
+                headers={**nosniff, "Content-Disposition": f"{disposition}; filename*=UTF-8''{filename}"},
+            )
         for suffix, media in ((".jpg", "image/jpeg"), (".png", "image/png")):
             if (image := c.paths.artifacts / f"{artifact_id}{suffix}").exists():
-                return FileResponse(image, media_type=media)
+                return FileResponse(image, media_type=media, headers=nosniff)
         path = c.paths.artifacts / f"{artifact_id}.txt"
-        return PlainTextResponse(path.read_text(errors="replace") if path.exists() else "")
+        return PlainTextResponse(path.read_text(errors="replace") if path.exists() else "", headers=nosniff)
 
     @app.get("/metrics", include_in_schema=False)
     async def metrics(c: Core = Depends(auth)) -> PlainTextResponse:

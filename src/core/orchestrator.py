@@ -29,6 +29,7 @@ from mensarium.contracts.protocol import (
     policy_snapshot_hash,
 )
 from mensarium.contracts.skills import SkillError
+from mensarium.core.attachments import Attachment, AttachmentError, AttachmentStore
 from mensarium.core.catalog import Catalog
 from mensarium.core.client_hub import ClientHub, TargetUnavailable
 from mensarium.core.config import CoreConfig
@@ -69,6 +70,7 @@ def _brief(arguments: dict[str, Any]) -> dict[str, Any]:
 
 OPTIONAL_DEVICE_TOOLS = {"shell.bash", "screen.capture", "screen.windows", "input.mouse", "input.type", "input.key", "app.open", "system.volume"}
 RECENT_IMAGES = 2
+IMAGE_MIMES = {".jpg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp"}
 
 
 def _rejects_images(error: str) -> bool:
@@ -136,6 +138,7 @@ class Orchestrator:
         self.cfg = cfg
         self.workspace_id = workspace_id
         self.artifacts_dir = artifacts_dir
+        self.attachments = AttachmentStore(repo, artifacts_dir, workspace_id)
         self.runners: dict[str, asyncio.Task[None]] = {}
         self.controls: dict[str, str] = {}
         self.approval_waiters: dict[str, asyncio.Future[str]] = {}
@@ -165,6 +168,7 @@ class Orchestrator:
         automation_id: str | None = None,
         project_id: str | None = None,
         provider: str | None = None,
+        attachments: list[str] | None = None,
     ) -> dict[str, Any]:
         profile = await self.load_profile(profile_id)
         target = await self.repo.get_target(target_id)
@@ -187,6 +191,7 @@ class Orchestrator:
             if target_id != project["source_target_id"]:
                 raise TaskError("in this version a project chat runs on the project's source device")
         task_id = new_id("task")
+        files = await self._bind_attachments(task_id, attachments)
         now = now_iso()
         await self.repo.create_task(
             {
@@ -194,7 +199,7 @@ class Orchestrator:
                 "workspace_id": self.workspace_id,
                 "profile_id": profile.id,
                 "target_id": target_id,
-                "input": text,
+                "input": text or ", ".join(f"[{a.name}]" for a in files),
                 "status": "NEW",
                 "mode": mode,
                 "model": model,
@@ -210,15 +215,16 @@ class Orchestrator:
             }
         )
         await self.repo.audit(self.workspace_id, "user", "task.created", {"task_id": task_id, "target_id": target_id})
-        await self._add_user_message(task_id, text)
+        await self._add_user_message(task_id, text, files)
         self._start(task_id)
         return await self._task(task_id)
 
-    async def post_message(self, task_id: str, text: str) -> dict[str, Any]:
+    async def post_message(self, task_id: str, text: str, attachments: list[str] | None = None) -> dict[str, Any]:
         task = await self._task(task_id)
         if task_id in self.runners or task["status"] not in TERMINAL_STATUSES:
             raise TaskError("task is running; wait for it to finish or pause it first")
-        await self._add_user_message(task_id, text)
+        files = await self._bind_attachments(task_id, attachments)
+        await self._add_user_message(task_id, text, files)
         self._start(task_id)
         return await self._task(task_id)
 
@@ -332,12 +338,25 @@ class Orchestrator:
             raise TaskError("task not found")
         return task
 
-    async def _add_user_message(self, task_id: str, text: str) -> None:
+    async def _bind_attachments(self, task_id: str, ids: list[str] | None) -> list[Attachment]:
+        if not ids:
+            return []
+        try:
+            return await self.attachments.bind(task_id, ids)
+        except AttachmentError as e:
+            raise TaskError(str(e)) from e
+
+    async def _add_user_message(self, task_id: str, text: str, files: list[Attachment] | None = None) -> None:
+        files = files or []
         # Plans belong to one user turn, not to the lifetime of a chat.
         await self.repo.update_task(task_id, {"plan": []})
         await self.bus.emit(task_id, "task.plan", {"items": []})
-        await self.repo.add_step(task_id, "user", {"input": {"text": text}})
-        await self.bus.emit(task_id, "user.message", {"text": text})
+        step: dict[str, Any] = {"text": text}
+        shown = [a.model_dump(exclude={"text", "truncated"}) for a in files]
+        if files:
+            step["attachments"] = [a.model_dump() for a in files]
+        await self.repo.add_step(task_id, "user", {"input": step})
+        await self.bus.emit(task_id, "user.message", {"text": text, **({"attachments": shown} if shown else {})})
 
     async def _control(self, task_id: str, action: str) -> None:
         await self._task(task_id)
@@ -650,19 +669,28 @@ class Orchestrator:
         await self.repo.add_step(task_id, "tool", {"input": {"llm_call_id": call.call_id, "tool": call.tool}, "output": output})
 
     async def _recent_images(self, steps: list[dict[str, Any]]) -> dict[str, str]:
-        """Data URLs of the last screenshots, so the model still sees them; older ones are dropped to save tokens."""
+        """Data URLs of the last screenshots and of the pictures in the last user messages, so the model still
+        sees them; older ones are dropped to save tokens."""
         out: dict[str, str] = {}
+        shots = turns = 0
         for s in reversed(steps):
-            image = (s.get("output") or {}).get("image") if s["kind"] == "tool" else None
-            if not image:
-                continue
-            for path in self.artifacts_dir.glob(f"{image}.*"):
-                if path.suffix in (".jpg", ".png"):
-                    data = await asyncio.to_thread(path.read_bytes)
-                    out[image] = f"data:image/{'jpeg' if path.suffix == '.jpg' else 'png'};base64,{base64.b64encode(data).decode()}"
-            if len(out) >= RECENT_IMAGES:
+            if s["kind"] == "tool" and (image := (s.get("output") or {}).get("image")) and shots < RECENT_IMAGES:
+                shots += 1
+                await self._load_image(str(image), out)
+            elif s["kind"] == "user" and turns < RECENT_IMAGES:
+                pictures = [a for a in (s.get("input") or {}).get("attachments") or [] if a.get("type") == "image"]
+                turns += bool(pictures)
+                for a in pictures:
+                    await self._load_image(str(a["id"]), out)
+            if shots >= RECENT_IMAGES and turns >= RECENT_IMAGES:
                 break
         return out
+
+    async def _load_image(self, artifact_id: str, out: dict[str, str]) -> None:
+        for path in self.artifacts_dir.glob(f"{artifact_id}.*"):
+            if mime := IMAGE_MIMES.get(path.suffix):
+                data = await asyncio.to_thread(path.read_bytes)
+                out[artifact_id] = f"data:{mime};base64,{base64.b64encode(data).decode()}"
 
     async def _store_image(self, task_id: str, tc_id: str, image: dict[str, Any]) -> str | None:
         try:

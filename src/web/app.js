@@ -127,6 +127,10 @@ const ICONS = {
   layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
   pulse: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  paperclip: '<path d="m21 11.5-8.6 8.6a5 5 0 0 1-7-7l9-9a3.3 3.3 0 0 1 4.7 4.7l-9 9a1.7 1.7 0 0 1-2.4-2.4L16 7.3"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/>',
+  fileText: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
+  image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5-8 8"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
   gauge: '<path d="M12 14 16 8"/><path d="M4 18a9 9 0 1 1 16 0"/><circle cx="12" cy="14" r="1"/>',
@@ -749,21 +753,95 @@ function ensureAppShell() {
 
 // ---------- composer ----------
 
+// Files the browser accepts before the upload; the Core checks the bytes again and decides the real type.
+const MAX_FILE_BYTES = 12 * 1024 * 1024;
+const MAX_FILES = 10;
+
+function fmtBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+const fileKind = (a) => (a.type === 'image' || (a.mime || '').startsWith('image/') ? 'image' : 'fileText');
+
+// One block per attached file: a thumbnail for pictures, an icon with the name and size for the rest.
+function attachmentList(files) {
+  if (!files?.length) return null;
+  return h('div', { class: 'attachments' }, files.map((a) => {
+    const url = `/v1/artifacts/${a.id}`;
+    const image = fileKind(a) === 'image';
+    return h('a', { class: `attachment${image ? ' is-image' : ''}`, href: url, target: '_blank', rel: 'noopener', title: a.name },
+      image ? h('img', { src: url, alt: a.name, loading: 'lazy' }) : icon('fileText'),
+      h('span', { class: 'attachment-name' }, a.name),
+      h('span', { class: 'attachment-meta' }, fmtBytes(a.size)));
+  }));
+}
+
+// Dictation through the browser's speech recognition; needs a secure page (https or localhost).
+const SpeechApi = window.SpeechRecognition || window.webkitSpeechRecognition;
+const canDictate = () => Boolean(SpeechApi && window.isSecureContext);
+
+function dictation(ta, onChange) {
+  const btn = h('button', { class: 'mic', type: 'button', title: tr('Dictate'), 'aria-label': tr('Dictate'), 'aria-pressed': 'false' }, icon('mic'));
+  let rec = null;
+  let base = '';
+  const stop = () => { rec?.stop(); };
+  const ended = () => {
+    rec = null;
+    btn.classList.remove('listening');
+    btn.setAttribute('aria-pressed', 'false');
+    btn.title = tr('Dictate');
+  };
+  const start = () => {
+    rec = new SpeechApi();
+    rec.lang = locale;
+    rec.continuous = true;
+    rec.interimResults = true;
+    base = ta.value && !/\s$/.test(ta.value) ? `${ta.value} ` : ta.value;
+    rec.onresult = (e) => {
+      let done = '';
+      let interim = '';
+      for (const r of e.results) (r.isFinal ? (done += r[0].transcript) : (interim += r[0].transcript));
+      ta.value = base + done + interim;
+      onChange();
+    };
+    rec.onerror = (e) => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast(tr('Microphone access was denied'), true);
+      else if (e.error !== 'aborted' && e.error !== 'no-speech') toast(tr('Dictation failed: {0}', e.error), true);
+    };
+    rec.onend = ended;
+    try { rec.start(); } catch (err) { ended(); fail(err); return; }
+    btn.classList.add('listening');
+    btn.setAttribute('aria-pressed', 'true');
+    btn.title = tr('Stop dictation');
+  };
+  btn.addEventListener('click', () => (rec ? stop() : start()));
+  return { el: btn, stop, set disabled(v) { btn.disabled = v; if (v) stop(); } };
+}
+
 // The round button sends a message; while the agent works it becomes a pulsing stop, on a pause it resumes.
 function composer({ placeholder, chips, tail, above, onSend, onStop, onResume }) {
   const ta = h('textarea', { rows: 1, placeholder, 'aria-label': placeholder });
   const send = h('button', { class: 'send', disabled: true });
   const notice = h('div', { class: 'composer-notice' }, limitBanner() || '');
+  const picker = h('input', { type: 'file', multiple: true, hidden: true, 'aria-hidden': 'true' });
+  const attach = h('button', { class: 'icon-btn attach', type: 'button', title: tr('Attach files'), 'aria-label': tr('Attach files'), onclick: () => picker.click() }, icon('paperclip'));
+  const strip = h('div', { class: 'attach-strip' });
+  const mic = canDictate() ? dictation(ta, () => { grow(); sync(); }) : null;
   const box = h('div', { class: 'composer' },
     notice,
+    strip,
     h('div', { class: 'composer-input' }, ta),
-    h('div', { class: 'composer-bar' }, chips, h('span', { class: 'spacer' }), tail, send),
+    h('div', { class: 'composer-bar' }, attach, chips, h('span', { class: 'spacer' }), tail, mic?.el, send),
+    picker,
   );
   let mode = 'idle';
   let hint = '';
   let busy = false;
   let shown = '';
-  const action = () => (mode === 'running' ? 'stop' : mode === 'paused' && !ta.value.trim() ? 'resume' : 'send');
+  let files = [];
+  const action = () => (mode === 'running' ? 'stop' : mode === 'paused' && !ta.value.trim() && !files.length ? 'resume' : 'send');
   const sync = () => {
     const a = action();
     if (a !== shown) {
@@ -775,21 +853,74 @@ function composer({ placeholder, chips, tail, above, onSend, onStop, onResume })
       send.setAttribute('aria-label', label);
     }
     if (a === 'stop' && hint) send.title = `${hint} ${tr('Stop the agent')}`;
-    send.disabled = busy || (a === 'send' && !ta.value.trim());
+    send.disabled = busy || (a === 'send' && !ta.value.trim() && !files.length);
     ta.disabled = mode === 'running';
+    attach.disabled = busy || mode === 'running';
+    if (mic) mic.disabled = busy || mode === 'running';
     ta.placeholder = mode === 'running' ? hint : mode === 'paused' ? tr('Resume the agent or write what to do next') : placeholder;
   };
   const grow = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, 240)}px`; };
+  const renderFiles = () => {
+    strip.replaceChildren(...files.map((f) => h('div', { class: `attach-row${f.url ? ' is-image' : ''}${f.state ? ` ${f.state}` : ''}` },
+      f.url ? h('img', { src: f.url, alt: '' }) : icon('fileText'),
+      h('span', { class: 'attach-name' }, f.file.name),
+      h('span', { class: 'attach-meta' }, f.state === 'uploading' ? tr('Uploading...') : fmtBytes(f.file.size)),
+      h('button', { class: 'icon-btn attach-remove', type: 'button', title: tr('Remove'), 'aria-label': tr('Remove {0}', f.file.name), onclick: () => { if (f.url) URL.revokeObjectURL(f.url); files = files.filter((x) => x !== f); renderFiles(); sync(); } }, icon('x')))));
+    box.classList.toggle('has-files', files.length > 0);
+  };
+  const addFiles = (list) => {
+    for (const file of list) {
+      if (files.length >= MAX_FILES) { toast(tr('At most {0} files per message', MAX_FILES), true); break; }
+      if (file.size > MAX_FILE_BYTES) { toast(tr('“{0}” is larger than {1} MB', file.name, MAX_FILE_BYTES / 1024 / 1024), true); continue; }
+      if (!file.size) { toast(tr('“{0}” is empty', file.name), true); continue; }
+      files.push({ file, url: file.type.startsWith('image/') ? URL.createObjectURL(file) : null, state: '' });
+    }
+    renderFiles();
+    sync();
+  };
+  picker.addEventListener('change', () => { addFiles(picker.files); picker.value = ''; });
+  ta.addEventListener('paste', (e) => {
+    const pasted = [...(e.clipboardData?.files || [])];
+    if (pasted.length) { e.preventDefault(); addFiles(pasted); }
+  });
+  let dragDepth = 0;
+  box.addEventListener('dragenter', (e) => { if (e.dataTransfer?.types.includes('Files')) { dragDepth += 1; box.classList.add('drop'); } });
+  box.addEventListener('dragleave', () => { if (dragDepth > 0) dragDepth -= 1; if (!dragDepth) box.classList.remove('drop'); });
+  box.addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
+  box.addEventListener('drop', (e) => { e.preventDefault(); dragDepth = 0; box.classList.remove('drop'); if (mode !== 'running' && !busy) addFiles(e.dataTransfer.files); });
   ta.addEventListener('input', () => { grow(); sync(); });
   const run = async (fn) => {
     busy = true;
     sync();
     try { await fn(); } catch (err) { fail(err); } finally { busy = false; sync(); }
   };
+  const upload = async (f) => {
+    f.state = 'uploading';
+    renderFiles();
+    try {
+      const meta = await api(`/v1/attachments?name=${encodeURIComponent(f.file.name)}`, { method: 'POST', body: f.file, headers: { 'Content-Type': 'application/octet-stream' } });
+      f.state = '';
+      return meta.id;
+    } catch (err) {
+      f.state = 'failed';
+      renderFiles();
+      throw new Error(tr('“{0}”: {1}', f.file.name, err.message || String(err)));
+    }
+  };
   const submit = () => {
     const text = ta.value.trim();
-    if (!text || mode === 'running' || busy) return;
-    return run(async () => { await onSend(text); ta.value = ''; grow(); });
+    if ((!text && !files.length) || mode === 'running' || busy) return;
+    mic?.stop();
+    return run(async () => {
+      const ids = [];
+      for (const f of files) ids.push(await upload(f));
+      await onSend(text, ids);
+      for (const f of files) if (f.url) URL.revokeObjectURL(f.url);
+      files = [];
+      renderFiles();
+      ta.value = '';
+      grow();
+    });
   };
   ta.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
@@ -1175,10 +1306,10 @@ async function viewNewChat(projectId = null) {
   const c = composer({
     placeholder: tr('Describe the task for the agent'),
     chips: [project ? projectChip : targetChip, h('span', { class: 'divider' }), modeCtl.el, modelCtl.el],
-    onSend: async (text) => {
+    onSend: async (text, attachments) => {
       if (project && source()?.status !== 'online') throw new Error(offlineText());
       if (!selected) throw new Error(tr('Select the device the agent will work on'));
-      const task = await post('/v1/tasks', { target_id: selected.id, input: text, mode: modeCtl.effective(), model: modelCtl.value().model || undefined, provider: modelCtl.value().provider || undefined, project_id: project?.id });
+      const task = await post('/v1/tasks', { target_id: selected.id, input: text, attachments, mode: modeCtl.effective(), model: modelCtl.value().model || undefined, provider: modelCtl.value().provider || undefined, project_id: project?.id });
       state.tasks.unshift(task);
       go(`#/chat/${task.id}`);
     },
@@ -1264,7 +1395,7 @@ async function viewChat(taskId) {
     chips: [modeCtl.el, modelCtl.el, agents.el],
     tail: usage.el,
     above: plan.el,
-    onSend: (text) => post(`/v1/tasks/${taskId}/messages`, { input: text }),
+    onSend: (text, attachments) => post(`/v1/tasks/${taskId}/messages`, { input: text, attachments }),
     onStop: () => act('pause'),
     onResume: () => act('resume'),
   });
@@ -1596,7 +1727,7 @@ async function viewChat(taskId) {
         plan.set([]); // Also clears stale plans while replaying events from older server versions.
         finishWork();
         lastAgent = false;
-        add(h('div', { class: 'msg-user' }, h('div', { class: 'bubble-user' }, p.text)));
+        add(h('div', { class: 'msg-user' }, h('div', { class: 'bubble-user' }, p.text ? h('div', { class: 'bubble-text' }, p.text) : null, attachmentList(p.attachments))));
         break;
       case 'task.status':
         setStatus(p.status);

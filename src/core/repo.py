@@ -5,7 +5,7 @@ from mensarium.contracts.llm import TokenUsage
 from mensarium.core.db import Database
 from mensarium.shared.crypto import canonical_json, sha256_hex
 from mensarium.shared.ids import new_id
-from mensarium.shared.timeutil import now_iso
+from mensarium.shared.timeutil import iso_in, now_iso
 
 TERMINAL_STATUSES = {"SUCCEEDED", "FAILED", "FAILED_RECOVERABLE", "CANCELED", "PAUSED"}
 USAGE_FIELDS = tuple(TokenUsage.model_fields)
@@ -217,6 +217,18 @@ class Repo:
 
     async def get_artifact(self, artifact_id: str) -> dict[str, Any] | None:
         return await self.db.fetchone("SELECT * FROM artifacts WHERE id = ?", (artifact_id,))
+
+    async def bind_artifact(self, artifact_id: str, task_id: str) -> None:
+        await self.db.execute("UPDATE artifacts SET task_id = ? WHERE id = ?", (task_id, artifact_id))
+
+    async def delete_unbound_uploads(self, older_than_s: int) -> list[str]:
+        cutoff = iso_in(-older_than_s)
+        rows = await self.db.fetchall(
+            "SELECT id FROM artifacts WHERE kind = 'upload' AND task_id IS NULL AND created_at < ?", (cutoff,)
+        )
+        if rows:
+            await self.db.execute("DELETE FROM artifacts WHERE kind = 'upload' AND task_id IS NULL AND created_at < ?", (cutoff,))
+        return [str(r["id"]) for r in rows]
 
     # plugins
     async def list_plugins(self, enabled_only: bool = False) -> list[dict[str, Any]]:
