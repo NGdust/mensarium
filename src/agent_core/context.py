@@ -463,7 +463,6 @@ def context_usage(context: dict[str, Any], prompt_tokens: int) -> dict[str, Any]
     return {
         "tokens": round(chars * rate),
         "limit": round((chars - history + max(history, context["history_budget"])) * rate),
-        "history_limit": round(context["history_budget"] * rate),
         "estimated": not prompt_tokens,
         "window": context.get("window"),
         "parts": [{"key": p["key"], "count": p.get("count"), "tokens": round(p["chars"] * rate)} for p in parts],

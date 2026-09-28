@@ -591,9 +591,6 @@ class Orchestrator:
                 timeout_s=self.cfg.llm.providers[client.name].timeout_s,
                 metadata={"task_id": task_id, "trace_id": task["trace_id"]},
             )
-            context = context_parts(
-                request.system, tool_defs, set(toolbox.owners), request.messages, instructions, skills, memory, history, window
-            )
             llm_request = await self.bus.emit(task_id, "llm.request", {"step": llm_steps})
             draft = self.bus.draft(task_id, llm_request["seq"])
             t0 = time.monotonic()
@@ -627,6 +624,11 @@ class Orchestrator:
             finally:
                 draft.close()
             latency = int((time.monotonic() - t0) * 1000)
+            # Asked again: Claude Code reports the window only in its answers.
+            context = context_parts(
+                request.system, tool_defs, set(toolbox.owners), request.messages, instructions, skills, memory, history,
+                await client.context_window(model),
+            )
             action = parse_action(resp)
             usage = resp.usage.model_dump() if resp.usage else None
             llm_step_id = await self.repo.add_step(

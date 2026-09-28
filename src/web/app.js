@@ -1162,6 +1162,7 @@ const CONTEXT_PARTS = {
   memory: 'Memory',
   messages: 'Chat history',
   free: 'Free until compaction',
+  reserve: 'Beyond compaction',
 };
 
 // Splits n cells between the values: every non-empty value gets at least one, the rest go by the largest remainder.
@@ -1176,13 +1177,20 @@ function waffleCells(values, n = 100) {
   return cells;
 }
 
-// What the chat's last model request was made of, against the size at which its history gets compacted.
+// What the chat's last model request was made of, against the model's window. The free part of the window is split
+// at the size where the history gets compacted: the agent never fills the window beyond it.
 function contextView(ctx) {
-  const parts = [...ctx.parts.filter((p) => p.tokens > 0), { key: 'free', tokens: Math.max(0, ctx.limit - ctx.tokens) }];
-  const limit = Math.max(ctx.limit, ctx.tokens) || 1;
+  const size = Math.max(ctx.window || ctx.limit, ctx.tokens) || 1;
+  const compactAt = Math.min(ctx.limit, size);
+  const parts = [
+    ...ctx.parts.filter((p) => p.tokens > 0),
+    { key: 'free', tokens: Math.max(0, compactAt - ctx.tokens) },
+    { key: 'reserve', tokens: ctx.window ? Math.max(0, size - Math.max(compactAt, ctx.tokens)) : 0 },
+  ].filter((p) => p.tokens > 0 || p.key === 'free');
+  const over = ctx.window && ctx.tokens > ctx.window;
   const pct = (n) => {
-    const v = (n / limit) * 100;
-    return `${v.toLocaleString(locale, { maximumFractionDigits: v && v < 10 ? 1 : 0 })}%`;
+    const v = (n / size) * 100;
+    return v > 0 && v < 0.1 ? `<${(0.1).toLocaleString(locale)}%` : `${v.toLocaleString(locale, { maximumFractionDigits: v < 10 ? 1 : 0 })}%`;
   };
   const cells = waffleCells(parts.map((p) => p.tokens));
   const view = h('section', { class: 'ctx' },
@@ -1190,21 +1198,23 @@ function contextView(ctx) {
       ctx.model ? h('span', { class: 'ctx-model', title: ctx.provider || '' }, ctx.model) : null),
     h('div', { class: 'ctx-total' },
       h('span', { class: 'ctx-used' }, `${ctx.estimated ? '≈' : ''}${fmtTokens(ctx.tokens)}`),
-      h('span', { class: 'ctx-of' }, tr('of {0} tokens', fmtTokens(limit))),
+      h('span', { class: 'ctx-of' }, tr('of {0} tokens', fmtTokens(size))),
       h('span', { class: 'ctx-pct-total' }, pct(ctx.tokens))),
     h('div', { class: 'ctx-body' },
       h('div', { class: 'ctx-grid', 'aria-hidden': 'true' }, parts.map((p, i) =>
         Array.from({ length: cells[i] }, () => h('i', { class: 'ctx-cell', 'data-part': p.key })))),
       h('div', { class: 'ctx-legend' }, parts.map((p) =>
-        h('div', { class: 'ctx-row', 'data-part': p.key, title: p.tokens.toLocaleString(locale) },
+        h('div', { class: 'ctx-row', 'data-part': p.key, title: p.key === 'reserve' ? tr('The agent does not use this part of the window: the history is compacted before it') : p.tokens.toLocaleString(locale) },
           h('i', { class: 'ctx-swatch' }),
           h('span', { class: 'ctx-name' }, tr(CONTEXT_PARTS[p.key] || p.key), p.count ? h('span', { class: 'ctx-count' }, p.count) : null),
           h('span', { class: 'ctx-tokens' }, fmtTokens(p.tokens)),
           h('span', { class: 'ctx-pct' }, pct(p.tokens)))))),
     h('div', { class: 'ctx-foot' },
-      h('span', {}, tr('History is compacted past {0} tokens', fmtTokens(ctx.history_limit))),
-      ctx.window ? h('span', { class: ctx.tokens > ctx.window ? 'ctx-window over' : 'ctx-window', title: ctx.window.toLocaleString(locale) },
-        tr(ctx.tokens > ctx.window ? 'Does not fit the model window of {0}' : 'Model window {0}', fmtTokens(ctx.window))) : null));
+      h('span', {}, tr('History is compacted at {0}', fmtTokens(ctx.limit))),
+      h('span', { class: over ? 'ctx-window over' : 'ctx-window' },
+        !ctx.window ? tr('Model window is unknown')
+          : over ? tr('Does not fit the model window of {0}', fmtTokens(ctx.window))
+            : tr('Free in the window: {0}', fmtTokens(ctx.window - ctx.tokens)))));
   const focus = (key) => view.querySelectorAll('[data-part]').forEach((e) => e.classList.toggle('dim', Boolean(key) && e.dataset.part !== key));
   view.addEventListener('mouseover', (e) => focus(e.target.closest('[data-part]')?.dataset.part));
   view.addEventListener('mouseleave', () => focus(null));

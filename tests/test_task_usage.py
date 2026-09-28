@@ -77,7 +77,7 @@ class ContextBreakdownTests(unittest.TestCase):
                "history_budget": 12000}
         usage = context_usage(ctx, 4000)
         self.assertEqual([p["tokens"] for p in usage["parts"]], [1500, 500, 2000])
-        self.assertEqual((usage["tokens"], usage["limit"], usage["history_limit"], usage["estimated"]), (4000, 8000, 6000, False))
+        self.assertEqual((usage["tokens"], usage["limit"], usage["estimated"]), (4000, 8000, False))
         self.assertEqual(usage["parts"][1]["count"], 5)
         self.assertIsNone(usage["window"])
         estimate = context_usage({**ctx, "history_budget": 2000, "window": 8192}, 0)

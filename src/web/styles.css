@@ -551,11 +551,14 @@ a.chip:hover { text-decoration: none; }
 .ctx-grid { flex: none; display: grid; grid-template-columns: repeat(10, 14px); gap: 3px; }
 .ctx-cell { aspect-ratio: 1; border-radius: 3.5px; background: var(--c); transition: opacity 0.15s var(--ease); }
 .ctx-cell[data-part="free"] { background: none; box-shadow: inset 0 0 0 1px var(--line-strong); }
+.ctx [data-part="reserve"] { --c: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.09) 0 1.5px, transparent 1.5px 4px); }
 .ctx-legend { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .ctx-row { display: grid; grid-template-columns: 8px minmax(0, 1fr) 4.4em 3.4em; align-items: center; column-gap: 10px; margin: 0 -8px; padding: 3.5px 8px; border-radius: var(--r-sm); font-size: 12.5px; transition: opacity 0.15s var(--ease), background 0.15s var(--ease); }
 .ctx-row:hover { background: var(--surface-2); }
 .ctx-swatch { width: 8px; height: 8px; border-radius: 2.5px; background: var(--c); }
 .ctx-row[data-part="free"] .ctx-swatch { background: none; box-shadow: inset 0 0 0 1px var(--muted); }
+.ctx-row[data-part="reserve"] .ctx-swatch { box-shadow: inset 0 0 0 1px var(--faint); }
+.ctx-row[data-part="reserve"] .ctx-name { color: var(--muted); }
 .ctx-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
 .ctx-count { margin-left: 6px; font: 11px var(--mono); color: var(--faint); }
 .ctx-tokens, .ctx-pct { text-align: right; font: 12px var(--mono); font-variant-numeric: tabular-nums; }
