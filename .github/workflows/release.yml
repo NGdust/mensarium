@@ -62,3 +62,16 @@ jobs:
           gh release create "v$VERSION" "dist/mensarium-$VERSION.tar.gz" \
             --target "$GITHUB_SHA" --title "v$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
           echo "Published v$VERSION, run \`mensarium update\` on the Core host" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish the site
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          make site
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          rsync -rt dist/site/ "$DEPLOY:./"

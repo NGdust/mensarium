@@ -1,4 +1,4 @@
-.PHONY: dev lint test schemas core target dist
+.PHONY: dev lint test schemas core target dist site-vendor site site-serve
 
 DIST_URL ?= https://mensarium.com
 VERSION := $(shell sed -n 's/^__version__ = "\(.*\)"/\1/p' src/__init__.py)
@@ -36,3 +36,19 @@ dist:
 	sed 's|^MENSARIUM_SOURCE_DEFAULT=""|MENSARIUM_SOURCE_DEFAULT="$(DIST_URL)/dist/mensarium.tar.gz"|' install.sh > dist/install.sh
 	printf '{"version": "%s", "file": "mensarium-%s.tar.gz", "sha256": "%s"}\n' $(VERSION) $(VERSION) $$(shasum -a 256 dist/mensarium.tar.gz | cut -d' ' -f1) > dist/latest.json
 	.venv/bin/python -c "from mensarium.plugins import export_index; export_index('dist/plugins.json')"
+
+site-vendor:
+	mkdir -p landing/vendor/fonts
+	sed 's|/static/fonts/|fonts/|g' src/web/styles.css > landing/vendor/product.css
+	cp src/web/orb.js src/web/favicon.svg src/web/apple-touch-icon.png landing/vendor/
+	cp src/web/fonts/*.woff2 landing/vendor/fonts/
+
+site: site-vendor
+	rm -rf dist/site
+	mkdir -p dist
+	cp -R landing dist/site
+	rm -rf dist/site/stand
+	printf '{"version": "%s"}\n' $(VERSION) > dist/site/version.json
+
+site-serve: site-vendor
+	python3 -m http.server -d landing 8800

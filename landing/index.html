@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#050506">
+  <title>Mensarium</title>
+  <meta name="description" content="Mensarium is a self-hosted agent harness: one Core runs the agent, every machine you own joins it, and every action is a signed request the Core checks first.">
+  <meta property="og:title" content="Mensarium">
+  <meta property="og:description" content="Your own agent cloud. One Core, every machine you own.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://mensarium.com/">
+  <meta property="og:image" content="https://mensarium.com/shots/hero-approval.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" type="image/svg+xml" href="vendor/favicon.svg">
+  <link rel="apple-touch-icon" href="vendor/apple-touch-icon.png">
+  <link rel="stylesheet" href="vendor/product.css">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+  <!--
+  THESIS: the page shows a personal cloud made of the owner's own machines and the moment an action waits for approval; it refuses the six-card feature grid and the "headline + install line + mockup" hero as the only scene.
+  OWN-WORLD: black frame #050506, one plum-lit inset panel, graphite surface ladder, hairline borders, Onest never heavier than 500, mono for everything copyable, flat violet buttons without glow, and one living element, the particle sphere from orb.js.
+  STORY: the visitor understands that Core is their own node, believes the model never touches a machine directly because they watch a signed request wait for a tap, and copies the install line.
+  FIRST VIEWPORT: centered: the Core sphere, a two-line headline, the lead, the install line with a copy button and a GitHub link; below them one full-width real screen of a chat that cross-fades from a new chat to a pending approval to the finished task.
+  FORM: centered claim over one full-width real screen (owner pointed at conductor.build for the hero shape); the roll (seed key 588a0aa2) is superseded by that pin.
+  FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+  -->
+  <svg style="display:none" aria-hidden="true">
+    <symbol id="i-laptop" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-arrowUp" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3 5 14h6l-1 7 8-11h-6z"/></symbol>
+    <symbol id="i-stopFill" viewBox="0 0 24 24"><rect x="7.5" y="7.5" width="9" height="9" rx="1.8" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 8 4 4-4 4M12 17h7"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="9" r="2.5"/><path d="M6 8.5v7M18 11.5c0 3-3 4-9.5 5"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+    <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M12 14 16 8"/><path d="M4 18a9 9 0 1 1 16 0"/><circle cx="12" cy="14" r="1"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 5v14l12-7z"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.7 5.7 3.7 9s-1.2 6.3-3.7 9c-2.5-2.7-3.7-5.7-3.7-9S9.5 5.7 12 3z"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M7 8h10v3a5 5 0 0 1-10 0z"/><path d="M12 16v5"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5z"/><path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19v-3"/></symbol>
+    <symbol id="i-graph" viewBox="0 0 24 24"><circle cx="6" cy="7" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.2 8.4 10.9 15.8M16.9 8.2l-3.8 7.6M8.5 6.8l7-.6"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+    <symbol id="i-window" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M6.5 6.5h.01M9 6.5h.01"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m21 3-7 18-4-8-8-4z"/><path d="M21 3 10 13"/></symbol>
+    <symbol id="i-robot" viewBox="0 0 24 24"><rect x="4.5" y="8" width="15" height="11" rx="3"/><path d="M12 8V5.2M2.5 12.5v3M21.5 12.5v3M9.5 16h5"/><circle cx="12" cy="4.2" r="1"/><circle cx="9.3" cy="12.4" r=".9"/><circle cx="14.7" cy="12.4" r=".9"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="1.8"/><rect x="4" y="13" width="16" height="7" rx="1.8"/><path d="M8 7.5h.01M8 16.5h.01"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></symbol>
+    <symbol id="i-github" viewBox="0 0 24 24"><path d="M9 19c-4.5 1.4-4.5-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></symbol>
+  </svg>
+
+  <header class="top">
+    <div class="wrap top-inner">
+      <a class="brand" href="#top"><span data-orb="22"></span><span class="brand-name">Mensarium</span></a>
+      <nav class="top-nav" aria-label="Sections">
+        <a href="#how">How it works</a>
+        <a href="#projects">Projects</a>
+        <a href="#approval">Approvals</a>
+        <a href="#install">Install</a>
+        <a href="#security">Security</a>
+      </nav>
+      <a class="btn btn-sm top-github" href="https://github.com/NGdust/mensarium"><svg class="icon"><use href="#i-github"/></svg>GitHub</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="intro" id="top">
+      <div class="wrap intro-inner">
+        <span data-orb="132" data-live-id="core-orb" class="intro-orb"></span>
+        <h1>Your own agent cloud.<br>One Core, every machine you own.</h1>
+        <p class="lead">Install Mensarium on a server or a laptop, pair your other computers, and give the agent work from a browser or Telegram. The model never touches a machine directly: every action is a signed request your Core checks first.</p>
+        <div class="install-line install-line-center" data-copy="curl -fsSL https://mensarium.com/install.sh | sh">
+          <code>curl -fsSL https://mensarium.com/install.sh | sh</code>
+          <button class="copy-btn" type="button" aria-label="Copy the install command"><svg class="icon"><use href="#i-copy"/></svg></button>
+        </div>
+        <div class="intro-links">
+          <a class="btn" href="https://github.com/NGdust/mensarium"><svg class="icon"><use href="#i-github"/></svg>View on GitHub</a>
+          <span class="intro-version" id="version" hidden></span>
+        </div>
+      </div>
+      <div class="wrap intro-shot-wrap">
+        <div class="frame shots intro-shot" id="hero-shot">
+          <img src="shots/hero-new.jpg" alt="Mensarium: a new chat on the Core, device atlas, ask-before-acting mode" data-state="new" class="on" width="1920" height="1200">
+          <img src="shots/hero-approval.jpg" alt="A chat on forge: the agent read the backup log and the cron file and waits for approval to edit it" data-state="approval" width="1920" height="1200" loading="eager">
+          <img src="shots/hero-done.jpg" alt="The same chat after the approval: the cron file is fixed and the agent reports the result" data-state="done" width="1920" height="1200">
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="how">
+      <div class="wrap">
+        <div class="col-text col-text-wide">
+          <h2>How it works</h2>
+          <p>Core is the one place that talks to the model, checks every action and keeps the log. Your machines connect to it and run only what it signed. Here is one task from start to finish.</p>
+        </div>
+        <div class="dg" id="dg-system">
+          <div class="dg-stage sys">
+            <svg class="dg-lines" aria-hidden="true"></svg>
+            <div class="sys-you">
+              <div class="dg-group">You</div>
+              <div class="sys-row">
+                <div class="dg-node" data-node="browser"><span class="dg-tile"><svg class="icon"><use href="#i-window"/></svg></span><div class="dg-text"><div class="dg-title">Browser</div><div class="dg-sub">on any paired machine</div></div></div>
+                <div class="dg-node" data-node="telegram"><span class="dg-tile"><svg class="icon"><use href="#i-send"/></svg></span><div class="dg-text"><div class="dg-title">Telegram</div><div class="dg-sub">tasks and approvals</div></div></div>
+              </div>
+            </div>
+            <div class="sys-dev">
+              <div class="dg-group">Your machines</div>
+              <div class="dg-node" data-node="atlas"><span class="dg-tile"><svg class="icon"><use href="#i-server"/></svg><span class="dot ok"></span></span><div class="dg-text"><div class="dg-title">atlas</div><div class="dg-sub">runs Core, a device too</div></div></div>
+              <div class="dg-node" data-node="studio"><span class="dg-tile"><svg class="icon"><use href="#i-laptop"/></svg><span class="dot ok"></span></span><div class="dg-text"><div class="dg-title">studio</div><div class="dg-sub">MacBook</div></div></div>
+              <div class="dg-node" data-node="forge"><span class="dg-tile"><svg class="icon"><use href="#i-monitor"/></svg><span class="dot ok"></span></span><div class="dg-text"><div class="dg-title">forge</div><div class="dg-sub">Linux workstation</div></div></div>
+              <div class="dg-node off" data-node="pi"><span class="dg-tile"><svg class="icon"><use href="#i-cpu"/></svg><span class="dot"></span></span><div class="dg-text"><div class="dg-title">pi</div><div class="dg-sub">offline</div></div></div>
+            </div>
+            <div class="sys-core" data-node="core">
+              <div class="sys-hub hub-edge"><span data-orb="96" data-live-id="sys-orb"></span><div class="dg-title">Core</div><div class="dg-sub">atlas</div></div>
+              <div class="sys-parts"><span class="pill" data-part="policy">policy</span><span class="pill" data-part="approvals">approvals</span><span class="pill" data-part="signing">signing</span><span class="pill" data-part="memory">memory</span><span class="pill" data-part="log">activity log</span></div>
+            </div>
+            <div class="sys-model">
+              <div class="dg-group">Model, any one of</div>
+              <div class="dg-node round" data-node="claude"><span class="dg-tile"><svg class="icon"><use href="#i-robot"/></svg></span><div class="dg-text"><div class="dg-title">Claude Code</div><div class="dg-sub">on the Core host</div></div></div>
+              <div class="dg-node round" data-node="codex"><span class="dg-tile"><svg class="icon"><use href="#i-robot"/></svg></span><div class="dg-text"><div class="dg-title">Codex</div><div class="dg-sub">on the Core host</div></div></div>
+              <div class="dg-node round" data-node="ollama"><span class="dg-tile"><svg class="icon"><use href="#i-robot"/></svg></span><div class="dg-text"><div class="dg-title">Ollama</div><div class="dg-sub">local or cloud</div></div></div>
+              <div class="dg-node round" data-node="openai"><span class="dg-tile"><svg class="icon"><use href="#i-robot"/></svg></span><div class="dg-text"><div class="dg-title">OpenAI API</div><div class="dg-sub">or any compatible one</div></div></div>
+            </div>
+          </div>
+          <div class="dg-controls">
+            <ol class="dg-steps">
+              <li><button type="button" class="dg-step" aria-current="step" data-caption="You write a task in the browser on any of your machines, or in Telegram."><span class="dg-num">1</span>You ask</button></li>
+              <li><button type="button" class="dg-step" data-caption="Core sends the model the task and the context. The model only proposes the next action. It never touches your machines."><span class="dg-num">2</span>The model proposes</button></li>
+              <li><button type="button" class="dg-step" data-caption="Core checks the action against the policy and its risk. Changing files, running programs and network access wait for your yes, in the browser or in Telegram."><span class="dg-num">3</span>You approve</button></li>
+              <li><button type="button" class="dg-step" data-caption="Core signs the request with a nonce and a deadline. The machine checks the signature and runs exactly that, inside the folders you allowed."><span class="dg-num">4</span>The machine runs it</button></li>
+              <li><button type="button" class="dg-step" data-caption="The result goes back to Core, into the activity log and the model's context, and the agent answers you."><span class="dg-num">5</span>You get the answer</button></li>
+            </ol>
+            <button type="button" class="icon-btn dg-play" aria-label="Pause"><svg class="icon"><use href="#i-pause"/></svg></button>
+          </div>
+          <p class="dg-caption" aria-live="polite">You write a task in the browser on any of your machines, or in Telegram.</p>
+        </div>
+        <ul class="dg-facts">
+          <li>A new machine joins with a one-time code that expires in ten minutes.</li>
+          <li>Machines dial out to Core. They open no ports and never talk to each other.</li>
+          <li>The machine that runs Core is a device too. There is nothing else to install on it.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="block" id="projects">
+      <div class="wrap">
+        <div class="col-text col-text-wide">
+          <h2>Keep working with the laptop closed</h2>
+          <p>Start a project from a folder on any of your machines. Core keeps its own copy, so the agent keeps working while that machine sleeps, and the results come back when it wakes up.</p>
+          <p class="pj-soon"><span class="pill accent">Coming soon</span><span>Already works for a project from a git link: Core clones the repository and runs every chat on its own copy.</span></p>
+        </div>
+        <div class="dg" id="dg-projects">
+          <div class="dg-stage pj">
+            <svg class="dg-lines" aria-hidden="true"></svg>
+            <div class="pj-card" data-node="laptop">
+              <div class="pj-head"><span class="device-badge" style="--hue:265">S<span class="dot ok"></span></span><span class="dg-title">studio</span><span class="pill ok pj-state"><span class="dot ok"></span><span class="pj-state-text">Online</span></span></div>
+              <div class="pj-row"><svg class="icon"><use href="#i-folder"/></svg><code>~/projects/homelab</code></div>
+              <div class="pj-files">compose.yaml, nginx/, backup/</div>
+              <div class="pj-label">Results on this machine</div>
+              <div class="pj-arrivals">
+                <div class="pj-empty">Nothing yet</div>
+                  <div class="pj-branch" data-i="0"><svg class="icon"><use href="#i-git"/></svg><code>mensarium/caddy-migration-7f2a</code></div>
+                  <div class="pj-branch" data-i="1"><svg class="icon"><use href="#i-git"/></svg><code>mensarium/backup-healthcheck-c91e</code></div>
+                  <div class="pj-branch" data-i="2"><svg class="icon"><use href="#i-git"/></svg><code>mensarium/grafana-port-3b08</code></div>
+              </div>
+              <div class="pj-note"><svg class="icon"><use href="#i-check"/></svg><span>Your files stay as they are until you apply a result.</span></div>
+            </div>
+            <div class="pj-card pj-core hub-edge" data-node="core">
+              <div class="pj-head"><span data-orb="34" data-live-id="pj-orb"></span><span class="dg-title">Core</span><span class="dg-sub">atlas</span></div>
+              <div class="pj-row pj-copy"><svg class="icon"><use href="#i-layers"/></svg><span>homelab</span><span class="pj-meta">its own copy</span></div>
+              <div class="pj-label">Chats, each in a separate copy</div>
+              <div class="pj-chats">
+                <div class="pj-empty">No chats yet</div>
+                  <div class="pj-chat" data-i="0"><span class="dot accent"></span><div class="dg-text"><div class="pj-chat-title">Move the proxy config to Caddy</div><code>mensarium/caddy-migration-7f2a</code></div><span class="pj-commits">0 commits</span></div>
+                  <div class="pj-chat" data-i="1"><span class="dot accent"></span><div class="dg-text"><div class="pj-chat-title">Add a healthcheck to the backup container</div><code>mensarium/backup-healthcheck-c91e</code></div><span class="pj-commits">0 commits</span></div>
+                  <div class="pj-chat" data-i="2"><span class="dot accent"></span><div class="dg-text"><div class="pj-chat-title">Point Grafana at port 3100</div><code>mensarium/grafana-port-3b08</code></div><span class="pj-commits">0 commits</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="dg-controls">
+            <ol class="dg-steps">
+              <li><button type="button" class="dg-step" aria-current="step" data-caption="Pick a folder or a repository on any paired machine. Core reads it and keeps its own copy, without .env files and keys."><span class="dg-num">1</span>Add a folder</button></li>
+              <li><button type="button" class="dg-step" data-caption="Each chat works in a separate copy on its own branch. Parallel chats never step on each other or on your files."><span class="dg-num">2</span>Start chats</button></li>
+              <li><button type="button" class="dg-step" data-caption="The laptop goes to sleep. Core still has the copy, so the agent keeps working and saves its progress."><span class="dg-num">3</span>Close the laptop</button></li>
+              <li><button type="button" class="dg-step" data-caption="Once the laptop is back online, the results arrive as new branches. Nothing in your folder changes until you apply them."><span class="dg-num">4</span>Open it again</button></li>
+            </ol>
+            <button type="button" class="icon-btn dg-play" aria-label="Pause"><svg class="icon"><use href="#i-pause"/></svg></button>
+          </div>
+          <p class="dg-caption" aria-live="polite">Pick a folder or a repository on any paired machine. Core reads it and keeps its own copy, without .env files and keys.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="approval">
+      <div class="wrap">
+        <div class="col-text col-text-wide">
+          <h2>Nothing runs unsigned</h2>
+          <p>When an action would change files, run a program or reach the network, the chat stops and asks. You see the exact command, the machine and the risk, and allow it once. The same request arrives in Telegram as two buttons.</p>
+        </div>
+        <div class="frame shots zoom"><img src="shots/hero-approval.jpg" alt="Your decision is needed: files.edit on forge, risk file changes, Run once or Reject" width="1920" height="1200" loading="lazy"></div>
+        <div class="risks" aria-label="Risk levels">
+          <span class="pill">read</span>
+          <span class="pill warn">file changes</span>
+          <span class="pill orange">run a program</span>
+          <span class="pill accent">network access</span>
+          <span class="pill danger">irreversible action</span>
+          <span class="risks-note">Full access skips the wait for reads, changes and programs on a device that allows it. Irreversible actions and plugin installs still ask.</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="install">
+      <div class="wrap two">
+        <div class="col-text">
+          <h2>Start in two commands</h2>
+          <p>One line installs uv, Python and the package into your home folder. No Docker, no accounts. Everything else is asked by the setup itself: port, model provider, which folders and programs the agent may use on this machine.</p>
+          <p>On every other machine the same installer and <code>mensarium client</code>: paste the pairing code, and the device is online in a few seconds.</p>
+        </div>
+        <div class="term" id="term">
+          <div class="term-tabs" role="tablist" aria-label="Which machine">
+            <button class="term-tab active" role="tab" aria-selected="true" aria-controls="term-core" id="tab-core" type="button">Core</button>
+            <button class="term-tab" role="tab" aria-selected="false" aria-controls="term-client" id="tab-client" type="button">Another machine</button>
+          </div>
+          <pre class="term-body" id="term-core" role="tabpanel" aria-labelledby="tab-core"><span class="t-prompt">$</span> curl -fsSL https://mensarium.com/install.sh | sh
+<span class="t-dim">  Portable Agent Harness installer</span>
+
+  <span class="t-ok">✓</span> Fetching Mensarium source
+  <span class="t-ok">✓</span> Installing uv (Python toolchain manager)
+  <span class="t-ok">✓</span> Preparing Python 3.12 environment
+  <span class="t-ok">✓</span> Installing Mensarium and dependencies
+  <span class="t-ok">✓</span> Command installed: ~/.local/bin/mensarium
+
+  Next step on this machine:
+    <span class="t-b">mensarium core</span>     run the Core here (the agent's brain, the web UI and its first device)
+    <span class="t-b">mensarium client</span>   connect this machine to a Core
+
+<span class="t-prompt">$</span> mensarium core
+<span class="t-dim">  Core setup: the main agent, the web UI and this machine as the agent's first device</span>
+
+<span class="t-rule">── Step 1/4  Network ──────────────────────────────────</span>
+<span class="t-q">?</span> Port for the API (clients connect here): <span class="t-a">8787</span>
+<span class="t-q">?</span> Who should be able to reach the Core? <span class="t-a">Devices in my network (clients on other machines)</span>
+<span class="t-q">?</span> URL clients will use to reach the Core: <span class="t-a">http://10.0.1.4:8787</span>
+
+<span class="t-rule">── Step 2/4  LLM provider ─────────────────────────────</span>
+<span class="t-q">?</span> Where does the model run? <span class="t-a">Claude Code on this machine (logged in, no API key needed)</span>
+<span class="t-q">?</span> Default model (type to filter, Tab to complete): <span class="t-a">sonnet</span>
+
+<span class="t-rule">── Step 3/4  This machine as a device ─────────────────</span>
+<span class="t-q">?</span> Name for this machine: <span class="t-a">atlas</span>
+<span class="t-q">?</span> Folders the agent may read and work in: <span class="t-a">/srv, /home/v/projects</span>
+<span class="t-q">?</span> Which programs may shell.exec run (every run still needs your approval)? <span class="t-a">Common developer tools (git, python, pytest, npm, make, ...)</span>
+<span class="t-q">?</span> Allow full-access mode on this machine (all files and programs, including system commands, without asking, within OS permissions)? <span class="t-a">Yes</span>
+<span class="t-q">?</span> Allow the Core to run MCP servers from plugins on this machine (programs must be in the list above)? <span class="t-a">Yes</span>
+<span class="t-q">?</span> Allow the agent to run bash scripts on this machine (each script is approved by you in the chat)? <span class="t-a">Yes</span>
+<span class="t-ok">✅</span> Core signing key fingerprint: 7C2E:91A4:0B6D:E3F8
+<span class="t-ok">✅</span> Configuration saved to /home/v/.mensarium/core/config.yaml
+
+<span class="t-rule">── Step 4/4  Service ──────────────────────────────────</span>
+<span class="t-q">?</span> Run the Core as a background service (starts on login/boot)? <span class="t-a">Yes</span>
+<span class="t-ok">✅</span> Core is running (systemd unit mensarium-core.service)
+
+<span class="t-box">╭─ Mensarium Core is ready ────────────────────────────╮
+│                                                       │
+│  <span class="t-dim">Core URL</span>  <span class="t-b">http://10.0.1.4:8787</span>                          │
+│  <span class="t-dim">Provider</span>  <span class="t-b">claude_code / sonnet</span>                          │
+│  <span class="t-dim">Device</span>    <span class="t-b">atlas: /srv, /home/v/projects</span>                 │
+│  <span class="t-dim">Data</span>      <span class="t-b">/home/v/.mensarium</span>                            │
+│                                                       │
+│  Open the web UI: http://10.0.1.4:8787/login?link=…   │
+│  Other machines: `mensarium core pair-code` here,     │
+│  `mensarium client` there.                            │
+╰───────────────────────────────────────────────────────╯</span></pre>
+          <pre class="term-body" id="term-client" role="tabpanel" aria-labelledby="tab-client" hidden><span class="t-prompt">$</span> curl -fsSL https://mensarium.com/install.sh | sh
+<span class="t-dim">  Portable Agent Harness installer</span>
+
+  <span class="t-ok">✓</span> Fetching Mensarium source
+  <span class="t-ok">✓</span> Installing uv (Python toolchain manager)
+  <span class="t-ok">✓</span> Preparing Python 3.12 environment
+  <span class="t-ok">✓</span> Installing Mensarium and dependencies
+  <span class="t-ok">✓</span> Command installed: ~/.local/bin/mensarium
+
+<span class="t-prompt">$</span> mensarium client
+<span class="t-dim">  Client setup: this machine becomes a device of the Core</span>
+
+<span class="t-rule">── Step 1/4  Connect to the Core ──────────────────────</span>
+<span class="t-q">?</span> Core URL: <span class="t-a">http://10.0.1.4:8787</span>
+<span class="t-ok">✅</span> Core reachable at http://10.0.1.4:8787
+
+<span class="t-rule">── Step 2/4  Workspace access ─────────────────────────</span>
+<span class="t-q">?</span> Folders the agent may read and work in: <span class="t-a">/home/v/work, /etc/cron.d</span>
+<span class="t-q">?</span> Which programs may shell.exec run (every run still needs your approval)? <span class="t-a">Custom list</span>
+<span class="t-q">?</span> Programs, comma separated: <span class="t-a">git, make, uv, python3, journalctl, systemctl, df, du</span>
+<span class="t-q">?</span> Allow full-access mode on this machine (all files and programs, including system commands, without asking, within OS permissions)? <span class="t-a">No</span>
+<span class="t-q">?</span> Allow the Core to run MCP servers from plugins on this machine (programs must be in the list above)? <span class="t-a">Yes</span>
+<span class="t-q">?</span> Allow the agent to run bash scripts on this machine (each script is approved by you in the chat)? <span class="t-a">Yes</span>
+<span class="t-q">?</span> Allow the Core to update this agent from its web UI (downloads the release from the Core and restarts the agent)? <span class="t-a">Yes</span>
+
+<span class="t-rule">── Step 3/4  Pairing ──────────────────────────────────</span>
+<span class="t-q">?</span> Name for this machine: <span class="t-a">forge</span>
+<span class="t-q">?</span> Pairing code from the Core (Devices -> Pair new device): <span class="t-a">CEDAR-HARBOR-4821</span>
+<span class="t-ok">✅</span> Paired as tgt_01k6a3m9x2b7r4qz8v5n1c0p6h
+<span class="t-ok">✅</span> Core key fingerprint: 7C2E:91A4:0B6D:E3F8 (compare with Settings in the web UI)
+
+<span class="t-rule">── Step 4/4  Service ──────────────────────────────────</span>
+<span class="t-q">?</span> Let the agent work on this machine (run tools here)? <span class="t-a">Yes</span>
+<span class="t-q">?</span> Open the web UI on this machine (gateway)? <span class="t-a">No</span>
+<span class="t-q">?</span> Run the client as background services? <span class="t-a">Yes</span>
+<span class="t-ok">✅</span> client is running (systemd unit mensarium-client.service)
+
+<span class="t-box">╭─ Client is ready ────────────────────────────────────╮
+│                                                       │
+│  <span class="t-dim">Name</span>         <span class="t-b">forge</span>                                   │
+│  <span class="t-dim">Core</span>         <span class="t-b">http://10.0.1.4:8787</span>                    │
+│  <span class="t-dim">Worker</span>       <span class="t-b">enabled</span>                                 │
+│  <span class="t-dim">Roots</span>        <span class="t-b">/home/v/work, /etc/cron.d</span>               │
+│  <span class="t-dim">Full access</span>  <span class="t-b">disabled</span>                                │
+│  <span class="t-dim">Gateway</span>      <span class="t-b">disabled</span>                                │
+│                                                       │
+│  The device appears as online in the web UI within    │
+│  a few seconds.                                       │
+╰───────────────────────────────────────────────────────╯</span></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="screens">
+      <div class="wrap">
+        <div class="col-text col-text-wide">
+          <h2>What the agent works with</h2>
+          <p>Chats are only the front. Behind them Core keeps projects with their own branches, scheduled runs, plugins and skills, notes it remembers, and a hashed activity log, all in one place and all yours.</p>
+        </div>
+        <div class="screens" id="screens-frame">
+          <div class="screen-tabs" role="tablist" aria-label="Pages">
+            <button class="term-tab active" role="tab" aria-selected="true" aria-controls="scr-projects" id="tab-projects" type="button">Projects</button>
+            <button class="term-tab" role="tab" aria-selected="false" aria-controls="scr-autos" id="tab-autos" type="button">Automations</button>
+            <button class="term-tab" role="tab" aria-selected="false" aria-controls="scr-plugins" id="tab-plugins" type="button">Plugins</button>
+            <button class="term-tab" role="tab" aria-selected="false" aria-controls="scr-memory" id="tab-memory" type="button">Memory</button>
+            <button class="term-tab" role="tab" aria-selected="false" aria-controls="scr-audit" id="tab-audit" type="button">Activity log</button>
+          </div>
+          <div class="frame shots wide screens-shot">
+            <img id="scr-projects" role="tabpanel" aria-labelledby="tab-projects" src="shots/project.jpg" alt="Project homelab: three chats, each on its own mensarium branch" width="1920" height="1200" loading="lazy">
+            <img id="scr-autos" role="tabpanel" aria-labelledby="tab-autos" src="shots/automations.jpg" alt="Automations: morning report, certificate check, log rotation, built-in client updates" width="1920" height="1200" loading="lazy" hidden>
+            <img id="scr-plugins" role="tabpanel" aria-labelledby="tab-plugins" src="shots/plugins.jpg" alt="Plugins: device tools and MCP servers from the catalog" width="1920" height="1200" loading="lazy" hidden>
+            <img id="scr-memory" role="tabpanel" aria-labelledby="tab-memory" src="shots/memory.jpg" alt="Memory: notes about devices and preferences as a graph" width="1920" height="1200" loading="lazy" hidden>
+            <img id="scr-audit" role="tabpanel" aria-labelledby="tab-audit" src="shots/audit.jpg" alt="Activity log: every request and result with its hash" width="1920" height="1200" loading="lazy" hidden>
+          </div>
+          <p class="screens-note">Every screen on this page is the product as Core serves it, captured from a running installation with a few paired machines.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="models">
+      <div class="wrap two">
+        <div class="col-text">
+          <h2>Bring your own model</h2>
+          <p>Claude Code and Codex already on the Core host, Ollama, llama.cpp and LM Studio on your own hardware, or OpenAI, OpenRouter and any OpenAI-compatible endpoint with a key. Change the provider in settings; nothing else changes.</p>
+        </div>
+        <ul class="providers">
+          <li><span>Claude Code</span><span class="fine">CLI on the Core host, its own login</span></li>
+          <li><span>Codex</span><span class="fine">CLI on the Core host, its own login</span></li>
+          <li><span>Ollama</span><span class="fine">local server or Ollama Cloud</span></li>
+          <li><span>llama.cpp</span><span class="fine">local server</span></li>
+          <li><span>LM Studio</span><span class="fine">local server</span></li>
+          <li><span>OpenAI</span><span class="fine">API key, kept in Core</span></li>
+          <li><span>OpenRouter</span><span class="fine">API key, kept in Core</span></li>
+          <li><span>OpenAI-compatible</span><span class="fine">any base URL</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="block" id="security">
+      <div class="wrap two">
+        <div class="col-text">
+          <h2>Nothing leaves your machines</h2>
+          <p>There is no hosted tier and no account. Core is the only process that holds keys, and it runs where you put it.</p>
+        </div>
+        <ul class="claims">
+          <li>Keys and tokens live in Core and never reach a prompt, a device or a log. Integrations get a reference like <code>secret://name</code>, not the value.</li>
+          <li>The agent reads files, not secrets: <code>.env</code>, tokens and private keys are cut out before the model sees them.</li>
+          <li>Every request to a device carries a signature, a nonce and a deadline. A replayed or altered request is dropped.</li>
+          <li>Core checks mensarium.com for updates and talks to nobody else. Devices talk only to Core.</li>
+          <li>The activity log is a hash chain. Export a password-protected backup and move Core to another machine when you want.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="final">
+      <div class="wrap">
+        <h2>One line to your own agent cloud</h2>
+        <div class="install-line install-line-center" data-copy="curl -fsSL https://mensarium.com/install.sh | sh">
+          <code>curl -fsSL https://mensarium.com/install.sh | sh</code>
+          <button class="copy-btn" type="button" aria-label="Copy the install command"><svg class="icon"><use href="#i-copy"/></svg></button>
+        </div>
+        <p class="fine">macOS and Linux. Python 3.12 and uv are installed for you into <code>~/.mensarium</code>.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <div class="wrap foot-inner">
+      <span class="brand"><span data-orb="18" data-still></span><span class="brand-name">Mensarium</span></span>
+      <a href="https://github.com/NGdust/mensarium">GitHub</a>
+      <a href="https://mensarium.com/install.sh">install.sh</a>
+      <span class="foot-version" id="foot-version"></span>
+    </div>
+  </footer>
+
+  <script type="module" src="site.js"></script>
+</body>
+</html>
