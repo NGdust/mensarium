@@ -69,6 +69,7 @@ class CorePaths:
         self.signing_key = self.keys / "core_ed25519.pem"
         self.artifacts = self.root / "artifacts"
         self.skills = self.root / "skills"
+        self.instructions = self.root / "instructions"
         self.logs = self.root / "logs"
         self.device = ClientPaths(self.root / "device")
 

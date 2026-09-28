@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
 from mensarium import __version__
+from mensarium.agent_core.context import INSTRUCTION_FILE_CHARS
 from mensarium.agent_core.profile import AgentProfile, builtin_profiles
 from mensarium.client.agent import ClientAgent
 from mensarium.client.gateway import auth as ui_auth
@@ -42,6 +43,7 @@ from mensarium.core.db import Database
 from mensarium.core.device import ensure_device
 from mensarium.core.dreaming import Dreamer, DreamError
 from mensarium.core.events import EventBus
+from mensarium.core.instructions import InstructionError, InstructionStore
 from mensarium.core.limits import LimitsStore
 from mensarium.core.memory import KINDS, Memory, NoteError
 from mensarium.core.orchestrator import Orchestrator, TaskError, full_access, missing_tools
@@ -80,6 +82,7 @@ class Core:
     catalog: Catalog
     plugins: PluginManager
     skills: SkillStore
+    instructions: InstructionStore
     memory: Memory
     dreamer: Dreamer
     channels: ChannelManager
@@ -201,6 +204,10 @@ class EnabledBody(BaseModel):
     enabled: bool
 
 
+class InstructionBody(BaseModel):
+    content: str = Field("", max_length=200_000)
+
+
 class SkillBody(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=64)
     description: str = Field(min_length=1, max_length=1024)
@@ -266,6 +273,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         bus = EventBus(repo)
         memory = Memory(repo)
         skills = SkillStore(repo, workspace_id, paths.skills)
+        instructions = InstructionStore(paths.instructions)
         await skills.adopt_plugins()
         plugins = PluginManager(repo, paths, workspace_id)
         plugins.send_plugins = lambda target_id, servers: hub.request_plugins(target_id, servers, cfg.execution.request_ttl_s)
@@ -273,7 +281,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         hub.on_connect = plugins.sync_device
         await plugins.start()
         catalog = Catalog(cfg.plugins.catalog_url)
-        orchestrator = Orchestrator(repo, hub, bus, provider, cfg, workspace_id, paths.artifacts, memory, plugins, skills, catalog)
+        orchestrator = Orchestrator(repo, hub, bus, provider, cfg, workspace_id, paths.artifacts, memory, plugins, skills, catalog, instructions)
         device = await ensure_device(repo, paths, cfg, public_key_b64(key), workspace_id)
         projects = ProjectManager(repo, workspace_id, hub, cfg.execution.request_ttl_s)
         projects.device_id = device[0].target_id if device else None
@@ -315,6 +323,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             catalog=catalog,
             plugins=plugins,
             skills=skills,
+            instructions=instructions,
             memory=memory,
             dreamer=dreamer,
             channels=channels,
@@ -1034,6 +1043,18 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         except SkillError as e:
             raise skill_error(e) from e
         return {"ok": True}
+
+    @app.get("/v1/instructions")
+    async def list_instructions(c: Core = Depends(auth)) -> dict[str, Any]:
+        return {"items": c.instructions.all(), "folder": str(c.paths.instructions), "limit": INSTRUCTION_FILE_CHARS}
+
+    @app.put("/v1/instructions/{name}")
+    async def save_instruction(name: str, body: InstructionBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        """Empty content removes the file."""
+        try:
+            return c.instructions.save(name, body.content)
+        except InstructionError as e:
+            raise HTTPException(404, str(e)) from e
 
     def note_error(e: NoteError) -> HTTPException:
         return HTTPException(404 if "not found" in str(e) else 409, str(e))

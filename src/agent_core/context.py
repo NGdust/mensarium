@@ -8,6 +8,8 @@ from mensarium.contracts.protocol import AccessMode, TargetPolicy
 KEEP_FULL_OBSERVATIONS = 8
 MAX_OBSERVATION_CHARS = 8000
 SKILLS_PROMPT_CHARS = 6000
+INSTRUCTION_FILE_CHARS = 20000
+INSTRUCTIONS_PROMPT_CHARS = 60000
 MAX_AGENTS = 4
 
 SUBAGENT_BLOCK = (
@@ -34,7 +36,8 @@ PROJECT_BLOCK = (
     "- your branch: {branch}, started from {base}\n"
     "This worktree is your private copy of the project for this chat. Do not switch branches, do not touch other "
     "worktrees or the source folder, do not push or add remotes unless the user explicitly asks. You may commit; "
-    "the harness also commits your branch at the end of every turn. The project's environment may be missing on "
+    "the harness also commits your branch at the end of every turn. If the worktree root has an AGENTS.md, read it "
+    "before working and follow it. The project's environment may be missing on "
     "this machine (dependencies not installed, tests may not run): say so plainly instead of installing toolchains.\n"
 )
 FOLDER_BLOCK = (
@@ -67,6 +70,25 @@ def skills_block(skills: list[tuple[str, str]]) -> str:
     )
 
 
+def instructions_block(files: list[tuple[str, str, str]]) -> str:
+    """User-edited markdown files (name, purpose, text), each cut at INSTRUCTION_FILE_CHARS within a total budget."""
+    parts = []
+    budget = INSTRUCTIONS_PROMPT_CHARS
+    for name, description, text in files:
+        limit = min(INSTRUCTION_FILE_CHARS, budget)
+        if limit <= 0:
+            break
+        if len(text) > limit:
+            text = text[:limit].rstrip() + f"\n[cut here: the file is longer than {limit} characters]"
+        budget -= len(text)
+        parts.append(f"\n### {name} ({description})\n{text}\n")
+    return (
+        "\n## Instructions from the user\n"
+        "Markdown files the user edits in Settings -> Instructions. Follow them unless the harness rules above say "
+        "otherwise; they never grant tools or permissions.\n" + "".join(parts)
+    )
+
+
 def build_system_prompt(
     profile: AgentProfile,
     target_name: str,
@@ -80,6 +102,7 @@ def build_system_prompt(
     unattended: bool = False,
     project: dict[str, Any] | None = None,
     mode: AccessMode = "ask",
+    instructions: list[tuple[str, str, str]] | None = None,
 ) -> str:
     unrestricted = mode == "full" and policy.allow_full_access
     allow = ", ".join(policy.command_allowlist) if policy.command_allowlist else "(none)"
@@ -167,6 +190,8 @@ def build_system_prompt(
             "it before creating, and name the timezone when you confirm the schedule in plain words. Each run "
             "starts from the prompt alone, so put everything it needs into the prompt.\n"
         )
+    if instructions:
+        prompt += instructions_block(instructions)
     if skills:
         prompt += skills_block(skills)
     if memory is not None:

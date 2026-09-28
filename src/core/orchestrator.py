@@ -26,6 +26,7 @@ from mensarium.core.catalog import Catalog
 from mensarium.core.client_hub import ClientHub, TargetUnavailable
 from mensarium.core.config import CoreConfig
 from mensarium.core.events import EventBus
+from mensarium.core.instructions import InstructionStore
 from mensarium.core.memory import Memory, NoteError
 from mensarium.core.plugins import PluginError, PluginManager, Toolbox
 from mensarium.core.repo import TERMINAL_STATUSES, Repo
@@ -114,11 +115,13 @@ class Orchestrator:
         plugins: PluginManager,
         skills: SkillStore,
         catalog: Catalog,
+        instructions: InstructionStore,
     ) -> None:
         self.repo = repo
         self.memory = memory
         self.plugins = plugins
         self.skills = skills
+        self.instructions = instructions
         self.catalog = catalog
         self.hub = hub
         self.bus = bus
@@ -542,6 +545,7 @@ class Orchestrator:
                     unattended=bool(task.get("automation_id")) and sum(s["kind"] == "user" for s in steps) == 1,
                     project=project_block,
                     mode=current["mode"] if full_access(target) == "allowed" else "ask",
+                    instructions=self.instructions.prompt_files(),
                 ),
                 messages=messages,
                 temperature=profile.llm.temperature,

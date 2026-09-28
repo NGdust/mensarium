@@ -1577,6 +1577,7 @@ const SETTINGS = [
   ['channels', 'send', tr('Channels')],
   ['memory', 'graph', tr('Memory')],
   ['skills', 'book', tr('Skills')],
+  ['instructions', 'file', tr('Instructions')],
   ['plugins', 'package', tr('Plugins')],
   ['profiles', 'layers', tr('Profiles')],
   ['audit', 'list', tr('Activity log')],
@@ -1636,7 +1637,7 @@ const cmdValue = (cmd) => [h('code', {}, cmd), copyBtn(cmd)];
 async function viewSettings(key) {
   const shell = ensureSettingsShell();
   shell.setActive();
-  const views = { overview: settingsOverview, providers: settingsProviders, model: settingsProviders, devices: settingsDevices, channels: settingsChannels, memory: settingsMemory, skills: settingsSkills, plugins: settingsPlugins, marketplace: settingsPlugins, profiles: settingsProfiles, audit: settingsAudit };
+  const views = { overview: settingsOverview, providers: settingsProviders, model: settingsProviders, devices: settingsDevices, channels: settingsChannels, memory: settingsMemory, skills: settingsSkills, instructions: settingsInstructions, plugins: settingsPlugins, marketplace: settingsPlugins, profiles: settingsProfiles, audit: settingsAudit };
   await (views[key] || settingsOverview)(shell);
 }
 
@@ -2504,6 +2505,84 @@ async function settingsSkills(shell) {
     h('div', { class: 'market-bar' }, h('div', { class: 'settings-search market-search' }, icon('search'), search)),
     list,
   );
+  await load();
+}
+
+const INSTRUCTION_DESC = {
+  'AGENTS.md': () => tr('Operating instructions: rules, priorities, how to work.'),
+  'SOUL.md': () => tr('Persona and tone of the agent.'),
+  'IDENTITY.md': () => tr('The name and style the agent presents itself with.'),
+  'USER.md': () => tr('Who you are: role, timezone, languages and tools you prefer.'),
+};
+const INSTRUCTION_HINT = {
+  'AGENTS.md': () => tr('# How to work\n\n- Answer in the language of the question.\n- Run the tests before reporting a change.\n- Do not touch files outside the task.'),
+  'SOUL.md': () => tr('# Soul\n\nDirect and concise. When an idea looks wrong, say so and propose a better one.'),
+  'IDENTITY.md': () => tr('# Identity\n\nName: ...\nStyle: ...'),
+  'USER.md': () => tr('# User\n\nName, role, timezone, preferred languages and tools.'),
+};
+
+async function settingsInstructions(shell) {
+  const list = h('div', {}, h('div', { class: 'empty' }, tr('Loading...')));
+  let items = [];
+  let folder = '';
+  let limit = 20000;
+
+  function fileRow(f) {
+    const desc = INSTRUCTION_DESC[f.name] ? INSTRUCTION_DESC[f.name]() : f.description;
+    return h('div', { class: 'row' },
+      h('span', { class: 'market-icon' }, icon('file')),
+      h('div', { class: 'row-text' },
+        h('div', { class: 'row-title' }, h('code', {}, f.name),
+          f.missing ? h('span', { class: 'pill' }, tr('not set')) : f.content.length > limit ? h('span', { class: 'pill warn', title: tr('The agent sees only the first {0} characters', limit.toLocaleString(locale)) }, tr('too long')) : null),
+        h('div', { class: 'row-desc' }, desc)),
+      h('div', { class: 'row-value' },
+        f.missing ? null : h('span', {}, tr('{0} characters, {1}', f.content.length.toLocaleString(locale), relTime(f.updated_at))),
+        h('button', { class: 'btn btn-sm', onclick: () => editor(f) }, f.missing ? tr('Create') : tr('Edit'))));
+  }
+
+  function editor(f) {
+    const body = h('textarea', { class: 'market-yaml skill-body', rows: 18, spellcheck: 'false', 'aria-label': f.name, placeholder: INSTRUCTION_HINT[f.name] ? INSTRUCTION_HINT[f.name]() : '' });
+    body.value = f.content;
+    const count = h('div', { class: 'row-desc' });
+    const updateCount = () => {
+      const n = body.value.length;
+      count.textContent = tr('{0} / {1} characters', n.toLocaleString(locale), limit.toLocaleString(locale));
+      count.classList.toggle('over', n > limit);
+    };
+    body.addEventListener('input', updateCount);
+    updateCount();
+    const save = h('button', { class: 'btn btn-primary' }, tr('Save'));
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      try {
+        await api(`/v1/instructions/${f.name}`, { method: 'PUT', body: JSON.stringify({ content: body.value }) });
+        closeLayer();
+        toast(body.value.trim() ? tr('Saved') : tr('Removed'));
+        await load();
+      } catch (err) { fail(err); } finally { save.disabled = false; }
+    });
+    openModal(
+      h('div', { class: 'modal-head' }, h('h2', {}, f.name), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
+      h('p', { class: 'row-desc' }, INSTRUCTION_DESC[f.name] ? INSTRUCTION_DESC[f.name]() : f.description, ' ', tr('The agent sees the first {0} characters at the start of every chat. Save it empty to remove the file.', limit.toLocaleString(locale))),
+      h('div', { class: 'plugin-form' }, body, count),
+      h('div', { class: 'modal-actions' }, h('span', { class: 'spacer' }), h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
+    ).classList.add('modal-wide');
+    body.focus();
+  }
+
+  function render() {
+    list.replaceChildren(section(tr('Files'), tr('Files in {0}. Edit them here or in that folder.', folder), h('div', { class: 'rows' }, items.map(fileRow))));
+  }
+
+  async function load() {
+    const data = await get('/v1/instructions');
+    items = data.items;
+    folder = data.folder;
+    limit = data.limit;
+    render();
+  }
+
+  page(shell, tr('Instructions'), tr('Markdown files the agent reads at the start of every chat: how to work, its persona and name, who you are. Same files as an OpenClaw workspace, so you can copy yours over. Missing files are skipped.'), null, list);
   await load();
 }
 
