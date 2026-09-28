@@ -3,13 +3,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="dark light">
   <meta name="theme-color" content="#050506">
   <title>Mensarium</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="alternate icon" type="image/png" sizes="32x32" href="/static/favicon.png">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="stylesheet" href="/static/styles.css">
+  <script>
+    // The theme has to be on the element before the first paint, so it is picked here and not in app.js;
+    // theme.js owns everything else about it.
+    try {
+      var choice = localStorage.getItem('theme');
+      var auto = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      var theme = choice === 'light' || choice === 'dark' ? choice : choice === 'auto' ? auto : 'dark';
+      document.documentElement.dataset.theme = theme;
+      document.querySelector('meta[name="theme-color"]').content = theme === 'light' ? '#eeebf3' : '#050506';
+    } catch (e) { /* no storage: stay dark */ }
+  </script>
 </head>
 <body>
   <!--

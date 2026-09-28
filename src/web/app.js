@@ -1,6 +1,7 @@
 // Mensarium web UI. Vanilla ES module, no build step, no dependencies.
 
 import { LANGUAGES, lang, locale, setLang, t as tr, tp } from './i18n.js';
+import { THEMES, setTheme, themeChoice } from './theme.js';
 import { createOrb } from './orb.js';
 import { createMemoryMap, graphColor } from './graph.js';
 
@@ -494,6 +495,13 @@ function languageSwitch(compact = false) {
 function languageSelect() {
   return h('select', { class: 'lang-select', 'aria-label': tr('Language'), onchange: (e) => { if (e.target.value !== lang) setLang(e.target.value); } },
     Object.entries(LANGUAGES).map(([code, name]) => h('option', { value: code, selected: code === lang }, name)));
+}
+
+const THEME_NAMES = { dark: () => tr('Dark'), light: () => tr('Light'), auto: () => tr('System theme') };
+
+function themeSelect() {
+  return h('select', { class: 'theme-select', 'aria-label': tr('Theme'), onchange: (e) => { if (e.target.value !== themeChoice) setTheme(e.target.value); } },
+    THEMES.map((key) => h('option', { value: key, selected: key === themeChoice }, THEME_NAMES[key]())));
 }
 
 // ---------- usage limits ----------
@@ -2051,7 +2059,7 @@ async function settingsOverview(shell) {
   const renderLimits = () => limitsBox.replaceChildren(...limitsBody());
   renderLimits();
   state.limitsRender = () => { if (limitsBox.isConnected) renderLimits(); };
-  page(shell, tr('Overview'), tr('Where the main agent is reachable, and how to check that devices are talking to it.'), [languageSelect(), logout],
+  page(shell, tr('Overview'), tr('Where the main agent is reachable, and how to check that devices are talking to it.'), [themeSelect(), languageSelect(), logout],
     h('div', { class: 'hero' }, orb('md'), h('div', { class: 'hero-text' }, h('h2', {}, 'Mensarium Core'), h('p', {}, tr('Version {0}', s.version))), coreUpdate),
     section(tr('Usage limits'), tr('How much of each connected provider\'s quota is used. The default provider, the one last picked for a new chat, warns above the chat input from {0}%.', Math.round((state.limits?.threshold || 0.75) * 100)), limitsBox),
     section(tr('Connection'), null, h('div', { class: 'rows' },

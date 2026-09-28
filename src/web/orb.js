@@ -1,11 +1,22 @@
 // The agent's face: a particle sphere whose surface ripples and breathes. One shared animation loop.
 
-const STOPS = [
-  [150, 170, 255],
-  [164, 123, 255],
-  [214, 108, 240],
-  [255, 134, 196],
-];
+// On black the particles are added to the ground (composite "lighter"), so the arc is bright; on paper they are
+// painted over it, so the same violet arc has to be darker than the page. The theme is fixed for the page's life:
+// theme.js reloads on a switch.
+const light = document.documentElement.dataset.theme === 'light';
+const STOPS = light
+  ? [
+    [74, 96, 214],
+    [110, 66, 226],
+    [176, 54, 206],
+    [206, 60, 140],
+  ]
+  : [
+    [150, 170, 255],
+    [164, 123, 255],
+    [214, 108, 240],
+    [255, 134, 196],
+  ];
 const BUCKETS = 24;
 const ALPHAS = 8;
 // Particles are batched by (color band, alpha step) so each frame issues ~200 fills instead of thousands.
@@ -88,7 +99,7 @@ function draw(orb, time) {
   }
 
   ctx.clearRect(0, 0, px, px);
-  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalCompositeOperation = light ? 'source-over' : 'lighter';
   for (let k = 0; k < batches.length; k++) {
     const b = batches[k];
     if (!b.length) continue;

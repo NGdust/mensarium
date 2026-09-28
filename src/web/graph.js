@@ -4,17 +4,32 @@
 
 import { createOrb } from './orb.js';
 
-const KIND_COLORS = {
-  fact: '#a47bff',
-  preference: '#ff86c4',
-  project: '#96aaff',
-  person: '#f2b867',
-  device: '#5ad49a',
-  howto: '#d66cf0',
-  note: '#cbc6d6',
-  tag: '#6fd3c9',
-  ghost: '#6c6778',
-};
+// A note's type is its colour, on the tile, its line and its dot. Bright tones read on the black field; on paper
+// the same hues have to be deeper, or mint and amber disappear. Fixed for the page's life: theme.js reloads on a switch.
+const light = document.documentElement.dataset.theme === 'light';
+const KIND_COLORS = light
+  ? {
+    fact: '#7445f0',
+    preference: '#cf3b80',
+    project: '#4560cf',
+    person: '#a2701a',
+    device: '#12855f',
+    howto: '#a93bc9',
+    note: '#6d6780',
+    tag: '#127f78',
+    ghost: '#938da4',
+  }
+  : {
+    fact: '#a47bff',
+    preference: '#ff86c4',
+    project: '#96aaff',
+    person: '#f2b867',
+    device: '#5ad49a',
+    howto: '#d66cf0',
+    note: '#cbc6d6',
+    tag: '#6fd3c9',
+    ghost: '#6c6778',
+  };
 const KIND_ICONS = { fact: 'book', preference: 'sliders', project: 'folder', person: 'user', device: 'laptop', howto: 'list', note: 'file' };
 const KIND_ORDER = ['person', 'preference', 'project', 'device', 'howto', 'fact', 'note'];
 export const graphColor = (kind) => KIND_COLORS[kind] || KIND_COLORS.note;

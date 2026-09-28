@@ -24,6 +24,11 @@
   --surface: #16141c;
   --surface-2: #1e1b26;
   --surface-3: #27232f;
+  /* ink: what hairlines, hovers and dot grids are mixed from — light over a dark ground, dark over a light one */
+  --ink: 255, 255, 255;
+  --card: 22, 20, 28;
+  --card-hi: 28, 25, 36;
+  --veil: 14, 11, 16;
   --line: rgba(var(--ink), 0.075);
   --line-strong: rgba(var(--ink), 0.14);
   --text: #f3f1f7;
@@ -37,6 +42,8 @@
   --accent-line: rgba(164, 123, 255, 0.45);
   --accent-btn: #7445f0;
   --accent-btn-hover: #8157f5;
+  --select: rgba(164, 123, 255, 0.35);
+  --select-fg: #fff;
 
   --ok: #5ad49a;
   --warn: #f2b867;
@@ -44,6 +51,17 @@
   --danger: #f47c7c;
   --danger-soft: rgba(244, 124, 124, 0.12);
   --warn-soft: rgba(242, 184, 103, 0.12);
+  --add-soft: rgba(90, 212, 154, 0.1);
+  --del-soft: rgba(244, 124, 124, 0.1);
+
+  /* the plum haze lighting the panel from above, the memory field and the login page */
+  --haze-panel:
+    radial-gradient(90% 70% at 60% -18%, rgba(150, 85, 160, 0.17), rgba(150, 85, 160, 0.05) 50%, transparent 80%),
+    radial-gradient(55% 40% at 0% 0%, rgba(90, 45, 140, 0.07), transparent 70%);
+  --haze-stage: radial-gradient(55% 55% at 50% 52%, rgba(150, 85, 160, 0.15), rgba(150, 85, 160, 0.03) 55%, transparent 80%);
+  --haze-login: radial-gradient(60% 55% at 50% -8%, rgba(150, 85, 160, 0.16), rgba(150, 85, 160, 0.04) 50%, transparent 80%);
+  --hub-fill: linear-gradient(180deg, #1c1824, #141219);
+  --cross-near: rgba(187, 156, 255, 0.75);
 
   --font: "Onest", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
@@ -53,11 +71,64 @@
   --r-lg: 16px;
   --r-xl: 22px;
   --pop: 0 24px 60px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--line-strong);
+  --shadow-md: 0 20px 40px -24px rgba(0, 0, 0, 0.8);
+  --shadow-tile: 0 12px 26px -16px rgba(0, 0, 0, 0.95);
   --sidebar-w: 252px;
   --chat-w: 720px;
   --gutter: 44px;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
   color-scheme: dark;
+}
+
+/* Light: the same room by day — paper frame, white panel under a thinner haze, ink turned dark.
+   Accents darken so violet on white keeps the contrast violet had on black. Set by index.html before first paint. */
+:root[data-theme="light"] {
+  --frame: #eeebf3;
+  --panel: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f2f0f7;
+  --surface-3: #ded9e8;
+  --ink: 26, 20, 40;
+  --card: 243, 241, 249;
+  --card-hi: 234, 230, 244;
+  --veil: 255, 255, 255;
+  --line: rgba(var(--ink), 0.1);
+  --line-strong: rgba(var(--ink), 0.16);
+  --text: #17141f;
+  --text-2: #433d52;
+  --muted: #6d6780;
+  --faint: #938da4;
+
+  --accent: #7445f0;
+  --accent-strong: #6231dc;
+  --accent-soft: rgba(116, 69, 240, 0.1);
+  --accent-line: rgba(116, 69, 240, 0.4);
+  --accent-btn: #7445f0;
+  --accent-btn-hover: #6636e2;
+  --select: rgba(164, 123, 255, 0.3);
+  --select-fg: #17141f;
+
+  --ok: #12855f;
+  --warn: #96681a;
+  --orange: #b2571c;
+  --danger: #c63f3f;
+  --danger-soft: rgba(198, 63, 63, 0.1);
+  --warn-soft: rgba(150, 104, 26, 0.12);
+  --add-soft: rgba(18, 133, 95, 0.12);
+  --del-soft: rgba(198, 63, 63, 0.1);
+
+  --haze-panel:
+    radial-gradient(90% 70% at 60% -18%, rgba(150, 85, 160, 0.09), rgba(150, 85, 160, 0.03) 50%, transparent 80%),
+    radial-gradient(55% 40% at 0% 0%, rgba(90, 45, 140, 0.04), transparent 70%);
+  --haze-stage: radial-gradient(55% 55% at 50% 52%, rgba(150, 85, 160, 0.08), rgba(150, 85, 160, 0.02) 55%, transparent 80%);
+  --haze-login: radial-gradient(60% 55% at 50% -8%, rgba(150, 85, 160, 0.1), rgba(150, 85, 160, 0.03) 50%, transparent 80%);
+  --hub-fill: linear-gradient(180deg, #ffffff, #f5f2fc);
+  --cross-near: rgba(116, 69, 240, 0.5);
+
+  --pop: 0 24px 60px -18px rgba(26, 20, 40, 0.3), 0 0 0 1px var(--line-strong);
+  --shadow-md: 0 20px 40px -26px rgba(26, 20, 40, 0.45);
+  --shadow-tile: 0 12px 26px -18px rgba(26, 20, 40, 0.45);
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -174,6 +245,9 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
   background: hsl(var(--hue) 65% 60% / 0.22); color: hsl(var(--hue) 90% 80%); font: 600 11px/1 var(--font);
 }
 .device-badge.off { background: hsl(var(--hue) 30% 50% / 0.1); color: hsl(var(--hue) 30% 70% / 0.5); }
+/* the badge picks its hue per device, so light needs the lightness turned around rather than another token */
+:root[data-theme="light"] .device-badge { background: hsl(var(--hue) 60% 52% / 0.16); color: hsl(var(--hue) 62% 34%); }
+:root[data-theme="light"] .device-badge.off { background: hsl(var(--hue) 15% 45% / 0.12); color: hsl(var(--hue) 12% 40% / 0.6); }
 .device-badge .dot { position: absolute; right: -3px; bottom: -3px; width: 8px; height: 8px; box-shadow: 0 0 0 2px var(--frame); }
 .session:hover .device-badge .dot, .session.active .device-badge .dot,
 .project-head:hover .device-badge .dot, .project-head.active .device-badge .dot { box-shadow: 0 0 0 2px var(--surface); }
@@ -223,10 +297,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent-line); }
 .panel {
   position: relative; height: 100%; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
   border-radius: var(--r-xl); border: 1px solid var(--line);
-  background:
-    radial-gradient(90% 70% at 60% -18%, rgba(150, 85, 160, 0.17), rgba(150, 85, 160, 0.05) 50%, transparent 80%),
-    radial-gradient(55% 40% at 0% 0%, rgba(90, 45, 140, 0.07), transparent 70%),
-    var(--panel);
+  background: var(--haze-panel), var(--panel);
 }
 
 .topbar { display: flex; align-items: center; gap: 8px; min-height: 50px; padding: 8px 14px; flex: none; }
@@ -832,7 +903,7 @@ a.chip:hover { text-decoration: none; }
 .mem-tabs .seg { height: 28px; }
 .mm-stage {
   position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; cursor: grab; user-select: none;
-  background: radial-gradient(55% 55% at 50% 52%, rgba(150, 85, 160, 0.15), rgba(150, 85, 160, 0.03) 55%, transparent 80%);
+  background: var(--haze-stage);
 }
 .mm-stage.mm-grabbing { cursor: grabbing; }
 .mm-stage::before {
@@ -848,7 +919,7 @@ a.chip:hover { text-decoration: none; }
 .mm-edge.implicit { stroke-dasharray: 4 6; stroke-opacity: 0.35; }
 .mm-edge.on { stroke-opacity: 1; stroke-width: 2; }
 .mm-cross { fill: none; stroke: rgba(var(--ink), 0.13); stroke-width: 1.2; stroke-dasharray: 2 5; transition: stroke 0.3s var(--ease); }
-.mm-cross.near { stroke: rgba(187, 156, 255, 0.75); }
+.mm-cross.near { stroke: var(--cross-near); }
 .mm-focus .mm-edge:not(.on) { stroke-opacity: 0.12; }
 .mm-focus .mm-cross:not(.near) { stroke: rgba(var(--ink), 0.05); }
 .hub-edge {
@@ -867,7 +938,7 @@ a.chip:hover { text-decoration: none; }
 .mm-files { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; width: 100%; }
 .mm-file {
   display: flex; align-items: center; gap: 7px; min-width: 0; height: 32px; padding: 0 10px; border-radius: 11px; cursor: pointer;
-  border: 1px solid var(--line-strong); background: rgba(255, 255, 255, 0.035); color: var(--text-2); font: 12px var(--mono);
+  border: 1px solid var(--line-strong); background: rgba(var(--ink), 0.035); color: var(--text-2); font: 12px var(--mono);
   transition: border-color 0.2s, background 0.2s, color 0.2s;
 }
 .mm-file .icon { width: 14px; height: 14px; color: var(--muted); flex: none; }
@@ -1103,7 +1174,7 @@ input.mono { font-family: var(--mono); font-size: 13px; }
 .field-label { margin: 14px 0 6px; font-size: 12.5px; color: var(--muted); }
 
 /* login */
-.login { height: 100%; display: grid; place-items: center; padding: 16px; background: radial-gradient(60% 55% at 50% -8%, rgba(150, 85, 160, 0.16), rgba(150, 85, 160, 0.04) 50%, transparent 80%), var(--frame); }
+.login { height: 100%; display: grid; place-items: center; padding: 16px; background: var(--haze-login), var(--frame); }
 .login { position: relative; }
 .login-lang { position: absolute; top: 16px; right: 16px; }
 .segmented.lang-compact .seg { height: 26px; padding: 0 10px; font-size: 12px; }
@@ -1214,7 +1285,7 @@ body.core-offline #app { padding-top: 34px; }
 .modal .limits-list { margin-bottom: 18px; }
 .modal.modal-wide > .modal-actions { padding-bottom: 2px; }
 .icon-btn.spinning .icon { animation: spin 0.8s linear infinite; }
-.lang-select { height: 32px; padding: 0 34px 0 14px; border-radius: 999px; background-color: var(--surface); background-position: right 12px center; line-height: 30px; }
+.lang-select, .theme-select { height: 32px; padding: 0 34px 0 14px; border-radius: 999px; background-color: var(--surface); background-position: right 12px center; line-height: 30px; }
 .limit-provider { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: var(--r); background: var(--surface-2); }
 .limit-provider-head { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: 13.5px; }
 .limit-provider-head > strong { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
