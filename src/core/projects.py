@@ -79,6 +79,10 @@ class ProjectManager:
 
     # ---- device calls -----------------------------------------------------------
 
+    def can(self, target_id: str, op: str) -> bool:
+        hello = self.hub.hello(target_id)
+        return bool(hello and op in hello.capabilities.project_ops)
+
     def _supports(self, target: dict[str, Any] | None) -> dict[str, Any]:
         if not target or target["status"] == "revoked":
             raise ProjectError("unknown or revoked device")
@@ -155,6 +159,21 @@ class ProjectManager:
             raise ProjectError(str(e)) from e
         if status.state != "ok":
             raise ProjectError(status.detail or "cannot list this folder")
+        return status.data
+
+    async def branches(self, project_id: str) -> dict[str, Any]:
+        p = await self.get(project_id)
+        target = self._supports(await self.repo.get_target(str(p["source_target_id"])))
+        if p["kind"] != "repo":
+            return {"branches": [], "default": None, "current": None}
+        if not self.can(str(target["id"]), "branches"):
+            raise ProjectError("this device's client is outdated; update it to pick a branch")
+        try:
+            status = await self._op(str(target["id"]), project_id, "", "branches", self._snapshot_args(p), BROWSE_TIMEOUT_S)
+        except TargetUnavailable as e:
+            raise ProjectError(str(e)) from e
+        if status.state != "ok":
+            raise ProjectError(status.detail or "cannot list the branches")
         return status.data
 
     async def create(self, body: ProjectCreate) -> dict[str, Any]:
@@ -274,8 +293,15 @@ class ProjectManager:
 
     async def checkout(self, project: dict[str, Any], task: dict[str, Any]) -> ProjectOpStatus:
         self._supports(await self.repo.get_target(str(task["target_id"])))
-        args = {**self._snapshot_args(project), "branch": task["branch"], "start": "snapshot"}
-        return await self._op(str(task["target_id"]), str(project["id"]), str(task["id"]), "checkout", args, timeout_s=OP_TIMEOUT_S)
+        # An older client knows only the snapshot start; a repo chat on a newer one starts from a branch.
+        start = "snapshot"
+        if project["kind"] == "repo" and self.can(str(task["target_id"]), "branches"):
+            start = str(task.get("base_ref") or "default")
+        args = {**self._snapshot_args(project), "branch": task["branch"], "start": start}
+        status = await self._op(str(task["target_id"]), str(project["id"]), str(task["id"]), "checkout", args, timeout_s=OP_TIMEOUT_S)
+        if status.state == "ok":
+            status.data.setdefault("base", start)
+        return status
 
     async def commit(self, project: dict[str, Any], task: dict[str, Any], message: str) -> ProjectOpStatus:
         args = {**self._snapshot_args(project), "message": message, "base_sha": task.get("base_sha")}

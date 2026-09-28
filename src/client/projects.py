@@ -10,6 +10,7 @@ from typing import Any
 from mensarium.client.tools import GIT_SAFE_FLAGS, SKIP_DIRS, ExecTimeout, Executor, ToolError, _run
 from mensarium.contracts.projects import (
     BRANCH_PREFIX,
+    BRANCH_RE,
     FOLDER_EXCLUDES,
     SECRET_EXCLUDES,
     SNAPSHOT_REF,
@@ -49,6 +50,12 @@ def _safe_id(value: str) -> str:
 def _branch(value: str) -> str:
     if not value.startswith(BRANCH_PREFIX):
         raise ToolError(f"branch {value!r} is not a {BRANCH_PREFIX} branch")
+    return value
+
+
+def _ref_name(value: str) -> str:
+    if not BRANCH_RE.fullmatch(value):
+        raise ToolError(f"{value!r} is not a valid branch name")
     return value
 
 
@@ -227,8 +234,11 @@ class ProjectHost:
         if not self.enabled:
             status.detail = NO_GIT
             return status
-        handler = {"browse": self._browse, "checkout": self._checkout, "commit": self._commit, "status": self._status, "remove": self._remove}[req.op]
-        lock = contextlib.nullcontext() if req.op == "browse" else self._lock(req.project_id)
+        handler = {
+            "browse": self._browse, "checkout": self._checkout, "commit": self._commit, "status": self._status, "remove": self._remove,
+            "branches": self._branches,
+        }[req.op]
+        lock = contextlib.nullcontext() if req.op in ("browse", "branches") else self._lock(req.project_id)
         try:
             async with lock:
                 result = await handler(req.project_id, req.task_id, req.args)
@@ -254,11 +264,47 @@ class ProjectHost:
             parent = None
         return {"data": {"path": str(path), "parent": parent, "git": (path / ".git").exists(), "entries": entries}}
 
+    async def _current(self, cwd: Path) -> str | None:
+        code, out, _ = await self._call("symbolic-ref", "--short", "--quiet", "HEAD", cwd=cwd, timeout=30)
+        return out.strip() or None if code == 0 else None
+
+    # The project's main branch: origin's HEAD, main or master; a local branch wins over its remote copy.
+    async def _default_base(self, src: Path) -> str:
+        code, out, _ = await self._call("symbolic-ref", "--short", "--quiet", "refs/remotes/origin/HEAD", cwd=src, timeout=30)
+        remote = out.strip() if code == 0 else ""
+        names = [remote.split("/", 1)[1]] if "/" in remote else []
+        for name in dict.fromkeys([*names, "main", "master"]):
+            if await self._rev([], f"refs/heads/{name}", src):
+                return name
+        for name in dict.fromkeys([remote, "origin/main", "origin/master"]):
+            if name and await self._rev([], f"refs/remotes/{name}", src):
+                return name
+        return await self._current(src) or "HEAD"
+
+    async def _branches(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
+        src = self._source(str(a["source_path"]), project_id, a.get("git_url"))
+        if a["kind"] != "repo":
+            return {"data": {"branches": [], "default": None, "current": None}}
+        fmt = "--format=%(refname)%00%(committerdate:unix)"
+        out = await self._git("for-each-ref", "--sort=-committerdate", "--count=500", fmt, "refs/heads", "refs/remotes", cwd=src)
+        items = []
+        for line in out.splitlines():
+            ref, _, ts = line.partition("\0")
+            if ref.endswith("/HEAD"):
+                continue
+            remote = ref.startswith("refs/remotes/")
+            name = ref.removeprefix("refs/remotes/" if remote else "refs/heads/")
+            items.append({"name": name, "remote": remote, "updated": int(ts) if ts.isdigit() else None})
+        return {"data": {"branches": items, "default": await self._default_base(src), "current": await self._current(src)}}
+
     async def _checkout(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
         src = self._source(str(a["source_path"]), project_id, a.get("git_url"))
         kind: ProjectKind = a["kind"]
         base = self._base(kind, project_id)
-        branch = _branch(str(a["branch"]))
+        branch = _ref_name(str(a["branch"]))
+        code, _, _ = await self._call("check-ref-format", "--branch", branch, cwd=src, timeout=30)
+        if code != 0:
+            raise ToolError(f"{branch!r} is not a valid branch name")
         wt = self._worktree(project_id, task_id)
         if wt.exists():
             code, out, _ = await self._call("symbolic-ref", "--short", "--quiet", "HEAD", cwd=wt, timeout=30)
@@ -266,16 +312,25 @@ class ProjectHost:
                 raise ToolError("the worktree for this chat exists on another branch")
             return {"head_sha": (await self._git("rev-parse", "HEAD", cwd=wt)).strip()}
         start = str(a["start"])
+        base_name = start
         if start == "snapshot":
             snap = await self._snapshot(project_id, str(a["source_path"]), kind, bool(a.get("include_remotes", True)), False, int(a.get("size_limit_mb", 1024)), int(a.get("file_limit_mb", 100)), a.get("git_url"))
             start = str(snap["snapshot_sha"])
+        elif kind == "repo":
+            base_name = await self._default_base(src) if start == "default" else _ref_name(start)
+            sha = await self._rev(base, f"{base_name}^{{commit}}", src)
+            if not sha:
+                raise ToolError(f"branch {base_name} is not found on this device")
+            start = sha
+        else:
+            raise ToolError("a folder project starts only from its snapshot")
         ensure_private_dir(wt.parent.parent)
         ensure_private_dir(wt.parent)
         await self._git(*base, "worktree", "prune", cwd=src)
         if await self._rev(base, f"refs/heads/{branch}", src):
             raise ToolError(f"branch {branch} already exists on this device")
-        await self._git(*base, "worktree", "add", "--quiet", "-B", branch, str(wt), start, cwd=src)
-        return {"head_sha": start}
+        await self._git(*base, "worktree", "add", "--quiet", "--no-track", "-B", branch, str(wt), start, cwd=src)
+        return {"head_sha": start, "data": {"base": base_name}}
 
     async def _commit(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
         wt = self._worktree(project_id, task_id)

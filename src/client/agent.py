@@ -20,7 +20,7 @@ from mensarium.client.config import ClientConfig, ClientPaths
 from mensarium.client.mcp_host import McpHost
 from mensarium.client.projects import ProjectHost
 from mensarium.client.tools import ExecTimeout, Executor, ToolError
-from mensarium.contracts.projects import ProjectOp, ProjectOpStatus, ProjectSnapshot, ProjectSnapshotStatus
+from mensarium.contracts.projects import EXTRA_OPS, ProjectOp, ProjectOpStatus, ProjectSnapshot, ProjectSnapshotStatus
 from mensarium.contracts.protocol import (
     AuthChallenge,
     AuthResponse,
@@ -136,6 +136,7 @@ class ClientAgent:
                 remote_update=self.cfg.allow_remote_update and updater().exists(),
                 projects=self.projects.enabled,
                 projects_root=str(self.projects.root) if self.projects.enabled else None,
+                project_ops=list(EXTRA_OPS) if self.projects.enabled else [],
             ),
             policy=self.policy,
         )

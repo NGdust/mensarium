@@ -1333,14 +1333,16 @@ async function viewNewChat(projectId = null) {
   const projectChip = project
     ? h('a', { class: 'chip', href: `#/projects/${project.id}`, title: `${project.source_name || ''}:${project.source_path}` }, icon(KIND_ICON[project.kind] || 'folder'), h('span', { class: 'chip-label' }, project.name))
     : null;
+  // A repo chat starts its own branch; the chip picks the branch it starts from or names the new one.
+  const ws = project?.kind === 'repo' ? workspacePicker(project) : null;
 
   const c = composer({
     placeholder: tr('Describe the task for the agent'),
-    chips: [project ? projectChip : targetChip, h('span', { class: 'divider' }), modeCtl.el, modelCtl.el],
+    chips: [project ? projectChip : targetChip, ws?.el, h('span', { class: 'divider' }), modeCtl.el, modelCtl.el].filter(Boolean),
     onSend: async (text, attachments) => {
       if (project && source()?.status !== 'online') throw new Error(offlineText());
       if (!selected) throw new Error(tr('Select the device the agent will work on'));
-      const task = await post('/v1/tasks', { target_id: selected.id, input: text, attachments, mode: modeCtl.effective(), model: modelCtl.value().model || undefined, provider: modelCtl.value().provider || undefined, project_id: project?.id });
+      const task = await post('/v1/tasks', { target_id: selected.id, input: text, attachments, mode: modeCtl.effective(), model: modelCtl.value().model || undefined, provider: modelCtl.value().provider || undefined, project_id: project?.id, ...ws?.value() });
       state.tasks.unshift(task);
       go(`#/chat/${task.id}`);
     },
@@ -1780,7 +1782,7 @@ async function viewChat(taskId) {
         plan.set(p.items || []);
         break;
       case 'task.project':
-        if (p.kind === 'checkout') note(KIND_ICON[project?.kind] || 'folder', project?.kind === 'repo' && p.branch ? `${tr('Working copy ready')} · ${p.branch}` : tr('Working copy ready'));
+        if (p.kind === 'checkout') note(KIND_ICON[project?.kind] || 'folder', project?.kind === 'repo' && p.branch ? [tr('Working copy ready'), p.branch, p.base && p.base !== 'snapshot' ? tr('from {0}', p.base) : null].filter(Boolean).join(' · ') : tr('Working copy ready'));
         else if (p.error != null) note('alert', tr('Could not save this turn: {0}', p.error || tr('error')), 'error');
         else if (p.changed) note('file', tp('{0} file changed|{0} files changed', p.changed));
         break;
@@ -3612,6 +3614,81 @@ async function viewAutomationEditor(id) {
 }
 
 // ---------- projects ----------
+
+// Same rule as BRANCH_RE on the Core: a conservative subset of git check-ref-format.
+const BRANCH_OK = /^(?![-/.])(?!.*\.\.)(?!.*\/\/)(?!.*\/\.)(?!.*@\{)(?!.*\.lock(\/|$))[A-Za-z0-9._/+-]+(?<![./])$/;
+
+// The working copy of a new repo chat: empty starts a new branch from the main one, a listed branch is the start,
+// any other name becomes a new branch from the main one. Hidden when the device cannot list branches.
+function workspacePicker(project) {
+  let branches = [];
+  let main = null;
+  let current = null;
+  let value = '';
+  const label = h('span', { class: 'chip-label' });
+  const el = h('button', { class: 'chip chip-ws hidden', type: 'button', 'aria-haspopup': 'dialog', onclick: () => open() }, icon('git'), label, icon('chevron'));
+  const known = (name) => branches.some((b) => b.name === name);
+  const describe = (name) => (!name
+    ? tr('The chat gets its own new branch from {0}.', main)
+    : known(name) ? tr('The chat gets its own new branch from {0}.', name)
+      : BRANCH_OK.test(name) ? tr('A new branch {0} is created from {1}.', name, main)
+        : tr('This is not a valid branch name.'));
+  const render = () => {
+    label.textContent = !value ? tr('from {0}', main) : known(value) ? tr('from {0}', value) : tr('{0} · new', value);
+    el.title = describe(value);
+  };
+  get(`/v1/projects/${project.id}/branches`).then((r) => {
+    if (!r.default) return;
+    branches = r.branches || [];
+    main = r.default;
+    current = r.current;
+    el.classList.remove('hidden');
+    render();
+  }, () => {});
+
+  function open() {
+    const input = h('input', { type: 'text', value, maxlength: 200, spellcheck: 'false', autocapitalize: 'off', placeholder: tr('Branch or new branch name'), 'aria-label': tr('Branch') });
+    const status = h('div', { class: 'ws-status' });
+    const list = h('div', { class: 'ws-list', role: 'listbox' });
+    const done = h('button', { class: 'btn btn-primary', onclick: () => apply(input.value) }, tr('Done'));
+    const apply = (name) => {
+      name = name.trim();
+      if (name && !known(name) && !BRANCH_OK.test(name)) return;
+      value = name;
+      render();
+      closeLayer();
+    };
+    const tags = (b) => [
+      b.name === main ? h('span', { class: 'pill tag-kind' }, tr('main')) : null,
+      !b.remote && b.name === current ? h('span', { class: 'pill tag-kind' }, tr('on the device')) : null,
+    ];
+    const refresh = () => {
+      const q = input.value.trim();
+      const isNew = q && !known(q);
+      status.replaceChildren(isNew && BRANCH_OK.test(q) ? h('span', { class: 'pill accent' }, tr('new branch')) : '', h('span', {}, describe(q)));
+      status.classList.toggle('bad', Boolean(isNew && !BRANCH_OK.test(q)));
+      done.disabled = Boolean(isNew && !BRANCH_OK.test(q));
+      const shown = branches.filter((b) => !q || b.name.toLowerCase().includes(q.toLowerCase())).slice(0, 100);
+      list.replaceChildren(...(shown.length
+        ? shown.map((b) => h('button', { class: `ws-item${b.name === q ? ' selected' : ''}`, role: 'option', onclick: () => apply(b.name) },
+          icon('git'), h('span', { class: `ws-name${b.remote ? ' remote' : ''}` }, b.name), ...tags(b).filter(Boolean)))
+        : [h('div', { class: 'empty' }, tr('No branches match.'))]));
+    };
+    input.addEventListener('input', refresh);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); if (!done.disabled) apply(input.value); } });
+    openModal(
+      h('div', { class: 'modal-head' }, h('h2', {}, tr('Working copy')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
+      h('p', {}, tr('The chat works in its own copy of the repository on a new branch, so your checkout stays as it is. Pick the branch to start from or type a name for the new branch.')),
+      input, status, list,
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), done),
+    ).classList.add('modal-wide');
+    refresh();
+    input.focus();
+    input.select();
+  }
+
+  return { el, value: () => (!value ? {} : known(value) ? { base: value } : { branch: value }) };
+}
 
 // Keeps the sidebar's copy of a project in step with a fresher detail view (the list carries a chat count, not the chats).
 function rememberProject(view) {

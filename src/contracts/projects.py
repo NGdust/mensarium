@@ -6,7 +6,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from mensarium.shared.redaction import SECRET_FILE_PATTERNS
 
 ProjectKind = Literal["repo", "folder"]
-ProjectOpName = Literal["browse", "checkout", "commit", "status", "remove"]
+ProjectOpName = Literal["browse", "checkout", "commit", "status", "remove", "branches"]
+# Ops a client lists in capabilities.project_ops; a client without them rejects the frame and never answers.
+EXTRA_OPS: tuple[ProjectOpName, ...] = ("branches",)
 OpState = Literal["ok", "conflict", "error"]
 SnapshotState = Literal["ok", "unchanged", "error"]
 
@@ -16,6 +18,8 @@ SECRET_EXCLUDES: tuple[str, ...] = (*SECRET_FILE_PATTERNS, ".netrc", ".npmrc", "
 FOLDER_EXCLUDES = (".DS_Store", "Thumbs.db", "~$*", "*.tmp", ".~lock.*")
 KIND_LABELS = {"repo": "git repository", "folder": "folder"}
 # Only network transports: local paths, file:// and ext:: would let a clone reach into the device.
+# A conservative subset of git-check-ref-format; the device checks the name with git itself as well.
+BRANCH_RE = re.compile(r"(?![-/.])(?!.*\.\.)(?!.*//)(?!.*/\.)(?!.*@\{)(?!.*\.lock(/|$))[A-Za-z0-9._/+-]+(?<![./])")
 GIT_URL_RE = re.compile(r"^(https?://|ssh://|git://)[^\s]+$|^[\w.-]+@[\w.-]+:[^\s]+$")
 
 

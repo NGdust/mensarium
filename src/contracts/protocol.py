@@ -40,6 +40,7 @@ class Capabilities(BaseModel):
     remote_update: bool = False
     projects: bool = False
     projects_root: str | None = None
+    project_ops: list[str] = []
 
 
 class TargetHello(BaseModel):

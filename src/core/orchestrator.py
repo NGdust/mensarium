@@ -21,7 +21,7 @@ from mensarium.agent_core.context import (
 from mensarium.agent_core.profile import AgentProfile
 from mensarium.contracts.automations import AutomationCreate, AutomationError
 from mensarium.contracts.llm import ChatRequest
-from mensarium.contracts.projects import ProjectError, branch_name
+from mensarium.contracts.projects import BRANCH_RE, ProjectError, branch_name
 from mensarium.contracts.protocol import (
     AccessMode,
     ExecutionRequest,
@@ -101,6 +101,12 @@ def full_access(target: dict[str, Any]) -> str:
     return "allowed" if (target.get("policy") or {}).get("allow_full_access") else "disabled"
 
 
+# A repo chat starts from the project's main branch unless the project names another start.
+def repo_base(project: dict[str, Any]) -> str:
+    base = project.get("default_base")
+    return str(base) if base and base != "snapshot" else "default"
+
+
 class TaskError(Exception):
     pass
 
@@ -170,6 +176,8 @@ class Orchestrator:
         project_id: str | None = None,
         provider: str | None = None,
         attachments: list[str] | None = None,
+        base: str | None = None,
+        branch: str | None = None,
     ) -> dict[str, Any]:
         profile = await self.load_profile(profile_id)
         target = await self.repo.get_target(target_id)
@@ -191,6 +199,17 @@ class Orchestrator:
                 raise TaskError("the project is not ready; sync it first")
             if target_id != project["source_target_id"]:
                 raise TaskError("in this version a project chat runs on the project's source device")
+            if base or branch:
+                assert self.projects
+                if project["kind"] != "repo":
+                    raise TaskError("only a git repository project takes a branch")
+                if not self.projects.can(target_id, "branches"):
+                    raise TaskError("this device's client is outdated; update it to pick a branch")
+                for name in (base, branch):
+                    if name and not BRANCH_RE.fullmatch(name):
+                        raise TaskError(f"{name!r} is not a valid branch name")
+        elif base or branch:
+            raise TaskError("a branch is chosen only for a project chat")
         task_id = new_id("task")
         files = await self._bind_attachments(task_id, attachments)
         now = now_iso()
@@ -207,8 +226,8 @@ class Orchestrator:
                 "provider": provider,
                 "automation_id": automation_id,
                 "project_id": project_id,
-                "branch": branch_name(task_id, text) if project else None,
-                "base_ref": "snapshot" if project else None,
+                "branch": (branch or branch_name(task_id, text)) if project else None,
+                "base_ref": None if not project else "snapshot" if project["kind"] == "folder" else base or repo_base(project),
                 "budget": profile.limits.model_dump(),
                 "trace_id": new_id("tr"),
                 "created_at": now,
@@ -454,9 +473,9 @@ class Orchestrator:
             raise Stop("PAUSED", str(e)) from e
         if status.state != "ok":
             raise Stop("FAILED", f"cannot prepare the project worktree: {status.detail}")
-        await self.repo.update_task(task["id"], {"base_sha": status.head_sha, "head_sha": status.head_sha})
+        await self.repo.update_task(task["id"], {"base_sha": status.head_sha, "head_sha": status.head_sha, "base_ref": status.data.get("base") or task.get("base_ref")})
         await self.repo.audit(self.workspace_id, "core", "project.checkout", {"task_id": task["id"], "project_id": project["id"], "branch": task["branch"], "sha": status.head_sha})
-        await self.bus.emit(task["id"], "task.project", {"kind": "checkout", "branch": task["branch"], "head_sha": status.head_sha})
+        await self.bus.emit(task["id"], "task.project", {"kind": "checkout", "branch": task["branch"], "base": status.data.get("base"), "head_sha": status.head_sha})
 
     async def _commit_turn(self, task_id: str) -> None:
         task = await self.repo.get_task(task_id)

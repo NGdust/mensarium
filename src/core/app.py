@@ -114,6 +114,8 @@ class TaskCreate(BaseModel):
     provider: str | None = Field(None, min_length=1, max_length=100)
     project_id: str | None = Field(None, max_length=100)
     attachments: list[str] = Field(default_factory=list, max_length=MAX_FILES)
+    base: str | None = Field(None, min_length=1, max_length=250)
+    branch: str | None = Field(None, min_length=1, max_length=200)
 
 
 class ModeBody(BaseModel):
@@ -1127,7 +1129,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     def task_view(t: dict[str, Any]) -> dict[str, Any]:
         keys = (
             "id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result", "mode", "model", "provider", "parent_id", "label",
-            "automation_id", "project_id", "branch", "base_sha", "head_sha",
+            "automation_id", "project_id", "branch", "base_ref", "base_sha", "head_sha",
         )
         return {k: t.get(k) for k in keys} | {"plan": t.get("plan") or [], "created_at": t["created_at"], "updated_at": t["updated_at"]}
 
@@ -1156,6 +1158,13 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         except ProjectError as e:
             raise project_error(e) from e
         return {**c.projects.view(p), "chats": [task_view(t) for t in await c.repo.list_project_tasks(project_id)]}
+
+    @app.get("/v1/projects/{project_id}/branches")
+    async def project_branches(project_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return await c.projects.branches(project_id)
+        except ProjectError as e:
+            raise project_error(e) from e
 
     @app.put("/v1/projects/{project_id}")
     async def update_project(project_id: str, body: ProjectPatch, c: Core = Depends(auth)) -> dict[str, Any]:
@@ -1191,7 +1200,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             return task_view(
                 await c.orchestrator.create_task(
                     body.profile_id, body.target_id, body.input.strip(), body.mode, body.model, project_id=body.project_id,
-                    provider=body.provider, attachments=body.attachments,
+                    provider=body.provider, attachments=body.attachments, base=body.base, branch=body.branch,
                 )
             )
         except TaskError as e:
