@@ -670,28 +670,27 @@ function ensureAppShell() {
   const sessions = h('div', { class: 'sessions' });
   const projectsBox = h('div', { class: 'projects' });
   const devicesCount = h('span', { class: 'count' });
-  const newChat = h('a', { class: 'new-chat', href: '#/' }, icon('plus'), tr('New chat'));
-  const newProject = h('a', { class: 'new-chat', href: '#/projects/new' }, icon('plus'), tr('Create project'));
+  const newChat = h('a', { class: 'icon-btn nav-add', href: '#/', title: tr('New chat'), 'aria-label': tr('New chat') }, icon('plus'));
+  const newProject = h('a', { class: 'icon-btn nav-add', href: '#/projects/new', title: tr('Create project'), 'aria-label': tr('Create project') }, icon('plus'));
   const automationsLink = h('a', { class: 'nav-item nav-automations', href: '#/automations' }, icon('clock'), tr('Automations'));
   const devicesLink = h('a', { class: 'nav-item', href: '#/settings/devices' }, icon('laptop'), tr('Devices'), devicesCount);
   const folded = new Set(JSON.parse(localStorageGet('nav-collapsed') || '[]'));
   // The list right after a folded head is hidden by CSS, so the head only flips aria-expanded.
-  const navSection = (key, label) => h('button', { class: 'nav-section', 'aria-expanded': String(!folded.has(key)), onclick: (e) => {
-    if (folded.has(key)) folded.delete(key); else folded.add(key);
-    e.currentTarget.setAttribute('aria-expanded', String(!folded.has(key)));
-    localStorageSet('nav-collapsed', JSON.stringify([...folded]));
-  } }, h('span', {}, label), icon('chevron'));
-  const projectsHead = navSection('projects', tr('Projects'));
+  const navSection = (key, label, add) => h('div', { class: 'nav-head' },
+    h('button', { class: 'nav-section', 'aria-expanded': String(!folded.has(key)), onclick: (e) => {
+      if (folded.has(key)) folded.delete(key); else folded.add(key);
+      e.currentTarget.setAttribute('aria-expanded', String(!folded.has(key)));
+      localStorageSet('nav-collapsed', JSON.stringify([...folded]));
+    } }, icon('chevron'), h('span', {}, label)),
+    add);
   let s;
   const collapse = h('button', { class: 'icon-btn collapse-nav', 'aria-label': tr('Hide sidebar'), title: tr('Hide sidebar'), onclick: () => s.toggleNav() }, icon('sidebar'));
   s = frame('app', [
     h('div', { class: 'brand' }, orb('sm'), h('span', { class: 'brand-name' }, 'Mensarium'), collapse),
     automationsLink,
-    newProject,
-    projectsHead,
+    navSection('projects', tr('Projects'), newProject),
     projectsBox,
-    newChat,
-    navSection('chats', tr('Chats')),
+    navSection('chats', tr('Chats'), newChat),
     sessions,
     h('div', { class: 'sidebar-foot' }, devicesLink, h('div', { class: 'sidebar-foot-row' },
       h('a', { class: 'nav-item', href: '#/settings/overview' }, icon('sliders'), tr('Settings')),
@@ -708,7 +707,6 @@ function ensureAppShell() {
     newProject.classList.toggle('active', location.hash === '#/projects/new');
     newChat.classList.toggle('active', !activeId && !onAutomations && !location.hash.startsWith('#/settings') && !location.hash.startsWith('#/projects'));
     const isOnline = (id) => state.targets.some((t) => t.id === id && t.status === 'online');
-    projectsHead.classList.toggle('hidden', !state.projects.length);
     projectsBox.replaceChildren(...state.projects.map((p) => {
       const active = activeProject === p.id || location.hash === `#/projects/${p.id}` || location.hash === `#/projects/${p.id}/new`;
       const busy = p.status === 'creating' || p.syncing;
