@@ -1,5 +1,7 @@
 import asyncio
+import json
 import logging
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
@@ -76,6 +78,38 @@ def _usage(usage: dict[str, Any], timings: dict[str, Any] | None) -> TokenUsage:
     )
 
 
+async def _read_stream(resp: httpx.Response, on_text: Callable[[str], None]) -> dict[str, Any]:
+    """Server-sent chunks of /chat/completions folded into one non-streamed response body."""
+    content: list[str] = []
+    calls: dict[int, dict[str, Any]] = {}
+    out: dict[str, Any] = {}
+    finish = None
+    async for line in resp.aiter_lines():
+        if not line.startswith("data:") or (chunk := line[5:].strip()) == "[DONE]":
+            continue
+        data = json.loads(chunk)
+        if data.get("error"):
+            raise LLMError(f"provider error: {str(data['error'])[:500]}")
+        out |= {k: data[k] for k in ("usage", "timings") if data.get(k)}
+        for choice in data.get("choices") or []:
+            delta = choice.get("delta") or {}
+            if piece := delta.get("content"):
+                content.append(piece)
+                on_text(piece)
+            for tc in delta.get("tool_calls") or []:
+                call = calls.setdefault(int(tc.get("index") or 0), {"id": None, "function": {"name": "", "arguments": ""}})
+                fn = tc.get("function") or {}
+                call["id"] = tc.get("id") or call["id"]
+                call["function"]["name"] = fn.get("name") or call["function"]["name"]
+                if isinstance(args := fn.get("arguments"), str):
+                    call["function"]["arguments"] += args
+                elif args:
+                    call["function"]["arguments"] = args
+            finish = choice.get("finish_reason") or finish
+    message = {"content": "".join(content) or None, "tool_calls": [calls[i] for i in sorted(calls)]}
+    return {"choices": [{"message": message, "finish_reason": finish}], **out}
+
+
 class OpenAICompatibleProvider:
     """Ollama Cloud, local Ollama and llama.cpp all expose an OpenAI-compatible /v1 API."""
 
@@ -137,6 +171,7 @@ class OpenAICompatibleProvider:
         *,
         tools: list[ToolDefinition],
         response_schema: dict[str, Any] | None = None,
+        on_text: Callable[[str], None] | None = None,
     ) -> ModelResponse:
         body: dict[str, Any] = {
             "model": request.model,
@@ -156,8 +191,40 @@ class OpenAICompatibleProvider:
             ]
         if response_schema:
             body["response_format"] = {"type": "json_schema", "json_schema": {"name": "out", "schema": response_schema}}
+        if on_text:
+            body |= {"stream": True, "stream_options": {"include_usage": True}}
+            return self._parse(await self._stream(body, request.timeout_s, on_text))
         data = await self._request("POST", "/chat/completions", model=request.model, json=body, timeout=request.timeout_s)
         return self._parse(data)
+
+    async def _stream(self, body: dict[str, Any], timeout_s: int, on_text: Callable[[str], None]) -> dict[str, Any]:
+        """A streamed completion assembled into the shape of a plain one. Retried only until the first text arrived."""
+        attempt, streamed = 0, False
+
+        def text(piece: str) -> None:
+            nonlocal streamed
+            streamed = True
+            on_text(piece)
+
+        while True:
+            try:
+                async with self._client.stream("POST", "/chat/completions", json=body, timeout=timeout_s) as resp:
+                    if "x-ratelimit-limit-tokens" in resp.headers:
+                        self._note_headers(body["model"], resp.headers)
+                    if resp.status_code < 400 and "text/event-stream" in resp.headers.get("content-type", ""):
+                        return await _read_stream(resp, text)
+                    raw = await resp.aread()
+                    if resp.status_code < 400:
+                        return json.loads(raw)  # the server ignored "stream"
+                    if resp.status_code not in RETRY_STATUS or attempt >= self.max_retries:
+                        raise LLMError(f"HTTP {resp.status_code}: {raw.decode(errors='replace')[:500]}")
+            except httpx.TransportError as e:
+                if streamed or attempt >= self.max_retries:
+                    raise LLMError(f"transport error: {e}") from e
+            except json.JSONDecodeError as e:
+                raise LLMError(f"unexpected provider response: {e}") from e
+            attempt += 1
+            await asyncio.sleep(min(2**attempt, 10))
 
     def _note_headers(self, model: str, headers: httpx.Headers) -> None:
         """OpenAI-style x-ratelimit-* headers: per-model requests and tokens per window, reset given as "6m0s"."""

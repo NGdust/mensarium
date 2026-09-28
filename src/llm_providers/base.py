@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from mensarium.contracts.llm import ChatRequest, ModelInfo, ModelResponse, ProviderHealth, ToolDefinition
@@ -27,6 +28,7 @@ class LLMProvider(Protocol):
         *,
         tools: list[ToolDefinition],
         response_schema: dict[str, Any] | None,
+        on_text: Callable[[str], None] | None = None,
     ) -> ModelResponse: ...
 
     async def healthcheck(self) -> ProviderHealth: ...

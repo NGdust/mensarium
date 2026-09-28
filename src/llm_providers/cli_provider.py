@@ -5,6 +5,7 @@ forced into a JSON object by the CLI's schema option, then turned into a native 
 session: each step resumes it with only the messages it has not seen, so the CLI serves the rest from its cache."""
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -14,6 +15,7 @@ import shutil
 import tempfile
 import uuid
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -45,6 +47,7 @@ from mensarium.shared.toolargs import parse_tool_arguments
 log = logging.getLogger(__name__)
 
 MAX_SESSIONS = 32
+STDOUT_LINE_LIMIT = 2**24
 ANSWER_NOW = "\n\n### Now answer with exactly one JSON object."
 
 ANSWER_SCHEMA: dict[str, Any] = {
@@ -136,6 +139,73 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
+_TEXT_FIELD = re.compile(r'"text"\s*:\s*"')
+
+
+def partial_json_string(body: str) -> str:
+    """The value of a JSON string from the text after its opening quote, which may be cut off anywhere."""
+    escaped = False
+    for i, ch in enumerate(body):
+        if escaped:
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == '"':
+            body = body[:i]
+            break
+    for cut in range(len(body), max(len(body) - 12, 0) - 1, -1):  # an escape cut short, like \u04 or half a surrogate pair
+        try:
+            text = str(json.loads(f'"{body[:cut]}"', strict=False))
+        except json.JSONDecodeError:
+            continue
+        if not text or not "\ud800" <= text[-1] <= "\udbff":
+            return text
+    return ""
+
+
+class AnswerStream:
+    """Hands on the `text` field of the answer object while the CLI is still writing it."""
+
+    def __init__(self, on_text: Callable[[str], None]) -> None:
+        self.on_text = on_text
+        self.raw = ""
+        self.sent = 0
+
+    def feed(self, chunk: str) -> None:
+        self.raw += chunk
+        if not (m := _TEXT_FIELD.search(self.raw)):
+            return
+        text = partial_json_string(self.raw[m.end() :])
+        if len(text) > self.sent:
+            self.on_text(text[self.sent :])
+            self.sent = len(text)
+
+
+async def _communicate(proc: asyncio.subprocess.Process, data: bytes, on_line: Callable[[str], None] | None) -> tuple[bytes, bytes]:
+    """proc.communicate() that also hands on each stdout line as it arrives."""
+    if on_line is None:
+        return await proc.communicate(data)
+    assert proc.stdin and proc.stdout and proc.stderr
+    stdin, stdout = proc.stdin, proc.stdout
+
+    async def feed() -> None:
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+            stdin.write(data)
+            await stdin.drain()
+            stdin.close()
+
+    async def read() -> bytes:
+        lines = []
+        async for line in stdout:
+            lines.append(line)
+            on_line(line.decode(errors="replace"))
+        return b"".join(lines)
+
+    _, out, err = await asyncio.gather(feed(), read(), proc.stderr.read())
+    await proc.wait()
+    return out, err
+
+
 def parse_answer(obj: dict[str, Any]) -> ModelResponse:
     kind = obj.get("type")
     if kind == "tool_call" and obj.get("tool"):
@@ -200,33 +270,53 @@ class CliProvider:
     def login_status(self) -> tuple[bool, str]:
         raise NotImplementedError
 
-    async def _exec(self, args: list[str], stdin: str, timeout_s: int, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+    async def _exec(
+        self, args: list[str], stdin: str, timeout_s: int, env: dict[str, str] | None = None, on_line: Callable[[str], None] | None = None
+    ) -> tuple[int, str, str]:
         proc = await asyncio.create_subprocess_exec(
             self.command, *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            cwd=self.workdir(), env={**os.environ, **(env or {})},
+            cwd=self.workdir(), env={**os.environ, **(env or {})}, limit=STDOUT_LINE_LIMIT,
         )
         try:
-            out, err = await asyncio.wait_for(proc.communicate(stdin.encode()), timeout_s)
+            out, err = await asyncio.wait_for(_communicate(proc, stdin.encode(), on_line), timeout_s)
         except TimeoutError:
             proc.kill()
             await proc.wait()
             raise LLMError(f"{self.title} did not answer within {timeout_s}s") from None
-        except asyncio.CancelledError:
-            proc.kill()
+        except BaseException:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
             raise
         return proc.returncode or 0, out.decode(errors="replace"), err.decode(errors="replace")
 
-    async def chat(self, request: ChatRequest, *, tools: list[ToolDefinition], response_schema: dict[str, Any] | None = None) -> ModelResponse:
+    async def chat(
+        self,
+        request: ChatRequest,
+        *,
+        tools: list[ToolDefinition],
+        response_schema: dict[str, Any] | None = None,
+        on_text: Callable[[str], None] | None = None,
+    ) -> ModelResponse:
         system = request.system.rstrip() + "\n\n" + FORMAT_RULES + "\n" + render_tools(tools)
         model = request.model or self.default_model
         key = request.metadata.get("task_id")
         timeout = max(request.timeout_s, self.timeout_s)
-        attempt = 0
+        attempt, streamed = 0, False
+
+        def text(piece: str) -> None:
+            nonlocal streamed
+            streamed = True
+            if on_text:
+                on_text(piece)
+
         while True:
             session, unseen = self._continuation(key, model, system, request.messages)
             prompt = render_transcript(unseen) + ANSWER_NOW
             try:
-                resp = await self._call(model, system, prompt, timeout, resume=session.id if session else None, persist=bool(key))
+                resp = await self._call(
+                    model, system, prompt, timeout, resume=session.id if session else None, persist=bool(key),
+                    on_text=text if on_text and not streamed else None,
+                )  # fmt: skip
             except LLMError as e:
                 if session:
                     self._discard(session.id)
@@ -281,8 +371,12 @@ class CliProvider:
     def _session_files(self, session_id: str) -> list[Path]:
         return []
 
-    async def _call(self, model: str, system: str, prompt: str, timeout_s: int, resume: str | None = None, persist: bool = False) -> ModelResponse:
-        """One CLI run. `resume` continues that session with `prompt`; `persist` keeps a new session for resuming."""
+    async def _call(
+        self, model: str, system: str, prompt: str, timeout_s: int, resume: str | None = None, persist: bool = False,
+        on_text: Callable[[str], None] | None = None,
+    ) -> ModelResponse:
+        """One CLI run. `resume` continues that session with `prompt`; `persist` keeps a new session for resuming;
+        `on_text` gets the answer text as it is written, when the CLI can stream it."""
         raise NotImplementedError
 
     async def fetch_limits(self) -> list[LimitWindow] | None:
@@ -329,7 +423,10 @@ class ClaudeCodeProvider(CliProvider):
             config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
             shutil.rmtree(config_dir / "projects" / re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(workdir)), ignore_errors=True)
 
-    async def _call(self, model: str, system: str, prompt: str, timeout_s: int, resume: str | None = None, persist: bool = False) -> ModelResponse:
+    async def _call(
+        self, model: str, system: str, prompt: str, timeout_s: int, resume: str | None = None, persist: bool = False,
+        on_text: Callable[[str], None] | None = None,
+    ) -> ModelResponse:
         # No --json-schema: it registers a tool, and with any tool present the model starts calling our action names
         # as functions. With no tools at all it can only write text, which holds the JSON object.
         # stream-json (not json) because the stream carries `rate_limit_event` with the subscription windows.
@@ -337,6 +434,8 @@ class ClaudeCodeProvider(CliProvider):
             "-p", "--output-format", "stream-json", "--verbose", "--tools", "", "--setting-sources", "",
             "--strict-mcp-config", "--max-turns", "2", "--model", model, "--system-prompt", system,
         ]  # fmt: skip
+        if on_text:
+            args.append("--include-partial-messages")
         new_session = None if resume or not persist else str(uuid.uuid4())
         if resume:
             args += ["--resume", resume]
@@ -345,14 +444,25 @@ class ClaudeCodeProvider(CliProvider):
         else:
             args.append("--no-session-persistence")
         try:
-            return await self._run_claude(args, prompt, timeout_s)
+            return await self._run_claude(args, prompt, timeout_s, on_text)
         except LLMError:
             if new_session:
                 self._discard(new_session)
             raise
 
-    async def _run_claude(self, args: list[str], prompt: str, timeout_s: int) -> ModelResponse:
-        code, out, err = await self._exec(args, prompt, timeout_s)
+    async def _run_claude(self, args: list[str], prompt: str, timeout_s: int, on_text: Callable[[str], None] | None = None) -> ModelResponse:
+        stream = AnswerStream(on_text) if on_text else None
+
+        def on_line(line: str) -> None:
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                return
+            delta = (ev.get("event") or {}).get("delta") or {} if ev.get("type") == "stream_event" else {}
+            if stream and delta.get("type") == "text_delta":
+                stream.feed(str(delta.get("text") or ""))
+
+        code, out, err = await self._exec(args, prompt, timeout_s, on_line=on_line if stream else None)
         data: dict[str, Any] = {}
         for line in out.splitlines():
             try:
@@ -505,7 +615,11 @@ class CodexCliProvider(CliProvider):
         self._set_limits(windows, "codex app-server")
         return windows
 
-    async def _call(self, model: str, system: str, prompt: str, timeout_s: int, resume: str | None = None, persist: bool = False) -> ModelResponse:
+    async def _call(
+        self, model: str, system: str, prompt: str, timeout_s: int, resume: str | None = None, persist: bool = False,
+        on_text: Callable[[str], None] | None = None,
+    ) -> ModelResponse:
+        """`codex exec --json` reports whole items only, so the answer is not streamed."""
         if not self.models or model not in self.models:
             await self.list_models()
         if not model:

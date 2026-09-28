@@ -556,13 +556,15 @@ class Orchestrator:
                 timeout_s=self.cfg.llm.providers[client.name].timeout_s,
                 metadata={"task_id": task_id, "trace_id": task["trace_id"]},
             )
-            await self.bus.emit(task_id, "llm.request", {"step": llm_steps})
+            llm_request = await self.bus.emit(task_id, "llm.request", {"step": llm_steps})
+            draft = self.bus.draft(task_id, llm_request["seq"])
             t0 = time.monotonic()
             try:
                 resp = await self._interruptible(
                     task_id,
                 self.provider.chat(
-                    request, tools=[toolbox.registry[t].definition() for t in available], response_schema=None, provider_id=pid
+                    request, tools=[toolbox.registry[t].definition() for t in available], response_schema=None, provider_id=pid,
+                    on_text=draft.feed,
                 ),
                 )
             except LLMError as e:
@@ -573,7 +575,10 @@ class Orchestrator:
                     try:
                         resp = await self._interruptible(
                             task_id,
-                            self.provider.chat(request, tools=[toolbox.registry[t].definition() for t in available], response_schema=None, provider_id=pid),
+                            self.provider.chat(
+                                request, tools=[toolbox.registry[t].definition() for t in available], response_schema=None, provider_id=pid,
+                                on_text=draft.feed,
+                            ),
                         )
                     except LLMError as e2:
                         await self.bus.emit(task_id, "task.error", {"message": f"LLM call failed: {e2}"})
@@ -581,6 +586,8 @@ class Orchestrator:
                 else:
                     await self.bus.emit(task_id, "task.error", {"message": f"LLM call failed: {e}"})
                     raise Stop("FAILED_RECOVERABLE", f"LLM call failed: {e}") from e
+            finally:
+                draft.close()
             latency = int((time.monotonic() - t0) * 1000)
             action = parse_action(resp)
             usage = resp.usage.model_dump() if resp.usage else None

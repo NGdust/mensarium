@@ -1270,13 +1270,17 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
                 for ev in await c.repo.list_events(task_id, after):
                     last = ev["seq"]
                     yield _sse(ev)
+                if (draft := c.bus.drafts.get(task_id)) and draft.sent:
+                    yield _sse(draft.snapshot())
                 while True:
                     try:
                         ev = await asyncio.wait_for(q.get(), 15)
                     except TimeoutError:
                         yield ": keepalive\n\n"
                         continue
-                    if ev["seq"] > last:
+                    if ev["seq"] is None:
+                        yield _sse(ev)
+                    elif ev["seq"] > last:
                         last = ev["seq"]
                         yield _sse(ev)
             finally:
@@ -1321,4 +1325,6 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
 
 
 def _sse(ev: dict[str, Any]) -> str:
-    return f"id: {ev['seq']}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"
+    """Live-only events carry no id, so a reconnect resumes after the last stored one."""
+    head = f"id: {ev['seq']}\n" if ev["seq"] is not None else ""
+    return f"{head}data: {json.dumps(ev, ensure_ascii=False)}\n\n"

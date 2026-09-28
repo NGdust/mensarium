@@ -75,10 +75,11 @@ class ProviderRouter:
         tools: list[ToolDefinition],
         response_schema: dict[str, Any] | None = None,
         provider_id: str | None = None,
+        on_text: Callable[[str], None] | None = None,
     ) -> ModelResponse:
         provider = self.get(provider_id)
         try:
-            return await provider.chat(request, tools=tools, response_schema=response_schema)
+            return await provider.chat(request, tools=tools, response_schema=response_schema, on_text=on_text)
         finally:
             if self.on_chat:
                 self.on_chat(provider)

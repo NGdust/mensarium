@@ -1504,7 +1504,37 @@ async function viewChat(taskId) {
     }
   }
 
-  function handle({ event, payload: p, created_at: createdAt }, live) {
+  // The answer the model is writing for the llm.request with seq `draftFor`, from live llm.delta events that are
+  // never stored; the stored llm.response or task.final settles it in place.
+  let draftFor = null;
+  let draft = null;
+  function draftDelta(p) {
+    if (p.request !== draftFor) return;
+    const d = draft || (draft = { text: '', node: null, body: null });
+    if (p.offset > d.text.length) return;
+    d.text += p.text.slice(d.text.length - p.offset);
+    if (!d.node) {
+      if (!d.text.trim()) return;
+      finishWork();
+      d.body = h('div', { class: 'prose' });
+      d.node = agentMsg(d.body, true);
+    }
+    d.body.innerHTML = markdown(d.text);
+    if (stick) thread.scrollTop = thread.scrollHeight;
+  }
+  function settleDraft(body) {
+    const d = draft;
+    draft = null;
+    if (!d?.node) return false;
+    d.node.replaceChildren(orb(''), h('div', { class: 'msg-body' }, body));
+    return true;
+  }
+  function dropDraft() {
+    draft?.node?.remove();
+    draft = null;
+  }
+
+  function handle({ event, seq, payload: p, created_at: createdAt }, live) {
     const ev = { created_at: createdAt };
     switch (event) {
       case 'user.message':
@@ -1516,6 +1546,7 @@ async function viewChat(taskId) {
       case 'task.status':
         setStatus(p.status);
         if (!isRunning(p.status)) finishWork();
+        if (!isRunning(p.status) && p.status !== 'SUCCEEDED') dropDraft();
         if (['PAUSED', 'CANCELED', 'FAILED', 'FAILED_RECOVERABLE'].includes(p.status)) {
           note(p.status === 'PAUSED' ? 'pause' : 'alert', `${statusOf(p.status)[0]}${p.reason ? `: ${reasonText(p.reason)}` : ''}`, p.status === 'PAUSED' || p.status === 'CANCELED' ? '' : 'error');
         }
@@ -1546,14 +1577,23 @@ async function viewChat(taskId) {
         if (live && p.event === 'llm.response') usage.later();
         break;
       case 'llm.request':
+        dropDraft();
+        draftFor = seq;
         stamp(ev);
         if (!work?.actions) say(tr('Thinking'), live);
         break;
+      case 'llm.delta':
+        draftDelta(p);
+        break;
       case 'llm.response':
+        draftFor = null;
         if (p.text && p.tool_call) {
-          finishWork();
-          agentMsg(h('div', { class: 'prose', html: markdown(p.text) }));
-        }
+          const body = h('div', { class: 'prose', html: markdown(p.text) });
+          if (!settleDraft(body)) {
+            finishWork();
+            agentMsg(body);
+          }
+        } else if (p.tool_call) dropDraft();
         stamp(ev);
         if (live) usage.later();
         break;
@@ -1579,10 +1619,12 @@ async function viewChat(taskId) {
         stamp(ev);
         toolResult(p);
         break;
-      case 'task.final':
+      case 'task.final': {
         finishWork();
-        agentMsg([h('div', { class: 'prose', html: markdown(p.text) }), p.image_artifact_id ? shot(p.image_artifact_id, 'msg-shot') : null]);
+        const body = [h('div', { class: 'prose', html: markdown(p.text) }), p.image_artifact_id ? shot(p.image_artifact_id, 'msg-shot') : null];
+        if (!settleDraft(body)) agentMsg(body);
         break;
+      }
       case 'task.error':
         note('alert', p.message, 'error');
         break;
@@ -1605,6 +1647,7 @@ async function viewChat(taskId) {
     es.onmessage = (m) => {
       let ev;
       try { ev = JSON.parse(m.data); } catch { return; }
+      if (ev.seq == null) { handle(ev, true); return; }
       if (ev.seq <= lastSeq) return;
       lastSeq = ev.seq;
       handle(ev, new Date(ev.created_at).getTime() > openedAt - 2000);
