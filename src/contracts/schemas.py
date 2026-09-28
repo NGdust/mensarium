@@ -18,6 +18,8 @@ MODELS: dict[str, type[BaseModel]] = {
     "target.update.status": protocol.TargetUpdateStatus,
     "target.plugins": protocol.TargetPlugins,
     "target.plugins.status": protocol.TargetPluginsStatus,
+    "core.moved": protocol.CoreMoved,
+    "core.identity": protocol.CoreIdentity,
     "pair.request": protocol.PairRequest,
     "pair.response": protocol.PairResponse,
     "llm.chat_request": llm.ChatRequest,

@@ -118,6 +118,28 @@ class TargetUpdateStatus(BaseModel):
     signature: str = ""
 
 
+class CoreMoved(BaseModel):
+    """The Core is moving to another address: switch there once the old one is gone and the new one proves its key."""
+
+    type: Literal["core.moved"] = "core.moved"
+    target_id: str
+    url: str
+    issued_at: str
+    expires_at: str
+    nonce: str
+    signature: str = ""
+
+
+class CoreIdentity(BaseModel):
+    """A Core's answer to `GET /v1/core/identity?nonce=`: the client's nonce signed with the Core key."""
+
+    type: Literal["core.identity"] = "core.identity"
+    nonce: str
+    core_public_key: str
+    ws_url: str
+    signature: str = ""
+
+
 class McpServerDef(BaseModel):
     """An MCP server the Core asks a device to run; config values are filled in, Core secrets never are."""
 

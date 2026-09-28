@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from pydantic import ValidationError
 
 from mensarium import __version__
-from mensarium.client import desktop
+from mensarium.client import desktop, moving
 from mensarium.client.config import ClientConfig, ClientPaths
 from mensarium.client.mcp_host import McpHost
 from mensarium.client.projects import ProjectHost
@@ -96,6 +96,7 @@ class AuditLog:
 class ClientAgent:
     def __init__(self, cfg: ClientConfig, paths: ClientPaths, key: Ed25519PrivateKey) -> None:
         self.cfg = cfg
+        self.paths = paths
         self.key = key
         self.executor = Executor(cfg)
         self.audit = AuditLog(paths)
@@ -161,6 +162,10 @@ class ClientAgent:
                     continue
                 log.warning("connection closed", extra={"code": code})
             except (OSError, websockets.InvalidHandshake, TimeoutError) as e:
+                if await moving.follow(self.paths, self.cfg):
+                    log.info("core moved; connecting to its new address", extra={"server": self.cfg.server})
+                    backoff = 1.0
+                    continue
                 log.warning("cannot connect to core", extra={"error": str(e), "retry_in_s": backoff})
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30)
@@ -219,6 +224,14 @@ class ClientAgent:
             task = asyncio.create_task(self._project(msg))
             self.syncing.add(task)
             task.add_done_callback(self.syncing.discard)
+        elif kind == "core.moved":
+            if moved := moving.accept(self.cfg, msg):
+                moving.remember(self.paths, moved.url)
+                self.cfg.moved_to = moved.url
+                self.audit.append({"action": "core.moved", "url": moved.url})
+                log.info("core announced a new address", extra={"url": moved.url})
+            else:
+                log.warning("core.moved ignored: not signed by this core, expired or addressed to another target")
         elif kind == "execution.cancel":
             if not verify(self.cfg.core_public_key, msg):
                 log.warning("unsigned execution.cancel ignored")

@@ -12,8 +12,9 @@ import websockets
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from mensarium import __version__
+from mensarium.client import moving
 from mensarium.client.agent import FATAL_CLOSE_CODES, platform_id
-from mensarium.client.config import ClientConfig
+from mensarium.client.config import ClientConfig, ClientPaths
 from mensarium.contracts.gateway import ApiCancel, ApiChunk, ApiEnd, ApiRequest, ApiResponse
 from mensarium.contracts.protocol import AuthChallenge, AuthResponse, Capabilities, Heartbeat, TargetHello, TargetInfo
 from mensarium.shared.crypto import sign
@@ -35,8 +36,9 @@ class Call:
 
 
 class Tunnel:
-    def __init__(self, cfg: ClientConfig, key: Ed25519PrivateKey) -> None:
+    def __init__(self, cfg: ClientConfig, paths: ClientPaths, key: Ed25519PrivateKey) -> None:
         self.cfg = cfg
+        self.paths = paths
         self.key = key
         self.online = False
         self.rejected_reason: str | None = None
@@ -73,6 +75,10 @@ class Tunnel:
                     continue
                 log.warning("tunnel closed", extra={"code": code})
             except (OSError, websockets.InvalidHandshake, TimeoutError) as e:
+                if await moving.follow(self.paths, self.cfg):
+                    log.info("core moved; connecting to its new address", extra={"server": self.cfg.server})
+                    backoff = 1.0
+                    continue
                 log.warning("cannot connect to core", extra={"error": str(e), "retry_in_s": backoff})
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30)
@@ -112,6 +118,11 @@ class Tunnel:
 
     def _on_frame(self, msg: dict[str, Any]) -> None:
         kind = msg.get("type")
+        if kind == "core.moved":
+            if moved := moving.accept(self.cfg, msg):
+                moving.remember(self.paths, moved.url)
+                self.cfg.moved_to = moved.url
+            return
         call = self.calls.get(str(msg.get("id")))
         if call is None:
             return

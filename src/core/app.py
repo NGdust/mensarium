@@ -30,7 +30,7 @@ from mensarium.contracts.automations import AutomationCreate, AutomationError, A
 from mensarium.contracts.gateway import GATEWAY_SCOPE_KEY
 from mensarium.contracts.plugins import Plugin
 from mensarium.contracts.projects import BrowseBody, ProjectCreate, ProjectError, ProjectPatch
-from mensarium.contracts.protocol import AccessMode, PairRequest, PairResponse
+from mensarium.contracts.protocol import AccessMode, CoreIdentity, PairRequest, PairResponse
 from mensarium.contracts.skills import OS, SkillError, SkillMeta, SkillRequires
 from mensarium.core import distribution, pairing
 from mensarium.core.api_tunnel import ApiTunnel
@@ -55,7 +55,7 @@ from mensarium.core.releases import ReleaseError, fetch_latest, spawn_update, up
 from mensarium.core.repo import USAGE_FIELDS, Repo
 from mensarium.core.skills import SkillStore
 from mensarium.llm_providers.router import ProviderRouter
-from mensarium.shared.crypto import fingerprint, load_or_create_private_key, public_key_b64
+from mensarium.shared.crypto import fingerprint, load_or_create_private_key, public_key_b64, sign
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import iso_in, now_iso, parse_iso, utcnow
 from mensarium.shared.versions import parse_version
@@ -95,6 +95,10 @@ class Core:
 
 class LoginBody(BaseModel):
     token: str
+
+
+class MoveBody(BaseModel):
+    url: str = Field(pattern=r"^https?://", max_length=500)
 
 
 
@@ -434,6 +438,13 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         response.delete_cookie(ui_auth.COOKIE)
         return {"ok": True}
 
+    @app.get("/v1/core/identity")
+    async def core_identity(nonce: str = Query(min_length=16, max_length=128), c: Core = Depends(core)) -> dict[str, str]:
+        """Proof for a client following a move: this Core holds the key the client was paired with."""
+        ident = CoreIdentity(nonce=nonce, core_public_key=c.core_public_key, ws_url=_ws_url(c.cfg.server.public_url))
+        ident.signature = sign(c.hub.key, ident.model_dump())
+        return ident.model_dump()
+
     @app.get("/v1/gateway")
     async def gateway_state(c: Core = Depends(core)) -> dict[str, object]:
         """What the UI asks first: here it is served by the Core itself, whose device is `target_id`."""
@@ -623,6 +634,15 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     @app.get("/v1/targets")
     async def list_targets(c: Core = Depends(auth)) -> list[dict[str, Any]]:
         return [target_view(c, t) for t in await c.repo.list_targets()]
+
+    @app.post("/v1/core/move")
+    async def core_move(body: MoveBody, c: Core = Depends(auth)) -> dict[str, list[str]]:
+        """Before this Core stops for a move: tell the connected clients where it will be."""
+        url = body.url.rstrip("/")
+        told = await c.hub.announce_move(url, c.cfg.execution.request_ttl_s, c.device_id)
+        targets = [t for t in await c.repo.list_targets() if t["status"] != "revoked" and t["id"] != c.device_id]
+        await c.repo.audit(c.workspace_id, "user", "core.moving", {"url": url, "told": sorted(told)})
+        return {"told": [t["name"] for t in targets if t["id"] in told], "missed": [t["name"] for t in targets if t["id"] not in told]}
 
     @app.post("/v1/targets/pairing-codes")
     async def create_pairing_code(c: Core = Depends(auth)) -> dict[str, str]:

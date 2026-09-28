@@ -32,7 +32,7 @@ def device_name(cfg: CoreConfig) -> str:
     return cfg.device.name or socket.gethostname().split(".")[0]
 
 
-def _roots(cfg: CoreConfig) -> list[str]:
+def device_roots(cfg: CoreConfig) -> list[str]:
     roots = [str(p) for p in (Path(r).expanduser().resolve() for r in cfg.device.roots) if p.is_dir()]
     return roots or [str(Path.home())]
 
@@ -43,7 +43,7 @@ def _apply(tcfg: ClientConfig, cfg: CoreConfig, core_public_key: str) -> ClientC
     tcfg.server, tcfg.ws_url = f"http://{base}", f"ws://{base}/v1/clients/ws"
     tcfg.name = device_name(cfg)
     tcfg.core_public_key, tcfg.core_fingerprint = core_public_key, fingerprint(core_public_key)
-    tcfg.roots = _roots(cfg)
+    tcfg.roots = device_roots(cfg)
     tcfg.command_allowlist = list(cfg.device.command_allowlist)
     tcfg.allow_full_access = cfg.device.allow_full_access
     tcfg.allow_shell = cfg.device.allow_shell

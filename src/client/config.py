@@ -41,6 +41,7 @@ class ClientConfig(BaseModel):
     limits: TargetLimits = Field(default_factory=TargetLimits)
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
+    moved_to: str | None = None
 
     @property
     def policy(self) -> TargetPolicy:

@@ -147,10 +147,11 @@ mensarium projects create --git URL
 | `mensarium core pair-code` | One-time pairing code (10 minutes) |
 | `mensarium core open` | Open the web UI with a one-time login link |
 | `mensarium core token [--rotate]` | Token for logging into the Core's web UI |
-| `mensarium core backup -o file.pab` / `restore file.pab` | Encrypted transfer of Core to another host |
+| `mensarium core backup -o file.pab` / `restore file.pab` | Encrypted bundle of the Core; on a move, clients are told the new address and follow it themselves |
 | `mensarium client` | Set up this client (first run) or show its state |
 | `mensarium client setup` | Reconfigure: pairing, folders, worker, gateway |
 | `mensarium client pair --server URL --code CODE --root DIR` | Pair without the wizard (`--no-full-access`, `--no-remote-update`, `--no-shell` restrict the device) |
+| `mensarium client move URL` | The Core moved: switch this client to its new address (no re-pairing) |
 | `mensarium client run` | Run the worker in the foreground |
 | `mensarium client gateway run` | Run the gateway (web UI) in the foreground |
 | `mensarium client gateway open` | Open the web UI with a one-time login link |

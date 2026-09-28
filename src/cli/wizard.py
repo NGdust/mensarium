@@ -1,3 +1,4 @@
+import asyncio
 import re
 import shutil
 import socket
@@ -12,6 +13,17 @@ import questionary
 import typer
 
 from mensarium.cli import service
+from mensarium.cli.backup import (
+    BackupError,
+    Item,
+    backup_items,
+    can_write,
+    export_bundle,
+    human,
+    import_bundle,
+    planned_roots,
+    read_manifest,
+)
 from mensarium.cli.ui import banner, console, fail, ok, step, summary, warn
 from mensarium.client.config import (
     DEFAULT_COMMAND_ALLOWLIST,
@@ -275,6 +287,200 @@ def _finish_core(paths: CorePaths, cfg: CoreConfig, start_service: bool | None) 
     )
 
 
+# ---- backup and move ----------------------------------------------------------
+
+
+def _item_label(item: Item) -> str:
+    extra = f", {human(item.skipped)} of node_modules/.venv/builds skipped" if item.skipped else ""
+    return f"{item.title} ({human(item.size)}{extra})"
+
+
+def _stop_for_move(moved_to: str, local_url: str, was_installed: bool) -> None:
+    """Tell the clients the new address, then stop this Core for good so nothing changes after the snapshot."""
+    from mensarium.cli.plugins import ApiError, _api
+
+    if wait_healthy(local_url, timeout_s=2):
+        try:
+            answer = _api("POST", "/v1/core/move", {"url": moved_to})
+        except ApiError as e:
+            fail(f"Could not tell the clients about the move: {e}")
+            raise typer.Exit(1) from e
+        if answer["told"]:
+            ok("New address sent to: " + ", ".join(answer["told"]))
+        if answer["missed"]:
+            warn(f"Offline now, switch them later with `mensarium client move {moved_to}` there: " + ", ".join(answer["missed"]))
+    else:
+        warn(f"The Core is not running, so clients were not told; run `mensarium client move {moved_to}` on each of them.")
+    if was_installed:
+        with console.status("Stopping the Core service..."):
+            service.uninstall("core")
+    with console.status("Waiting for the Core to stop (press Ctrl+C in its terminal if it runs in the foreground)..."):
+        while wait_healthy(local_url, timeout_s=1):
+            time.sleep(1)
+    ok("The Core on this machine is stopped")
+
+
+def backup_core(output: Path | None) -> None:
+    from mensarium.shared.timeutil import utcnow
+
+    paths = CorePaths()
+    if not paths.config.exists():
+        fail("The Core is not configured on this machine")
+        raise typer.Exit(1)
+    cfg = load_config(paths)
+    moved_to = None
+    if ask(questionary.confirm("Is this a move to another server? Clients get the new address and this Core stops.", default=False, style=STYLE)):
+        moved_to = ask(
+            questionary.text(
+                "Core URL on the new server (clients will use it):",
+                validate=lambda v: v.startswith(("http://", "https://")) or "Must start with http:// or https://",
+                style=STYLE,
+            )
+        ).strip().rstrip("/")
+    with console.status("Measuring what can go into the bundle..."):
+        core, items = backup_items(paths, cfg)
+    console.print(f"Always in the bundle: {core.title} ({human(core.size)})")
+    chosen = (
+        ask(
+            questionary.checkbox(
+                "Also take (space toggles, enter confirms):",
+                choices=[questionary.Choice(_item_label(i), i, checked=i.default) for i in items],
+                style=STYLE,
+            )
+        )
+        if items
+        else []
+    )
+    passphrase = ask(questionary.password("Passphrase to encrypt the bundle:", style=STYLE))
+    if not passphrase or passphrase != ask(questionary.password("Repeat passphrase:", style=STYLE)):
+        fail("Passphrases are empty or do not match")
+        raise typer.Exit(1)
+    out = output or Path(f"mensarium-backup-{utcnow():%Y-%m-%d}.pab")
+    was_installed = service.is_installed("core")
+    if moved_to:
+        _stop_for_move(moved_to, f"http://127.0.0.1:{cfg.server.port}", was_installed)
+    try:
+        with console.status(f"Writing {out}..."):
+            info = export_bundle(paths, out, passphrase, chosen, moved_to)
+    except (BackupError, OSError) as e:
+        fail(str(e))
+        if moved_to and was_installed:
+            service.install("core")
+            warn("The Core on this machine is started again; clients stay with it until the new one is up.")
+        raise typer.Exit(1) from e
+    for problem in info["problems"][:20]:
+        warn(f"Not copied: {problem}")
+    footer = f"Restore on this or another host: mensarium core restore {out}"
+    if moved_to:
+        footer = (
+            f"Copy {out} to the new server, install Mensarium there:\n  curl -fsSL https://mensarium.com/install.sh | sh\n"
+            f"and run:\n  mensarium core restore {out.name}\n"
+            f"Clients that got the address switch to {moved_to} by themselves once the new Core is up."
+        )
+    summary(
+        "Backup created",
+        [("File", info["file"]), ("Size", human(info["size"])), ("SHA-256", info["sha256"]), ("Contents", ", ".join(["core", *info["items"]]))],
+        footer=footer,
+    )
+
+
+def restore_core(bundle: Path) -> None:
+    import tarfile
+
+    paths = CorePaths()
+    passphrase = ask(questionary.password("Bundle passphrase:", style=STYLE))
+    try:
+        with console.status("Reading the bundle..."):
+            manifest = read_manifest(bundle, passphrase)
+    except (BackupError, OSError, tarfile.TarError) as e:
+        fail(str(e))
+        raise typer.Exit(1) from e
+    roots = planned_roots(manifest)
+    olds = {int(r["id"]): r["path"] for r in manifest.get("roots", [])}
+    for n, dest in roots.items():
+        if not can_write(dest):
+            answer = ask(questionary.text(f"No permission to write {dest}. Where to put {olds[n]}?", default=str(Path.home() / dest.name), style=STYLE))
+            roots[n] = Path(answer).expanduser().resolve()
+    if roots:
+        console.print("Folders of the Core's device go to:")
+        for n, dest in roots.items():
+            busy = dest.exists() and any(dest.iterdir())
+            console.print(f"  {olds[n]} -> {dest}" + ("  (exists: files with the same names are replaced)" if busy else ""))
+        if not ask(questionary.confirm("Restore them there?", default=True, style=STYLE)):
+            raise typer.Abort()
+    was_installed = service.is_installed("core")
+    if was_installed:
+        service.stop("core")
+    try:
+        with console.status("Restoring..."):
+            restored = import_bundle(paths, bundle, passphrase, roots)
+    except (BackupError, OSError, tarfile.TarError) as e:
+        fail(str(e))
+        raise typer.Exit(1) from e
+    ok("Core data restored" + (f"; previous data kept in {restored.previous}" if restored.previous else ""))
+    for warning in restored.warnings:
+        warn(warning)
+    cfg = load_config(paths)
+    if not manifest.get("moved_to"):
+        url = ask(
+            questionary.text(
+                "URL clients will use to reach the Core:",
+                default=cfg.server.public_url,
+                validate=lambda v: v.startswith(("http://", "https://")) or "Must start with http:// or https://",
+                style=STYLE,
+            )
+        ).rstrip("/")
+        if url != cfg.server.public_url:
+            cfg.server.public_url = url
+            save_config(paths, cfg)
+            warn(f"The address changed: on each client run `mensarium client move {url}`.")
+    _finish_core(paths, cfg, True if was_installed else None)
+    _check_provider(cfg)
+
+
+def _check_provider(cfg: CoreConfig) -> None:
+    from mensarium.cli.plugins import ApiError, _api
+
+    if not wait_healthy(f"http://127.0.0.1:{cfg.server.port}", timeout_s=2):
+        return
+    try:
+        health = _api("GET", "/v1/system")["provider"]["health"]
+    except (ApiError, KeyError, TypeError):
+        return
+    if not health.get("ok"):
+        warn(f"The model provider does not answer on this machine: {health.get('detail') or 'unknown error'}. Fix it with `mensarium core setup` (a local Claude Code or Codex needs a login here).")
+
+
+def move_client(url: str | None) -> None:
+    """Point this client at the Core's new address; the Core there must hold the same key."""
+    from mensarium.client import moving
+
+    paths = ClientPaths()
+    cfg = load_client_config(paths)
+    url = (
+        url
+        or ask(
+            questionary.text(
+                "New Core URL:",
+                default=cfg.moved_to or "",
+                validate=lambda v: v.startswith(("http://", "https://")) or "e.g. http://192.168.1.10:8787",
+                style=STYLE,
+            )
+        )
+    ).strip().rstrip("/")
+    try:
+        with console.status(f"Checking the Core at {url}..."):
+            asyncio.run(moving.switch(paths, cfg, url))
+    except moving.MoveError as e:
+        fail(str(e))
+        raise typer.Exit(1) from e
+    ok(f"This client now works with the Core at {url}")
+    for unit, enabled in (("client", cfg.worker.enabled), ("gateway", cfg.gateway.enabled)):
+        if enabled and service.is_installed(unit):  # type: ignore[arg-type]
+            service.restart(unit)  # type: ignore[arg-type]
+            ok(f"{unit} restarted")
+
+
 # ---- target -----------------------------------------------------------------
 
 
@@ -299,10 +505,13 @@ def setup_client(server: str | None, code: str | None, name: str | None, start_s
         action = ask(
             questionary.select(
                 f"This machine is already paired as '{current.name}' with {current.server}.",
-                choices=["Keep the pairing and (re)start the agent", "Pair again (new code)"],
+                choices=["Keep the pairing and (re)start the agent", "The Core moved to a new address", "Pair again (new code)"],
                 style=STYLE,
             )
         )
+        if action.startswith("The Core moved"):
+            move_client(None)
+            return
         if action.startswith("Keep"):
             configure_client_roles(paths, current)
             finish_client(paths, start_service)
@@ -596,5 +805,5 @@ def client_status() -> None:
         "Mensarium client",
         rows,
         footer=("Open the web UI: mensarium client gateway open\n" if cfg.gateway.enabled else "")
-        + "Reconfigure: mensarium client setup\nAll commands: mensarium client --help",
+        + "Reconfigure: mensarium client setup\nThe Core moved: mensarium client move <url>\nAll commands: mensarium client --help",
     )

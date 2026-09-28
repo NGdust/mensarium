@@ -261,49 +261,20 @@ def core_open() -> None:
 def core_backup(
     output: Annotated[Path | None, typer.Option("-o", "--output", help="Output .pab file")] = None,
 ) -> None:
-    """Export an encrypted portable bundle (.pab) of the Core."""
+    """Export an encrypted portable bundle (.pab) of the Core; also moves the Core to another server."""
     use_select_event_loop()
-    from mensarium.cli.backup import BackupError, export_bundle
-    from mensarium.shared.timeutil import utcnow
+    from mensarium.cli import wizard
 
-    out = output or Path(f"mensarium-backup-{utcnow():%Y-%m-%d}.pab")
-    passphrase = questionary.password("Passphrase to encrypt the bundle:").ask()
-    if not passphrase or passphrase != questionary.password("Repeat passphrase:").ask():
-        fail("Passphrases are empty or do not match")
-        raise typer.Exit(1)
-    try:
-        info = export_bundle(CorePaths(), out, passphrase)
-    except BackupError as e:
-        fail(str(e))
-        raise typer.Exit(1) from e
-    summary(
-        "Backup created",
-        [(k, str(v)) for k, v in info.items() if k != "encryption"],
-        footer=f"Restore on this or another host: mensarium core restore {out}",
-    )
+    wizard.backup_core(output)
 
 
 @core_app.command("restore")
 def core_restore(bundle: Path) -> None:
     """Restore the Core from a .pab bundle (stops the service while restoring)."""
     use_select_event_loop()
-    from mensarium.cli.backup import BackupError, import_bundle
+    from mensarium.cli import wizard
 
-    passphrase = questionary.password("Bundle passphrase:").ask() or ""
-    was_installed = service.is_installed("core")
-    if was_installed:
-        service.stop("core")
-    try:
-        previous = import_bundle(CorePaths(), bundle, passphrase)
-    except BackupError as e:
-        fail(str(e))
-        raise typer.Exit(1) from e
-    ok("Core data restored" + (f"; previous data kept in {previous}" if previous else ""))
-    cfg = load_config(CorePaths())
-    warn(f"Core URL in the bundle: {cfg.server.public_url}. If this host has a different address, run `mensarium core setup` -> Reconfigure, then re-pair clients.")
-    if was_installed:
-        service.install("core")
-        ok("Core service restarted")
+    wizard.restore_core(bundle)
 
 
 # ---- client -----------------------------------------------------------------
@@ -385,6 +356,15 @@ def client_pair(
         ok("Client service restarted")
     else:
         console.print("Worker and gateway settings: `mensarium client setup`; start with `mensarium service install client`.")
+
+
+@client_app.command("move")
+def client_move(url: Annotated[str | None, typer.Argument(help="The Core's new URL")] = None) -> None:
+    """The Core moved to another address: switch this client there (the Core must be the same, with the same key)."""
+    use_select_event_loop()
+    from mensarium.cli import wizard
+
+    wizard.move_client(url)
 
 
 @client_app.command("plugins")

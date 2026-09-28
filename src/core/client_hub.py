@@ -15,6 +15,7 @@ from mensarium.contracts.projects import ProjectOp, ProjectSnapshot
 from mensarium.contracts.protocol import (
     AuthChallenge,
     AuthResponse,
+    CoreMoved,
     ExecutionCancel,
     ExecutionRequest,
     ExecutionResult,
@@ -312,6 +313,21 @@ class ClientHub:
             await conn.ws.send_json(msg.model_dump())
         except (RuntimeError, WebSocketDisconnect):
             pass
+
+    async def announce_move(self, url: str, ttl_s: int, skip: str | None) -> set[str]:
+        """Tell every connected worker and gateway the Core's new address; returns the targets that got it."""
+        told: set[str] = set()
+        for conn in [*self.connections.values(), *self.gateways.values()]:
+            if conn.target_id == skip:
+                continue
+            msg = CoreMoved(target_id=conn.target_id, url=url, issued_at=now_iso(), expires_at=iso_in(ttl_s), nonce=secrets.token_hex(32))
+            msg.signature = sign(self.key, msg.model_dump())
+            try:
+                await conn.ws.send_json(msg.model_dump())
+                told.add(conn.target_id)
+            except (RuntimeError, WebSocketDisconnect):
+                pass
+        return told
 
     async def disconnect(self, target_id: str, reason: str) -> None:
         for conn in (self.connections.get(target_id), self.gateways.get(target_id)):

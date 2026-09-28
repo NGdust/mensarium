@@ -135,7 +135,7 @@ async def _stream(tunnel: Tunnel, call: Call, first: ApiResponse) -> AsyncIterat
 
 async def run_gateway(cfg: ClientConfig, paths: ClientPaths, key: Ed25519PrivateKey | None = None) -> None:
     key = key or load_or_create_private_key(paths.key)
-    tunnel = Tunnel(cfg, key)
+    tunnel = Tunnel(cfg, paths, key)
     app = create_gateway_app(cfg, paths, tunnel)
     config = uvicorn.Config(app, host=cfg.gateway.host, port=cfg.gateway.port, log_config=None)
     server = uvicorn.Server(config)
