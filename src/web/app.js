@@ -2032,6 +2032,7 @@ async function settingsOverview(shell) {
 async function settingsProviders(shell) {
   const [data, sys] = await Promise.all([get('/v1/providers'), get('/v1/system')]);
   state.system = sys;
+  const health = sys.provider?.health || {};
   const kinds = Object.fromEntries(data.kinds.map((k) => [k.kind, k]));
 
   const reload = () => settingsProviders(shell).catch(fail);
