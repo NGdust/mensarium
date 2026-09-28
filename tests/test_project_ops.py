@@ -99,7 +99,8 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         wt = Path(os.environ["MENSARIUM_HOME"]) / "projects" / "prj_1" / "wt" / "task_r"
         (wt / "app.py").write_text("changed\n")
         (wt / "new.txt").write_text("new\n")
-        await self.op("commit", "task_r", message="turn", base_sha=base)
+        status = await self.op("commit", "task_r", message="turn", base_sha=base)
+        self.assertEqual(status["data"]["stat"], {"files": 2, "added": 2, "deleted": 1})
         (wt / "app.py").unlink()
         for path in ("app.py", "new.txt"):
             status = await self.op("revert", "task_r", base_sha=base, path=path)

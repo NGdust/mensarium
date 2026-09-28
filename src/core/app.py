@@ -1133,7 +1133,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     def task_view(t: dict[str, Any]) -> dict[str, Any]:
         keys = (
             "id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result", "mode", "model", "provider", "parent_id", "label",
-            "automation_id", "project_id", "branch", "base_ref", "base_sha", "head_sha",
+            "automation_id", "project_id", "branch", "base_ref", "base_sha", "head_sha", "diff_stat",
         )
         return {k: t.get(k) for k in keys} | {"plan": t.get("plan") or [], "created_at": t["created_at"], "updated_at": t["updated_at"]}
 

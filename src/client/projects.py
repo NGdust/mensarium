@@ -352,7 +352,12 @@ class ProjectHost:
         if head != before:
             names = await self._git("diff", "--name-only", before, head, cwd=wt)
             changed = len([n for n in names.splitlines() if n.strip()])
-        return {"head_sha": head, "changed": changed}
+        base = str(a.get("base_sha") or "")
+        if not SHA_RE.fullmatch(base):
+            return {"head_sha": head, "changed": changed}
+        rows = [r.split("\t", 2) for r in (await self._git("diff", "--numstat", "-z", "--no-renames", base, head, cwd=wt)).split("\0") if r]
+        stat = {"files": len(rows), "added": sum(int(r[0]) for r in rows if r[0].isdigit()), "deleted": sum(int(r[1]) for r in rows if r[1].isdigit())}
+        return {"head_sha": head, "changed": changed, "data": {"stat": stat}}
 
     async def _status(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
         wt = self._worktree(project_id, task_id)

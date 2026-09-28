@@ -1409,6 +1409,10 @@ async function viewChat(taskId) {
   };
   const btnDelete = h('button', { class: 'icon-btn', title: tr('Delete chat'), 'aria-label': tr('Delete chat'), onclick: () => deleteChat(task) }, icon('trash'));
   const changes = task.project_id && !task.parent_id ? changesPanel(taskId) : null;
+  const inRepo = state.projects.find((p) => p.id === task.project_id)?.kind === 'repo';
+  const branchPill = inRepo && task.branch
+    ? h('span', { class: 'pill tag branch-pill', title: baseName(task.base_ref) ? `${task.branch} · ${tr('from {0}', task.base_ref)}` : task.branch }, icon('git'), h('span', {}, task.branch))
+    : null;
 
   const thread = h('div', { class: 'thread' });
   const inner = h('div', { class: 'thread-inner', role: 'log', 'aria-live': 'polite' });
@@ -1448,7 +1452,7 @@ async function viewChat(taskId) {
   shell.panel.replaceChildren(
     topbar(shell,
       [crumb, h('span', { class: 'current', title: task.input }, taskTitle(task))],
-      [changes?.btn, btnDelete].filter(Boolean)),
+      [branchPill, changes?.btn, btnDelete].filter(Boolean)),
     ...(changes ? [h('div', { class: 'chat-split' }, h('div', { class: 'chat-main' }, chatBody), changes.el)] : chatBody),
   );
 
@@ -3623,6 +3627,13 @@ async function viewAutomationEditor(id) {
 
 // ---------- projects ----------
 
+// A base worth naming: a branch, not the device state or the not-yet-resolved main branch.
+const baseName = (ref) => (ref && !['snapshot', 'default'].includes(ref) ? ref : null);
+
+const diffStat = (s) => (s?.files
+  ? h('span', { class: 'change-stat', title: tp('{0} file|{0} files', s.files) }, h('span', { class: 'add' }, `+${s.added}`), h('span', { class: 'del' }, `−${s.deleted}`))
+  : null);
+
 // The files a project chat changed since it started, in a side panel behind a topbar button; each opens its diff.
 function changesPanel(taskId) {
   // On a phone the panel covers the chat, so it opens only by hand there.
@@ -3633,7 +3644,7 @@ function changesPanel(taskId) {
   let again = false;
   let timer = 0;
   viewCleanups.push(() => clearTimeout(timer));
-  const count = h('span', { class: 'changes-count hidden' });
+  const count = h('span', { class: 'change-stat hidden' });
   const btn = h('button', { class: 'icon-btn changes-btn', title: tr('Changes'), 'aria-label': tr('Changes'), onclick: () => toggle() }, icon('panelRight'), count);
   const sum = h('div', { class: 'changes-sum' });
   const list = h('div', { class: 'changes-list' });
@@ -3654,10 +3665,11 @@ function changesPanel(taskId) {
   const stat = (f) => (f.binary ? [h('span', { class: 'change-bin' }, tr('binary'))] : [h('span', { class: 'add' }, `+${f.added}`), h('span', { class: 'del' }, `−${f.deleted}`)]);
   const render = () => {
     const files = data?.files || [];
-    count.textContent = files.length > 99 ? '99+' : String(files.length);
-    count.classList.toggle('hidden', !files.length);
     const added = files.reduce((n, f) => n + f.added, 0);
     const deleted = files.reduce((n, f) => n + f.deleted, 0);
+    count.replaceChildren(h('span', { class: 'add' }, `+${added}`), h('span', { class: 'del' }, `−${deleted}`));
+    count.classList.toggle('hidden', !files.length);
+    btn.title = files.length ? `${tr('Changes')} · ${tp('{0} file|{0} files', files.length)}` : tr('Changes');
     sum.replaceChildren(...(files.length ? [tp('{0} file|{0} files', files.length), h('span', { class: 'add' }, `+${added}`), h('span', { class: 'del' }, `−${deleted}`)] : []));
     if (error) { list.replaceChildren(h('div', { class: 'changes-empty' }, error)); return; }
     if (!data) { list.replaceChildren(h('div', { class: 'changes-empty' }, tr('Loading...'))); return; }
@@ -4132,8 +4144,8 @@ async function viewProject(id) {
     return h('div', { class: 'row' },
       h('a', { class: 'row-text', href: `#/chat/${t.id}`, title: t.input },
         h('div', { class: 'row-title' }, h('span', { class: `dot ${cls}${live ? ' live' : ''}`, title: label }), taskTitle(t)),
-        p.kind === 'repo' && t.branch ? h('div', { class: 'row-desc mono' }, t.branch) : null),
-      h('div', { class: 'row-value' }, relTime(t.updated_at)));
+        p.kind === 'repo' && t.branch ? h('div', { class: 'row-desc mono' }, [t.branch, baseName(t.base_ref) ? tr('from {0}', t.base_ref) : null].filter(Boolean).join(' · ')) : null),
+      h('div', { class: 'row-value' }, diffStat(t.diff_stat), relTime(t.updated_at)));
   };
 
   const render = () => {

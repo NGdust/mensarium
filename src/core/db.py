@@ -26,6 +26,7 @@ COLUMN_MIGRATIONS = [
     ("tasks", "provider", "TEXT"),
     ("automations", "provider", "TEXT"),
     ("projects", "instructions", "TEXT"),
+    ("tasks", "diff_stat", "TEXT"),
 ]
 
 SCHEMA = """
@@ -125,7 +126,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS projects_source ON projects(source_target_id, 
 JSON_COLUMNS = {
     "settings", "capabilities", "policy", "body", "budget", "input", "output", "params", "usage",
     "arguments", "metadata", "payload", "disabled_tools", "manifest", "tags", "stats", "changes", "config", "status", "plan",
-    "schedule", "skipped",
+    "schedule", "skipped", "diff_stat",
 }
 
 
