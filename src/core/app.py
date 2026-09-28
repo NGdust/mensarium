@@ -165,6 +165,12 @@ class NoteBody(BaseModel):
     tags: list[str] = []
     pinned: bool = False
     importance: int = Field(5, ge=1, le=10)
+    link_to: str | None = Field(None, min_length=1, max_length=120)
+
+
+class CenterBody(BaseModel):
+    note_id: str | None = Field(None, max_length=100)
+    title: str | None = Field(None, min_length=1, max_length=120)
 
 
 class NotePatch(BaseModel):
@@ -1072,7 +1078,8 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     @app.get("/v1/memory/notes")
     async def list_notes(q: str = "", c: Core = Depends(auth)) -> dict[str, Any]:
         rows = await c.memory.search(q, 500) if q.strip() else await c.repo.list_notes()
-        return {"notes": [Memory.view(r) for r in rows], "kinds": list(KINDS)}
+        center = await c.memory.center()
+        return {"notes": [Memory.view(r) for r in rows], "kinds": list(KINDS), "center": center["id"] if center else None}
 
     @app.get("/v1/memory/notes/{note_id}")
     async def get_note(note_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
@@ -1104,6 +1111,9 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         row = await c.repo.get_note(note_id)
         if not row:
             raise HTTPException(404, "note not found")
+        center = await c.memory.center()
+        if center and center["id"] == note_id:
+            raise HTTPException(409, "the central note can't be deleted; make another note central first")
         await c.repo.delete_note(note_id)
         await c.repo.audit(c.workspace_id, "user", "memory.note_deleted", {"note_id": note_id, "title": row["title"]})
         return {"ok": True}
@@ -1111,6 +1121,15 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     @app.get("/v1/memory/graph")
     async def memory_graph(tags: bool = False, c: Core = Depends(auth)) -> dict[str, Any]:
         return await c.memory.graph(tags)
+
+    @app.post("/v1/memory/center")
+    async def memory_center(body: CenterBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            row = await c.memory.set_center(body.note_id) if body.note_id else await c.memory.ensure_center(body.title or "About me")
+        except NoteError as e:
+            raise note_error(e) from e
+        await c.repo.audit(c.workspace_id, "user", "memory.center_set", {"note_id": row["id"], "title": row["title"]})
+        return Memory.view(row)
 
     @app.get("/v1/memory/dreams")
     async def dreams(c: Core = Depends(auth)) -> dict[str, Any]:

@@ -1,5 +1,8 @@
-// Memory graph: force-directed layout on a canvas, in the spirit of Obsidian's graph view.
-// Drag nodes, pan the background, zoom with the wheel or a pinch; hover highlights a node's neighbourhood.
+// Memory map: the central note in the middle and every other note on rings by how many links away it is,
+// drawn like the product's diagrams: a lit hub, tiles on a dotted field, lines in the colour of a note's type.
+// Drag the background to pan, zoom with the wheel or a pinch; picking a note lights its path to the centre.
+
+import { createOrb } from './orb.js';
 
 const KIND_COLORS = {
   fact: '#a47bff',
@@ -12,277 +15,372 @@ const KIND_COLORS = {
   tag: '#6fd3c9',
   ghost: '#6c6778',
 };
+const KIND_ICONS = { fact: 'book', preference: 'sliders', project: 'folder', person: 'user', device: 'laptop', howto: 'list', note: 'file' };
+const KIND_ORDER = ['person', 'preference', 'project', 'device', 'howto', 'fact', 'note'];
 export const graphColor = (kind) => KIND_COLORS[kind] || KIND_COLORS.note;
+export const kindIcon = (kind) => KIND_ICONS[kind] || 'file';
 
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const HUB_R = 84;
+const TILE_R = 23;
 
-export function createGraph(canvas, { onSelect } = {}) {
-  const ctx = canvas.getContext('2d');
-  let nodes = [];
-  let links = [];
-  let byId = new Map();
-  let neighbours = new Map();
-  let view = { k: 1, x: 0, y: 0 };
-  let alpha = 0;
-  let raf = 0;
-  let hover = null;
-  let selected = null;
-  let fitted = false;
-  let width = 0;
-  let height = 0;
-  const dpr = () => Math.min(window.devicePixelRatio || 1, 2);
+const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
+const svgEl = (tag, attrs = {}) => {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  return e;
+};
+const polar = (r, a) => ({ x: r * Math.cos(a), y: r * Math.sin(a) });
 
-  function resize() {
-    const r = canvas.getBoundingClientRect();
-    width = r.width;
-    height = r.height;
-    canvas.width = Math.round(width * dpr());
-    canvas.height = Math.round(height * dpr());
-    draw();
+// A radial tree: breadth-first from the centre over links in both directions; a note nothing leads to is hung
+// on the centre with a dashed line. Every leaf gets the same slice of the circle, first-ring notes are grouped by type.
+export function layoutMemory(nodes, links, centerId) {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const adj = new Map(nodes.map((n) => [n.id, new Set()]));
+  for (const l of links) {
+    if (l.source !== l.target && adj.has(l.source) && adj.has(l.target)) { adj.get(l.source).add(l.target); adj.get(l.target).add(l.source); }
   }
-  const ro = new ResizeObserver(resize);
-  ro.observe(canvas);
-
-  function setData(data) {
-    const old = byId;
-    nodes = data.nodes.map((n) => {
-      const prev = old.get(n.id);
-      const angle = Math.random() * Math.PI * 2;
-      const dist = 40 + Math.random() * 160;
-      return { ...n, x: prev?.x ?? Math.cos(angle) * dist, y: prev?.y ?? Math.sin(angle) * dist, vx: 0, vy: 0, fixed: false };
-    });
-    byId = new Map(nodes.map((n) => [n.id, n]));
-    links = data.links.filter((l) => byId.has(l.source) && byId.has(l.target)).map((l) => ({ source: byId.get(l.source), target: byId.get(l.target) }));
-    neighbours = new Map(nodes.map((n) => [n.id, new Set()]));
-    for (const l of links) {
-      neighbours.get(l.source.id).add(l.target.id);
-      neighbours.get(l.target.id).add(l.source.id);
-    }
-    for (const n of nodes) n.r = n.kind === 'tag' ? 3.5 : 4 + Math.sqrt(neighbours.get(n.id).size) * 2.4 + (n.weight || 0) * 0.3;
-    if (selected && !byId.has(selected.id)) selected = null;
-    else if (selected) selected = byId.get(selected.id);
-    fitted = fitted && old.size > 0;
-    reheat(1);
-    if (reduceMotion.matches) { for (let i = 0; i < 300; i++) tick(); alpha = 0; fit(); draw(); }
-  }
-
-  function tick() {
-    const n = nodes.length;
-    const repulse = 900;
-    for (let i = 0; i < n; i++) {
-      const a = nodes[i];
-      for (let j = i + 1; j < n; j++) {
-        const b = nodes[j];
-        let dx = a.x - b.x;
-        let dy = a.y - b.y;
-        let d2 = dx * dx + dy * dy;
-        if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
-        if (d2 > 250000) continue;
-        const f = (repulse * alpha) / d2;
-        const d = Math.sqrt(d2);
-        a.vx += (dx / d) * f; a.vy += (dy / d) * f;
-        b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
+  const weight = (id) => (byId.get(id).pinned ? 50 : 0) + (byId.get(id).weight || 0) + adj.get(id).size;
+  const kindRank = (id) => { const i = KIND_ORDER.indexOf(byId.get(id).kind); return i < 0 ? KIND_ORDER.length : i; };
+  const depth = new Map([[centerId, 0]]);
+  const parent = new Map();
+  const children = new Map(nodes.map((n) => [n.id, []]));
+  const implicit = new Set();
+  const order = [centerId];
+  for (let i = 0; i < order.length; i++) {
+    const cur = order[i];
+    const next = [...adj.get(cur)].filter((x) => !depth.has(x));
+    next.sort((a, b) => (cur === centerId ? kindRank(a) - kindRank(b) : 0) || weight(b) - weight(a));
+    for (const x of next) { depth.set(x, depth.get(cur) + 1); parent.set(x, cur); children.get(cur).push(x); order.push(x); }
+    if (i === order.length - 1) {
+      const rest = nodes.map((n) => n.id).filter((x) => !depth.has(x)).sort((a, b) => weight(b) - weight(a));
+      if (rest.length) {
+        const root = rest[0];
+        depth.set(root, 1); parent.set(root, centerId); implicit.add(root); order.push(root);
+        const siblings = children.get(centerId);
+        const at = siblings.findIndex((s) => kindRank(s) > kindRank(root));
+        siblings.splice(at < 0 ? siblings.length : at, 0, root);
       }
     }
-    for (const l of links) {
-      const dx = l.target.x - l.source.x;
-      const dy = l.target.y - l.source.y;
-      const d = Math.sqrt(dx * dx + dy * dy) || 1;
-      const f = (d - 70) * 0.04 * alpha;
-      l.source.vx += (dx / d) * f; l.source.vy += (dy / d) * f;
-      l.target.vx -= (dx / d) * f; l.target.vy -= (dy / d) * f;
+  }
+  const leaves = new Map();
+  for (let i = order.length - 1; i >= 0; i--) {
+    const id = order[i];
+    const kids = children.get(id);
+    leaves.set(id, kids.length ? kids.reduce((s, k) => s + leaves.get(k), 0) : 1);
+  }
+  const perDepth = [];
+  for (const [id, d] of depth) if (id !== centerId) perDepth[d] = (perDepth[d] || 0) + 1;
+  const rings = [0];
+  for (let d = 1; d < perDepth.length; d++) rings[d] = Math.max(d === 1 ? 230 : rings[d - 1] + 165, (perDepth[d] * 112) / (2 * Math.PI));
+  const pos = new Map([[centerId, { x: 0, y: 0, a: 0, r: 0, depth: 0 }]]);
+  const span = new Map([[centerId, [-Math.PI / 2, (3 * Math.PI) / 2]]]);
+  for (const id of order) {
+    const [a0, a1] = span.get(id);
+    let a = a0;
+    for (const k of children.get(id)) {
+      const share = ((a1 - a0) * leaves.get(k)) / leaves.get(id);
+      span.set(k, [a, a + share]);
+      const mid = a + share / 2;
+      pos.set(k, { ...polar(rings[depth.get(k)], mid), a: mid, r: rings[depth.get(k)], depth: depth.get(k) });
+      a += share;
     }
-    for (const p of nodes) {
-      p.vx -= p.x * 0.004 * alpha;
-      p.vy -= p.y * 0.004 * alpha;
-      if (p.fixed) { p.vx = 0; p.vy = 0; continue; }
-      p.vx *= 0.6; p.vy *= 0.6;
-      p.x += p.vx; p.y += p.vy;
-    }
-    alpha *= 0.985;
+  }
+  const tree = [...parent].map(([to, from]) => ({ from, to, implicit: implicit.has(to) }));
+  const treeKey = new Set(tree.map((e) => [e.from, e.to].sort().join('|')));
+  const cross = [];
+  const seen = new Set();
+  for (const l of links) {
+    const key = [l.source, l.target].sort().join('|');
+    if (l.source === l.target || treeKey.has(key) || seen.has(key) || !pos.has(l.source) || !pos.has(l.target)) continue;
+    seen.add(key);
+    cross.push({ a: l.source, b: l.target });
+  }
+  return { pos, tree, cross, rings, parent, adj };
+}
+
+export function createMemoryMap(stage, { icon, onSelect, centerTitle, countText }) {
+  const world = el('div', 'mm-world');
+  const svg = svgEl('svg', { class: 'mm-lines', width: '1', height: '1' });
+  const ringsG = svgEl('g');
+  const crossG = svgEl('g');
+  const treeG = svgEl('g');
+  svg.append(ringsG, crossG, treeG);
+  world.append(svg);
+  stage.append(world);
+  let view = { k: 1, x: 0, y: 0 };
+  let nodes = [];
+  let layout = null;
+  let centerId = null;
+  let byId = new Map();
+  let nodeEls = new Map();
+  let edges = [];
+  let selected = null;
+  let hovered = null;
+  let token = 0;
+  let moved = false;
+
+  const apply = () => {
+    world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.k})`;
+    stage.classList.toggle('mm-far', view.k < 0.6);
+  };
+  const size = () => { const r = stage.getBoundingClientRect(); return { w: r.width, h: r.height }; };
+
+  function edgePath(from, to) {
+    const a = layout.pos.get(from);
+    const b = layout.pos.get(to);
+    const ang = from === centerId ? b.a : Math.atan2(b.y - a.y, b.x - a.x);
+    const start = from === centerId ? polar(HUB_R, b.a) : { x: a.x + Math.cos(ang) * TILE_R, y: a.y + Math.sin(ang) * TILE_R };
+    const end = { x: b.x - Math.cos(ang) * TILE_R, y: b.y - Math.sin(ang) * TILE_R };
+    if (from === centerId) return `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
+    const rm = (a.r + b.r) / 2;
+    const c1 = polar(rm, a.a);
+    const c2 = polar(rm, b.a);
+    return `M ${start.x} ${start.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${end.x} ${end.y}`;
+  }
+  function crossPath(x, y) {
+    const a = layout.pos.get(x);
+    const b = layout.pos.get(y);
+    const m = { x: ((a.x + b.x) / 2) * 0.72, y: ((a.y + b.y) / 2) * 0.72 };
+    return `M ${a.x} ${a.y} Q ${m.x} ${m.y} ${b.x} ${b.y}`;
   }
 
-  function reheat(value = 0.3) {
-    alpha = Math.max(alpha, value);
-    if (!raf && !reduceMotion.matches) raf = requestAnimationFrame(loop);
+  function nodeEl(n) {
+    const p = layout.pos.get(n.id);
+    const b = el('button', `mm-node${n.ghost ? ' ghost' : ''}${n.pinned ? ' pinned' : ''}`);
+    b.type = 'button';
+    b.style.left = `${p.x}px`;
+    b.style.top = `${p.y}px`;
+    b.style.setProperty('--c', graphColor(n.ghost ? 'ghost' : n.kind));
+    b.setAttribute('aria-label', n.label);
+    const tile = el('span', 'mm-tile');
+    tile.append(icon(kindIcon(n.kind)));
+    const label = el('span', 'mm-label');
+    label.textContent = n.label;
+    b.append(tile, label);
+    b.addEventListener('click', () => { select(n.id); onSelect?.(n); });
+    b.addEventListener('mouseenter', () => { hovered = n.id; light(); });
+    b.addEventListener('mouseleave', () => { if (hovered === n.id) { hovered = null; light(); } });
+    return b;
   }
 
-  function loop() {
-    raf = 0;
-    if (alpha > 0.01) {
-      tick(); tick();
-      if (!fitted && alpha < 0.35) { fit(); fitted = true; }
-      raf = requestAnimationFrame(loop);
+  function hubEl(n) {
+    const b = el('button', 'mm-hub hub-edge');
+    b.type = 'button';
+    b.append(createOrb(64, { animate: true, className: 'md' }));
+    const title = el('span', 'mm-hub-title');
+    title.textContent = n ? n.label : centerTitle;
+    const sub = el('span', 'mm-hub-sub');
+    sub.textContent = countText(nodes.filter((x) => !x.ghost && x.id !== centerId).length);
+    b.append(title, sub);
+    b.setAttribute('aria-label', title.textContent);
+    if (n && !n.virtual) b.addEventListener('click', () => { select(n.id); onSelect?.(n); });
+    return b;
+  }
+
+  function render() {
+    world.querySelectorAll('.mm-node, .mm-hub, .mm-packet').forEach((x) => x.remove());
+    ringsG.replaceChildren(...[...layout.rings.slice(1), (layout.rings.at(-1) || 0) + 165, (layout.rings.at(-1) || 0) + 330]
+      .filter((r) => r > 0).map((r, i, all) => svgEl('circle', { class: i >= all.length - 2 ? 'mm-ring faint' : 'mm-ring', cx: 0, cy: 0, r })));
+    if (layout.rings.length < 2) ringsG.replaceChildren(...[230, 395].map((r) => svgEl('circle', { class: 'mm-ring faint', cx: 0, cy: 0, r })));
+    crossG.replaceChildren();
+    treeG.replaceChildren();
+    edges = [];
+    for (const e of layout.tree) {
+      const n = byId.get(e.to);
+      const path = svgEl('path', { class: `mm-edge${e.implicit ? ' implicit' : ''}`, d: edgePath(e.from, e.to) });
+      path.style.setProperty('--c', graphColor(n.ghost ? 'ghost' : n.kind));
+      treeG.append(path);
+      edges.push({ ...e, path, tree: true });
     }
-    draw();
+    for (const e of layout.cross) {
+      const path = svgEl('path', { class: 'mm-cross', d: crossPath(e.a, e.b) });
+      crossG.append(path);
+      edges.push({ from: e.a, to: e.b, path, tree: false });
+    }
+    nodeEls = new Map();
+    for (const n of nodes) {
+      if (n.id === centerId) continue;
+      const b = nodeEl(n);
+      world.append(b);
+      nodeEls.set(n.id, b);
+    }
+    const hub = hubEl(byId.get(centerId));
+    world.append(hub);
+    nodeEls.set(centerId, hub);
+    light();
+  }
+
+  const chain = (id) => {
+    const out = [];
+    for (let cur = id; cur && cur !== centerId; cur = layout.parent.get(cur)) out.unshift(cur);
+    return out;
+  };
+
+  // one note in focus: its neighbours and its path to the centre stay lit, everything else steps back
+  function light() {
+    const focus = hovered || selected;
+    stage.classList.toggle('mm-focus', !!focus && focus !== centerId);
+    const lit = new Set();
+    const path = new Set();
+    if (focus && focus !== centerId) {
+      lit.add(focus);
+      for (const x of layout.adj.get(focus) || []) lit.add(x);
+      const c = chain(focus);
+      c.forEach((x) => { lit.add(x); path.add(x); });
+      lit.add(centerId);
+    }
+    for (const [id, b] of nodeEls) {
+      b.classList.toggle('lit', lit.has(id));
+      b.classList.toggle('sel', id === selected);
+    }
+    for (const e of edges) {
+      const on = e.tree ? path.has(e.to) : false;
+      const near = focus && (e.from === focus || e.to === focus);
+      e.path.classList.toggle('on', on || (e.tree && near));
+      e.path.classList.toggle('near', !e.tree && !!near);
+    }
+  }
+
+  // a signal runs from the centre along the lit path, the way requests travel in the diagrams
+  async function send(id) {
+    const my = ++token;
+    world.querySelectorAll('.mm-packet').forEach((x) => x.remove());
+    if (reduceMotion.matches) return;
+    const color = graphColor(byId.get(id)?.kind);
+    for (const step of chain(id)) {
+      const e = edges.find((x) => x.tree && x.to === step);
+      if (!e) return;
+      const dot = el('span', 'mm-packet');
+      dot.style.setProperty('--c', color);
+      world.append(dot);
+      const len = e.path.getTotalLength();
+      const dur = Math.min(900, 380 + len * 1.1);
+      await new Promise((resolve) => {
+        const t0 = performance.now();
+        const frame = (now) => {
+          if (my !== token) { dot.remove(); resolve(); return; }
+          const t = Math.min(1, (now - t0) / dur);
+          const q = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+          const p = e.path.getPointAtLength(len * q);
+          dot.style.transform = `translate(${p.x}px, ${p.y}px)`;
+          if (t < 1) requestAnimationFrame(frame); else { dot.remove(); resolve(); }
+        };
+        requestAnimationFrame(frame);
+      });
+      if (my !== token) return;
+    }
+    nodeEls.get(id)?.classList.add('arrived');
+    setTimeout(() => nodeEls.get(id)?.classList.remove('arrived'), 700);
+  }
+
+  function select(id, { pan = false } = {}) {
+    selected = id && byId.has(id) ? id : null;
+    light();
+    if (!selected) { token++; return; }
+    if (pan) {
+      const p = layout.pos.get(selected);
+      const { w, h } = size();
+      const sx = view.x + p.x * view.k;
+      const sy = view.y + p.y * view.k;
+      if (sx < 60 || sy < 60 || sx > w - 60 || sy > h - 60) {
+        view = { ...view, x: (w > 760 ? (w - 360) / 2 : w / 2) - p.x * view.k, y: h / 2 - p.y * view.k };
+        apply();
+      }
+    }
+    send(selected);
   }
 
   function fit() {
-    if (!nodes.length || !width) return;
-    let minX = Infinity; let minY = Infinity; let maxX = -Infinity; let maxY = -Infinity;
-    for (const p of nodes) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
-    const k = Math.min(2, Math.max(0.25, Math.min(width / (maxX - minX + 120), height / (maxY - minY + 120))));
-    view = { k, x: width / 2 - ((minX + maxX) / 2) * k, y: height / 2 - ((minY + maxY) / 2) * k };
+    const { w, h } = size();
+    if (!layout || !w) return;
+    const outer = Math.max(HUB_R + 40, ...[...layout.pos.values()].map((p) => p.r + 80));
+    const k = Math.max(w < 600 ? 0.42 : 0.3, Math.min(1.1, Math.min(w, h) / (outer * 2 + 40)));
+    view = { k, x: w / 2, y: h / 2 };
+    apply();
   }
 
-  const toWorld = (sx, sy) => [(sx - view.x) / view.k, (sy - view.y) / view.k];
-
-  function nodeAt(sx, sy) {
-    const [wx, wy] = toWorld(sx, sy);
-    let best = null;
-    let bestD = Infinity;
-    for (const p of nodes) {
-      const d = Math.hypot(p.x - wx, p.y - wy);
-      if (d < Math.max(p.r + 4, 10 / view.k) && d < bestD) { best = p; bestD = d; }
-    }
-    return best;
+  function zoom(factor, cx, cy) {
+    moved = true;
+    const { w, h } = size();
+    const px = cx ?? w / 2;
+    const py = cy ?? h / 2;
+    const k = Math.min(2.4, Math.max(0.2, view.k * factor));
+    view = { k, x: px - ((px - view.x) / view.k) * k, y: py - ((py - view.y) / view.k) * k };
+    apply();
   }
 
-  function draw() {
-    const s = dpr();
-    ctx.setTransform(s, 0, 0, s, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    ctx.setTransform(s * view.k, 0, 0, s * view.k, s * view.x, s * view.y);
-    const focus = hover || selected;
-    const near = focus ? neighbours.get(focus.id) : null;
-    const lit = (p) => !focus || p === focus || near.has(p.id);
-
-    ctx.lineWidth = 1 / view.k;
-    for (const l of links) {
-      const on = focus && (l.source === focus || l.target === focus);
-      ctx.strokeStyle = on ? 'rgba(187, 156, 255, 0.85)' : focus ? 'rgba(255, 255, 255, 0.04)' : 'rgba(255, 255, 255, 0.13)';
-      ctx.beginPath();
-      ctx.moveTo(l.source.x, l.source.y);
-      ctx.lineTo(l.target.x, l.target.y);
-      ctx.stroke();
-    }
-    for (const p of nodes) {
-      const color = graphColor(p.ghost ? 'ghost' : p.kind);
-      ctx.globalAlpha = lit(p) ? 1 : 0.18;
-      if (p === selected || p === hover) {
-        ctx.fillStyle = color;
-        ctx.globalAlpha *= 0.22;
-        ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 6, 0, Math.PI * 2); ctx.fill();
-        ctx.globalAlpha = 1;
-      }
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      if (p.ghost) {
-        ctx.strokeStyle = color; ctx.lineWidth = 1.2 / view.k; ctx.stroke();
-      } else {
-        ctx.fillStyle = color; ctx.fill();
-      }
-    }
-    ctx.globalAlpha = 1;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    const fontSize = 12 / view.k;
-    ctx.font = `${fontSize}px Onest, system-ui, sans-serif`;
-    for (const p of nodes) {
-      const important = p.r * view.k > 9 || view.k > 1.6;
-      if (!(p === focus || (near && near.has(p.id)) || (!focus && important))) continue;
-      ctx.fillStyle = lit(p) ? (p === focus ? '#f3f1f7' : 'rgba(203, 198, 214, 0.9)') : 'rgba(203, 198, 214, 0.2)';
-      const label = p.label.length > 34 ? `${p.label.slice(0, 33)}…` : p.label;
-      ctx.fillText(label, p.x, p.y + p.r + 4 / view.k);
-    }
-  }
-
-  // ---- pointer interaction ----
+  // ---- panning and zooming ----
   const pointers = new Map();
   let drag = null;
   let pinch = null;
-
-  const local = (e) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
-
-  canvas.addEventListener('pointerdown', (e) => {
-    canvas.setPointerCapture(e.pointerId);
-    const [sx, sy] = local(e);
-    pointers.set(e.pointerId, [sx, sy]);
+  const local = (e) => { const r = stage.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  stage.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.mm-node, .mm-hub, .mm-ui')) return;
+    stage.setPointerCapture(e.pointerId);
+    const [x, y] = local(e);
+    pointers.set(e.pointerId, [x, y]);
     if (pointers.size === 2) {
       const [[ax, ay], [bx, by]] = [...pointers.values()];
       pinch = { d: Math.hypot(ax - bx, ay - by), k: view.k, cx: (ax + bx) / 2, cy: (ay + by) / 2, x: view.x, y: view.y };
-      if (drag?.node) drag.node.fixed = false;
       drag = null;
+      moved = true;
       return;
     }
-    const node = nodeAt(sx, sy);
-    drag = { node, sx, sy, vx: view.x, vy: view.y, moved: false };
-    if (node) { node.fixed = true; reheat(0.25); }
+    drag = { x, y, vx: view.x, vy: view.y };
+    moved = true;
+    stage.classList.add('mm-grabbing');
   });
-
-  canvas.addEventListener('pointermove', (e) => {
-    const [sx, sy] = local(e);
-    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, [sx, sy]);
+  stage.addEventListener('pointermove', (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    const [x, y] = local(e);
+    pointers.set(e.pointerId, [x, y]);
     if (pinch && pointers.size === 2) {
       const [[ax, ay], [bx, by]] = [...pointers.values()];
-      const k = Math.min(4, Math.max(0.15, pinch.k * (Math.hypot(ax - bx, ay - by) / pinch.d)));
+      const k = Math.min(2.4, Math.max(0.2, pinch.k * (Math.hypot(ax - bx, ay - by) / pinch.d)));
       view = { k, x: pinch.cx - ((pinch.cx - pinch.x) / pinch.k) * k, y: pinch.cy - ((pinch.cy - pinch.y) / pinch.k) * k };
-      draw();
+      apply();
       return;
     }
-    if (drag) {
-      if (Math.hypot(sx - drag.sx, sy - drag.sy) > 4) drag.moved = true;
-      if (drag.node) {
-        const [wx, wy] = toWorld(sx, sy);
-        drag.node.x = wx; drag.node.y = wy;
-        reheat(0.2);
-      } else {
-        view.x = drag.vx + sx - drag.sx;
-        view.y = drag.vy + sy - drag.sy;
-      }
-      draw();
-      return;
-    }
-    const node = nodeAt(sx, sy);
-    if (node !== hover) {
-      hover = node;
-      canvas.style.cursor = node ? 'pointer' : 'grab';
-      draw();
-    }
+    if (drag) { view = { ...view, x: drag.vx + x - drag.x, y: drag.vy + y - drag.y }; apply(); }
   });
-
   const release = (e) => {
     pointers.delete(e.pointerId);
     if (pointers.size < 2) pinch = null;
-    if (!drag) return;
-    if (drag.node) drag.node.fixed = false;
-    if (!drag.moved) {
-      selected = drag.node;
-      draw();
-      onSelect?.(drag.node);
-    }
-    drag = null;
+    if (!pointers.size) { drag = null; stage.classList.remove('mm-grabbing'); }
   };
-  canvas.addEventListener('pointerup', release);
-  canvas.addEventListener('pointercancel', release);
-  canvas.addEventListener('pointerleave', () => { if (!drag && hover) { hover = null; draw(); } });
-
-  canvas.addEventListener('wheel', (e) => {
+  stage.addEventListener('pointerup', release);
+  stage.addEventListener('pointercancel', release);
+  stage.addEventListener('wheel', (e) => {
+    if (e.target.closest('.mm-ui')) return;
     e.preventDefault();
-    const [sx, sy] = local(e);
-    const k = Math.min(4, Math.max(0.15, view.k * Math.exp(-e.deltaY * 0.0015)));
-    view = { k, x: sx - ((sx - view.x) / view.k) * k, y: sy - ((sy - view.y) / view.k) * k };
-    draw();
+    const [x, y] = local(e);
+    zoom(Math.exp(-e.deltaY * 0.0015), x, y);
   }, { passive: false });
+  // until the owner pans or zooms, the whole map follows the panel size
+  const ro = new ResizeObserver(() => { if (!moved && layout) fit(); });
+  ro.observe(stage);
 
   return {
-    setData,
-    select(id) {
-      selected = byId.get(id) || null;
-      if (selected && width) {
-        // leave room for the preview panel that opens on the right of wide screens
-        const cx = width > 760 ? (width - 360) / 2 : width / 2;
-        const cy = width > 760 ? height / 2 : height * 0.3;
-        view = { ...view, x: cx - selected.x * view.k, y: cy - selected.y * view.k };
+    setData(data) {
+      nodes = data.nodes.filter((n) => n.kind !== 'tag');
+      centerId = data.center;
+      if (!nodes.some((n) => n.id === centerId)) {
+        centerId = 'center:none';
+        nodes.push({ id: centerId, label: centerTitle, kind: 'person', weight: 0, virtual: true });
       }
-      draw();
+      byId = new Map(nodes.map((n) => [n.id, n]));
+      const links = data.links.filter((l) => byId.has(l.source) && byId.has(l.target));
+      layout = layoutMemory(nodes, links, centerId);
+      if (selected && !byId.has(selected)) selected = null;
+      render();
+      if (!moved) fit();
     },
-    fit() { fit(); draw(); },
-    zoom(factor) {
-      const k = Math.min(4, Math.max(0.15, view.k * factor));
-      view = { k, x: width / 2 - ((width / 2 - view.x) / view.k) * k, y: height / 2 - ((height / 2 - view.y) / view.k) * k };
-      draw();
-    },
-    destroy() { ro.disconnect(); cancelAnimationFrame(raf); raf = 0; },
+    select,
+    fit() { moved = false; fit(); },
+    zoom: (f) => zoom(f),
+    isImplicit: (id) => !!layout?.tree.find((e) => e.to === id && e.implicit),
+    destroy() { ro.disconnect(); token++; },
   };
 }

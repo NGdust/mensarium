@@ -11,6 +11,7 @@ BAD_TITLE = re.compile(r"[\[\]|#\n]")
 TITLE_MAX = 120
 BODY_MAX = 20000
 CONTEXT_BUDGET = 2500
+CENTER_KEY = "memory.center"
 
 
 class NoteError(Exception):
@@ -89,10 +90,13 @@ class Memory:
         importance: int = 5,
         source: str = "user",
         task_id: str | None = None,
+        link_to: str | None = None,
     ) -> dict[str, Any]:
         title = clean_title(title)
         if await self.repo.get_note_by_title(title):
             raise NoteError(f"a note titled {title!r} already exists")
+        if link_to and link_to.strip().lower() != title.lower() and link_to.strip().lower() not in {t.lower() for t in wikilinks(body)}:
+            body = f"{body.rstrip()}\n\n[[{clean_title(link_to)}]]".strip()
         note_id = new_id("mem")
         await self.repo.create_note(
             {
@@ -139,6 +143,37 @@ class Memory:
         updated = await self.repo.get_note(note_id)
         assert updated is not None
         return updated
+
+    async def center(self) -> dict[str, Any] | None:
+        note_id = await self.repo.get_setting(CENTER_KEY)
+        return await self.repo.get_note(note_id) if note_id else None
+
+    async def ensure_center(self, title: str) -> dict[str, Any]:
+        """The note the graph is built around: at first the owner's own note, later any note the owner picks."""
+        row = await self.center()
+        if row:
+            return row
+        title = clean_title(title)
+        row = await self.repo.get_note_by_title(title) or await self.create(title=title, kind="person", pinned=True, importance=10)
+        await self.repo.set_setting(CENTER_KEY, row["id"])
+        return row
+
+    async def set_center(self, note_id: str) -> dict[str, Any]:
+        row = await self.repo.get_note(note_id)
+        if not row:
+            raise NoteError("note not found")
+        await self.repo.set_setting(CENTER_KEY, note_id)
+        return row
+
+    async def attach(self, title: str, body: str) -> str:
+        """A new note that links to no known note yet is linked to the central one, so the graph stays in one piece."""
+        center = await self.center()
+        if not center or center["title"].lower() == title.lower():
+            return body
+        known = {r["title"].lower() for r in await self.repo.list_notes()} - {title.lower()}
+        if any(t.lower() in known for t in wikilinks(body)):
+            return body
+        return f"{body.rstrip()}\n\n[[{center['title']}]]".strip()
 
     async def _rename_links(self, old: str, new: str) -> None:
         pattern = re.compile(r"\[\[" + re.escape(old) + r"(\|[^\[\]\n]*)?\]\]", re.I)
@@ -197,7 +232,7 @@ class Memory:
             body = (row["body"].rstrip() + "\n\n" + content).strip()
             await self.update(row["id"], {"body": body, "tags": [*(row["tags"] or []), *tags]})
             return f"Appended to note {row['title']!r}."
-        note = await self.create(title=title, body=content, kind=kind, tags=tags, source="agent", task_id=task_id)
+        note = await self.create(title=title, body=await self.attach(clean_title(title), content), kind=kind, tags=tags, source="agent", task_id=task_id)
         return f"Saved new note {note['title']!r}."
 
     async def context(self) -> str:
@@ -208,6 +243,8 @@ class Memory:
         used = 0
         for r in rows:
             text = " ".join(r["body"].split())
+            if not text:
+                continue
             limit = 600 if r["pinned"] else 200
             line = f"- {r['title']}: {text[:limit]}{'…' if len(text) > limit else ''}"
             if used + len(line) > CONTEXT_BUDGET:
@@ -242,4 +279,5 @@ class Memory:
                         tags.add(tag)
                         nodes.append({"id": f"tag:{tag}", "label": f"#{tag}", "kind": "tag", "weight": 0})
                     links.append({"source": r["id"], "target": f"tag:{tag}"})
-        return {"nodes": nodes, "links": links}
+        center = await self.center()
+        return {"nodes": nodes, "links": links, "center": center["id"] if center else None}

@@ -31,6 +31,7 @@ Keep durable knowledge only: the user's preferences and working style, facts abo
 how to run and test them), devices, decisions, recurring problems and their fixes, people and roles.
 Skip one-off details, command output, anything secret (tokens, passwords, keys, private URLs with credentials).
 If a piece of knowledge belongs to an existing note, reuse that note's exact title.
+Link every candidate (in "links") to at least one existing note it belongs with; if none fits, link the central note.
 Titles are short noun phrases. Titles and content are in the language of the conversations. Content is 1-4 \
 plain sentences and may mention other notes as [[Title]].
 importance: 9-10 a rule or preference the agent must always follow; 6-8 a useful project or device fact; 1-5 minor.
@@ -257,6 +258,9 @@ class Dreamer:
         index = "\n".join(
             f"- {n['title']} ({n['kind']}){' #' + ' #'.join(n['tags']) if n['tags'] else ''}" for n in notes[:150]
         ) or "(empty)"
+        center = await self.memory.center()
+        if center:
+            index = f"Central note: {center['title']} (about the user; the graph is built around it)\n{index}"
         batches: list[list[str]] = [[]]
         for d in digests:
             if batches[-1] and sum(map(len, batches[-1])) + len(d) > BATCH_CHARS:
@@ -314,7 +318,7 @@ class Dreamer:
                 elif created < MAX_NEW_NOTES:
                     note = await self.memory.create(
                         title=m["title"],
-                        body=text,
+                        body=await self.memory.attach(m["title"], text),
                         kind=m["kind"] if m["kind"] in KINDS else "fact",
                         tags=clean_tags(m["tags"]),
                         importance=m["importance"],

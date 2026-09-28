@@ -164,12 +164,23 @@ def seed():
             print("  plugin", pid)
         except RuntimeError as e:
             print("  plugin failed", e)
-    for note in [
-        ("atlas is the Core host", "Hetzner box in Falkenstein. nginx in front of everything, monitoring stack in /srv/apps/monitoring, backups go to the NAS at home over sftp.", "device", ["atlas", "homelab"], True),
-        ("Approve config edits on forge only after showing the diff", "Show the exact old and new lines before proposing files.edit on anything under /etc.", "preference", ["forge"], True),
-        ("Grafana moved to port 3100", "Since 2026-09-27 grafana publishes 3100 on atlas; 3000 is taken by the build service.", "fact", ["atlas", "monitoring"], False),
-    ]:
-        title, body, kind, tags, pinned = note
+    me = api.post("/v1/memory/center", {"title": "About me"})
+    api.c.patch(f"/v1/memory/notes/{me['id']}", json={"body": "Runs a small homelab: [[atlas]] in Falkenstein, [[forge]] at home and a [[pi]] in the garage, works on [[studio]]. Prefers short answers and a diff before any change."}).raise_for_status()
+    notes = [
+        ("atlas", "Hetzner box in Falkenstein that runs Core. nginx in front of everything, monitoring stack in /srv/apps/monitoring. See [[Grafana moved to port 3100]].", "device", ["server"], False),
+        ("forge", "Linux workstation at home. Nightly backups to the NAS, see [[Backups]].", "device", ["home"], False),
+        ("studio", "MacBook Pro, the main laptop: Homebrew, uv, Docker Desktop.", "device", ["laptop"], False),
+        ("pi", "Raspberry Pi 4 in the garage with zigbee2mqtt and DNS; often offline at night.", "device", ["home"], False),
+        ("homelab", "Compose stacks for [[atlas]], [[forge]] and [[pi]]; the repository lives on [[studio]] in ~/projects/homelab.", "project", ["compose"], False),
+        ("Backups", "restic to the NAS every night at 02:00 from [[forge]]; the script is /srv/backup/run.sh.", "howto", ["restic"], False),
+        ("Rotate nginx logs weekly", "Logs older than 30 days go away every Sunday at 03:00 on [[atlas]].", "howto", ["nginx"], False),
+        ("Grafana moved to port 3100", "Since 2026-09-27 Grafana publishes 3100 on [[atlas]]; 3000 is taken by the build service.", "fact", ["monitoring"], False),
+        ("Show the diff before editing configs", "Show the exact old and new lines before proposing files.edit on anything under /etc. [[About me]]", "preference", ["approvals"], True),
+        ("Short answers", "Lead with the result, a few sentences at most. [[About me]]", "preference", [], True),
+        ("Maria", "Shares the NAS; ask before touching /volume1/family. Mostly uses [[forge]] shares.", "person", ["family"], False),
+        ("Editor", "vim for quick edits, VS Code for projects.", "preference", [], False),
+    ]
+    for title, body, kind, tags, pinned in notes:
         api.post("/v1/memory/notes", {"title": title, "body": body, "kind": kind, "tags": tags, "pinned": pinned, "importance": 6})
 
     print("chats")

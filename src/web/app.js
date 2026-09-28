@@ -2,7 +2,7 @@
 
 import { LANGUAGES, lang, locale, setLang, t as tr, tp } from './i18n.js';
 import { createOrb } from './orb.js';
-import { createGraph, graphColor } from './graph.js';
+import { createMemoryMap, graphColor } from './graph.js';
 
 const $app = document.getElementById('app');
 const $toasts = document.getElementById('toasts');
@@ -150,6 +150,7 @@ const ICONS = {
   robot: '<rect x="4.5" y="8" width="15" height="11" rx="3"/><path d="M12 8V5.2M2.5 12.5v3M21.5 12.5v3M9.5 16h5"/><circle cx="12" cy="4.2" r="1"/><circle cx="9.3" cy="12.4" r=".9"/><circle cx="14.7" cy="12.4" r=".9"/>',
   send: '<path d="m21 3-7 18-4-8-8-4z"/><path d="M21 3 10 13"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  user: '<circle cx="12" cy="8" r="3.6"/><path d="M4.5 20c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/>',
   agents: '<circle cx="9" cy="8" r="3.2"/><path d="M3 19c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><circle cx="17" cy="9" r="2.5"/><path d="M16.5 13.6c2.7.3 4.5 2.3 4.5 5.4"/>',
 };
 
@@ -2372,8 +2373,14 @@ function kindPill(kind) {
   return h('span', { class: 'pill kind-pill' }, h('span', { class: 'kind-dot', style: `background:${graphColor(kind)}` }), MEM_KINDS[kind] || kind);
 }
 
-async function openNoteEditor(note, { onSaved, onOpenTitle } = {}) {
+async function openNoteEditor(note, { onSaved, onOpenTitle, linkTo = null, centerId = null } = {}) {
   const full = note?.id ? await get(`/v1/memory/notes/${note.id}`) : null;
+  const others = full ? [] : (await get('/v1/memory/notes')).notes;
+  const center = others.find((x) => x.id === centerId);
+  const link = full ? null : h('select', { 'aria-label': tr('Linked to') },
+    h('option', { value: '' }, tr('No link')),
+    [...(center ? [center] : []), ...others.filter((x) => x.id !== centerId).sort((a, b) => a.title.localeCompare(b.title))]
+      .map((x) => h('option', { value: x.title, selected: x.title === (linkTo || center?.title) }, x.id === centerId ? tr('{0} (central)', x.title) : x.title)));
   const n = full || { title: note?.title || '', body: '', kind: 'fact', tags: [], pinned: false, importance: 5 };
   const title = h('input', { type: 'text', value: n.title, placeholder: tr('Short title'), 'aria-label': tr('Title'), maxlength: '120' });
   const kind = h('select', { 'aria-label': tr('Type') }, Object.entries(MEM_KINDS).map(([k, label]) => h('option', { value: k, selected: k === n.kind }, label)));
@@ -2385,7 +2392,7 @@ async function openNoteEditor(note, { onSaved, onOpenTitle } = {}) {
   body.value = n.body || '';
   const save = h('button', { class: 'btn btn-primary' }, tr('Save'));
   save.addEventListener('click', async () => {
-    const payload = { title: title.value.trim(), body: body.value, kind: kind.value, importance: Number(importance.value), pinned, tags: tags.value.split(',').map((t) => t.trim()).filter(Boolean) };
+    const payload = { title: title.value.trim(), body: body.value, kind: kind.value, importance: Number(importance.value), pinned, tags: tags.value.split(',').map((t) => t.trim()).filter(Boolean), ...(link?.value ? { link_to: link.value } : {}) };
     if (!payload.title) { title.focus(); return; }
     save.disabled = true;
     try {
@@ -2395,7 +2402,7 @@ async function openNoteEditor(note, { onSaved, onOpenTitle } = {}) {
       onSaved?.(saved);
     } catch (err) { fail(err); } finally { save.disabled = false; }
   });
-  const remove = full ? h('button', { class: 'btn btn-danger', onclick: async () => {
+  const remove = full && full.id !== centerId ? h('button', { class: 'btn btn-danger', onclick: async () => {
     if (!await confirmDialog({ title: tr('Delete “{0}”?', full.title), text: tr('The agent will forget this note. Links to it from other notes will remain and become empty nodes on the graph.'), action: tr('Delete'), danger: true })) return;
     try { await del(`/v1/memory/notes/${full.id}`); toast(tr('Note deleted')); onSaved?.(null); } catch (err) { fail(err); }
   } }, tr('Delete')) : null;
@@ -2408,6 +2415,7 @@ async function openNoteEditor(note, { onSaved, onOpenTitle } = {}) {
       h('label', { class: 'note-field' }, h('span', {}, tr('Title')), title),
       h('div', { class: 'note-row' }, kind, importance, h('label', { class: 'switch-label', title: tr('The note is included in every request to the model') }, pin, tr('Always in context'))),
       h('label', { class: 'note-field' }, h('span', {}, tr('Tags')), tags),
+      link ? h('label', { class: 'note-field' }, h('span', {}, tr('Linked to')), link) : null,
       h('label', { class: 'note-field' }, h('span', {}, tr('Text')), body),
       backlinks),
     h('div', { class: 'modal-actions' }, remove, h('span', { class: 'spacer' }), h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
@@ -2515,8 +2523,9 @@ async function settingsChannels(shell) {
 async function settingsMemory(shell) {
   const TABS = [['graph', tr('Graph')], ['notes', tr('Notes')], ['dreams', tr('Dreaming')]];
   let tab = localStorageGet('memory-tab') || 'graph';
-  const tabs = h('div', { class: 'segmented', role: 'tablist' });
-  const host = h('div', { class: 'memory-host' });
+  let centerId = null;
+  const tabs = h('div', { class: 'segmented mem-tabs', role: 'tablist', 'aria-label': tr('Memory') });
+  const host = h('div', { class: 'mem-body' });
   let cleanup = null;
   const renderTabs = () => tabs.replaceChildren(...TABS.map(([key, label]) => h('button', {
     class: `seg${key === tab ? ' active' : ''}`, role: 'tab', 'aria-selected': String(key === tab),
@@ -2525,92 +2534,100 @@ async function settingsMemory(shell) {
   const byTitle = async (title) => (await get(`/v1/memory/notes?q=${encodeURIComponent(title)}`)).notes.find((n) => n.title.toLowerCase() === title.toLowerCase());
   const openTitle = async (title) => {
     const note = await byTitle(title);
-    openNoteEditor(note || { title }, { onSaved: () => show(), onOpenTitle: openTitle });
+    openNoteEditor(note || { title }, { onSaved: () => show(), onOpenTitle: openTitle, centerId });
   };
-  const newNote = () => openNoteEditor(null, { onSaved: () => show(), onOpenTitle: openTitle });
+  const newNote = (linkTo = null) => openNoteEditor(null, { onSaved: () => show(), onOpenTitle: openTitle, linkTo, centerId });
 
   async function show() {
     if (cleanup) { cleanup(); cleanup = null; }
     renderTabs();
     host.replaceChildren();
+    host.dataset.tab = tab;
     cleanup = await ({ graph: memoryGraph, notes: memoryNotes, dreams: memoryDreams }[tab] || memoryGraph)();
   }
 
+  // The graph fills the whole panel: the central note in the middle, other notes on rings around it.
   async function memoryGraph() {
-    const canvas = h('canvas', { class: 'graph-canvas', 'aria-label': tr('Memory graph: drag nodes, scroll to zoom') });
-    const side = h('aside', { class: 'graph-side hidden' });
+    const stage = h('div', { class: 'mm-stage', 'aria-label': tr('Memory graph: drag to move, scroll to zoom') });
+    const side = h('aside', { class: 'graph-side mm-ui hidden' });
     const search = h('input', { type: 'search', placeholder: tr('Find a note'), 'aria-label': tr('Find a note on the graph') });
-    let withTags = localStorageGet('graph-tags') === '1';
-    const tagsChip = h('button', { class: `chip${withTags ? ' accent' : ''}`, 'aria-pressed': String(withTags) }, '#', tr('Tags'));
-    let data = { nodes: [], links: [] };
-    const graph = createGraph(canvas, { onSelect: (node) => preview(node) });
-    const empty = h('div', { class: 'graph-empty hidden' }, orb('md'), h('h3', {}, tr('Memory is empty for now')), h('p', {}, tr('The agent will start remembering on its own, and dreaming will gather what matters from chats. You can also add a note manually.')), h('button', { class: 'btn btn-primary', onclick: newNote }, icon('plus'), tr('New note')));
+    let data = { nodes: [], links: [], center: null };
+    const map = createMemoryMap(stage, {
+      icon,
+      centerTitle: tr('About me'),
+      countText: (n) => tp('{0} note around|{0} notes around', n),
+      onSelect: (node) => preview(node),
+    });
 
     async function load() {
-      data = await get(`/v1/memory/graph?tags=${withTags}`);
-      empty.classList.toggle('hidden', data.nodes.length > 0);
-      graph.setData(data);
-    }
-    async function preview(node) {
-      if (!node) { side.classList.add('hidden'); return; }
-      side.classList.remove('hidden');
-      const close = h('button', { class: 'icon-btn', 'aria-label': tr('Close'), onclick: () => { side.classList.add('hidden'); graph.select(null); } }, icon('x'));
-      if (node.kind === 'tag') {
-        const notes = data.links.filter((l) => l.target === node.id).map((l) => data.nodes.find((x) => x.id === l.source)).filter(Boolean);
-        side.replaceChildren(h('div', { class: 'graph-side-head' }, h('h3', {}, node.label), close), h('div', { class: 'graph-side-list' }, notes.map((x) => h('button', { class: 'menu-item', onclick: () => { graph.select(x.id); preview(x); } }, h('span', { class: 'kind-dot', style: `background:${graphColor(x.kind)}` }), x.label))));
-        return;
+      data = await get('/v1/memory/graph');
+      if (!data.center) {
+        try { await post('/v1/memory/center', { title: tr('About me') }); data = await get('/v1/memory/graph'); } catch (err) { fail(err); }
       }
+      centerId = data.center;
+      map.setData(data);
+    }
+    const hideSide = () => { side.classList.add('hidden'); map.select(null); };
+    async function preview(node) {
+      if (!node) { hideSide(); return; }
+      side.classList.remove('hidden');
+      const close = h('button', { class: 'icon-btn', 'aria-label': tr('Close'), onclick: hideSide }, icon('x'));
       if (node.ghost) {
-        side.replaceChildren(h('div', { class: 'graph-side-head' }, h('h3', {}, node.label), close), h('p', { class: 'muted' }, tr('This note is linked to, but doesn\'t exist yet.')), h('button', { class: 'btn btn-primary btn-sm', onclick: () => openNoteEditor({ title: node.label }, { onSaved: load, onOpenTitle: openTitle }) }, icon('plus'), tr('Create note')));
+        side.replaceChildren(h('div', { class: 'graph-side-head' }, h('h3', {}, node.label), close), h('p', { class: 'muted' }, tr('This note is linked to, but doesn\'t exist yet.')), h('button', { class: 'btn btn-primary btn-sm', onclick: () => openNoteEditor({ title: node.label }, { onSaved: load, onOpenTitle: openTitle, centerId }) }, icon('plus'), tr('Create note')));
         return;
       }
       side.replaceChildren(h('div', { class: 'graph-side-head' }, h('h3', {}, node.label), close), h('p', { class: 'muted' }, tr('Loading...')));
       let n;
       try { n = await get(`/v1/memory/notes/${node.id}`); } catch (err) { fail(err); return; }
-      const bodyEl = h('div', { class: 'prose graph-side-body', html: memoryMd(n.body || tr('_Empty_')) });
+      const isCenter = n.id === centerId;
+      const bodyEl = h('div', { class: 'prose graph-side-body', html: memoryMd(n.body || (isCenter ? tr('_Write here who you are and how you like to work: the agent always sees this note._') : tr('_Empty_'))) });
       bodyEl.addEventListener('click', (e) => {
         const link = e.target.closest('.wikilink');
         if (!link) return;
         e.preventDefault();
-        const target = data.nodes.find((x) => !x.kind.startsWith('tag') && x.label.toLowerCase() === link.dataset.title.toLowerCase());
-        if (target) { graph.select(target.id); preview(target); }
+        const target = data.nodes.find((x) => x.label.toLowerCase() === link.dataset.title.toLowerCase());
+        if (target) { map.select(target.id, { pan: true }); preview(target); }
       });
-      side.replaceChildren(
+      const center = data.nodes.find((x) => x.id === centerId);
+      const detached = !isCenter && map.isImplicit(n.id);
+      const attach = detached && center ? h('button', { class: 'btn btn-sm', onclick: async () => {
+        try { await api(`/v1/memory/notes/${n.id}`, { method: 'PATCH', body: JSON.stringify({ body: `${(n.body || '').trimEnd()}\n\n[[${center.label}]]`.trim() }) }); toast(tr('Linked')); await load(); map.select(n.id); preview(node); } catch (err) { fail(err); }
+      } }, icon('link'), tr('Link to “{0}”', center.label)) : null;
+      const makeCenter = isCenter ? null : h('button', { class: 'btn btn-sm', onclick: async () => {
+        try { await post('/v1/memory/center', { note_id: n.id }); toast(tr('Now the central note')); await load(); map.fit(); map.select(n.id); preview(node); } catch (err) { fail(err); }
+      } }, tr('Make central'));
+      side.replaceChildren(...[
         h('div', { class: 'graph-side-head' }, h('h3', {}, n.title), close),
-        h('div', { class: 'graph-side-meta' }, kindPill(n.kind), n.pinned ? h('span', { class: 'pill accent', title: tr('Always in the agent\'s context') }, icon('pin'), tr('pinned')) : null, (n.tags || []).map((t) => h('span', { class: 'pill tag' }, `#${t}`))),
+        h('div', { class: 'graph-side-meta' }, isCenter ? h('span', { class: 'pill accent' }, tr('central')) : null, kindPill(n.kind), n.pinned ? h('span', { class: 'pill accent', title: tr('Always in the agent\'s context') }, icon('pin'), tr('pinned')) : null, (n.tags || []).map((t) => h('span', { class: 'pill tag' }, `#${t}`))),
+        detached ? h('p', { class: 'market-note' }, tr('Not linked to other notes yet, so it hangs on the central one.')) : null,
         bodyEl,
-        n.backlinks.length ? h('div', { class: 'note-backlinks' }, tr('Linked from: '), n.backlinks.map((b, i) => [i ? ', ' : '', h('a', { href: '#', onclick: (e) => { e.preventDefault(); graph.select(b.id); preview(data.nodes.find((x) => x.id === b.id)); } }, b.title)])) : null,
+        n.backlinks.length ? h('div', { class: 'note-backlinks' }, tr('Linked from: '), n.backlinks.map((b, i) => [i ? ', ' : '', h('a', { href: '#', onclick: (e) => { e.preventDefault(); map.select(b.id, { pan: true }); preview(data.nodes.find((x) => x.id === b.id)); } }, b.title)])) : null,
         h('div', { class: 'market-meta' }, tr('source: {0} · importance {1}', MEM_SOURCES[n.source] || n.source, n.importance)),
-        h('button', { class: 'btn btn-sm', onclick: () => openNoteEditor(n, { onSaved: async () => { await load(); side.classList.add('hidden'); }, onOpenTitle: openTitle }) }, tr('Edit')),
-      );
+        h('div', { class: 'graph-side-actions' },
+          h('button', { class: 'btn btn-sm', onclick: () => openNoteEditor(n, { onSaved: async () => { await load(); map.select(n.id); }, onOpenTitle: openTitle, centerId }) }, tr('Edit')),
+          h('button', { class: 'btn btn-sm', onclick: () => newNote(n.title) }, icon('plus'), tr('Linked note')),
+          attach, makeCenter),
+      ].filter(Boolean));
     }
-    tagsChip.addEventListener('click', async () => {
-      withTags = !withTags;
-      localStorageSet('graph-tags', withTags ? '1' : '0');
-      tagsChip.classList.toggle('accent', withTags);
-      tagsChip.setAttribute('aria-pressed', String(withTags));
-      await load();
-    });
     search.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter') return;
       const q = search.value.trim().toLowerCase();
       const node = data.nodes.find((x) => x.label.toLowerCase() === q) || data.nodes.find((x) => x.label.toLowerCase().includes(q));
-      if (node) { graph.select(node.id); preview(node); } else toast(tr('No such note found'));
+      if (node) { map.select(node.id, { pan: true }); preview(node); } else toast(tr('No such note found'));
     });
-    const legend = h('div', { class: 'graph-legend' }, Object.entries(MEM_KINDS).map(([k, label]) => h('span', {}, h('span', { class: 'kind-dot', style: `background:${graphColor(k)}` }), label)));
-    host.append(
-      h('div', { class: 'graph-toolbar' },
-        h('div', { class: 'settings-search graph-search' }, icon('search'), search),
-        tagsChip,
-        h('span', { class: 'spacer' }),
-        h('button', { class: 'icon-btn', title: tr('Zoom out'), 'aria-label': tr('Zoom out'), onclick: () => graph.zoom(1 / 1.3) }, h('span', { class: 'zoom-sign' }, '−')),
-        h('button', { class: 'icon-btn', title: tr('Show all'), 'aria-label': tr('Show all'), onclick: () => graph.fit() }, icon('layers')),
-        h('button', { class: 'icon-btn', title: tr('Zoom in'), 'aria-label': tr('Zoom in'), onclick: () => graph.zoom(1.3) }, icon('plus'))),
-      h('div', { class: 'graph-stage' }, canvas, side, empty),
+    const legend = h('div', { class: 'graph-legend mm-legend mm-ui' }, Object.entries(MEM_KINDS).map(([k, label]) => h('span', {}, h('span', { class: 'kind-dot', style: `background:${graphColor(k)}` }), label)));
+    stage.append(
+      h('div', { class: 'mm-tools mm-ui' }, h('div', { class: 'settings-search graph-search' }, icon('search'), search)),
+      h('div', { class: 'mm-zoom mm-ui' },
+        h('button', { class: 'icon-btn', title: tr('Zoom in'), 'aria-label': tr('Zoom in'), onclick: () => map.zoom(1.25) }, icon('plus')),
+        h('button', { class: 'icon-btn', title: tr('Show all'), 'aria-label': tr('Show all'), onclick: () => map.fit() }, icon('layers')),
+        h('button', { class: 'icon-btn', title: tr('Zoom out'), 'aria-label': tr('Zoom out'), onclick: () => map.zoom(1 / 1.25) }, h('span', { class: 'zoom-sign' }, '−'))),
       legend,
+      side,
     );
+    host.append(stage);
     await load();
-    return () => graph.destroy();
+    return () => map.destroy();
   }
 
   async function memoryNotes() {
@@ -2620,19 +2637,20 @@ async function settingsMemory(shell) {
     let timer = 0;
     async function load() {
       const q = search.value.trim();
-      const { notes } = await get(`/v1/memory/notes${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+      const { notes, center: centerNote } = await get(`/v1/memory/notes${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+      centerId = centerNote;
       const shown = notes.filter((n) => !kindFilter.value || n.kind === kindFilter.value);
-      list.replaceChildren(...(shown.length ? shown.map((n) => h('button', { class: 'note-item', onclick: () => openNoteEditor(n, { onSaved: load, onOpenTitle: openTitle }) },
+      list.replaceChildren(...(shown.length ? shown.map((n) => h('button', { class: 'note-item', onclick: () => openNoteEditor(n, { onSaved: load, onOpenTitle: openTitle, centerId }) },
         h('span', { class: 'kind-dot', style: `background:${graphColor(n.kind)}` }),
         h('div', { class: 'row-text' },
-          h('div', { class: 'row-title' }, n.title, n.pinned ? h('span', { class: 'note-pin', title: tr('Always in the agent\'s context') }, icon('pin')) : null),
+          h('div', { class: 'row-title' }, n.title, n.id === centerId ? h('span', { class: 'pill accent' }, tr('central')) : null, n.pinned ? h('span', { class: 'note-pin', title: tr('Always in the agent\'s context') }, icon('pin')) : null),
           h('div', { class: 'row-desc' }, n.snippet || tr('Empty')),
           h('div', { class: 'note-item-meta' }, [MEM_KINDS[n.kind] || n.kind, MEM_SOURCES[n.source] || n.source, relTime(n.updated_at), ...(n.tags || []).map((t) => `#${t}`)].join(' · ')))))
         : [h('div', { class: 'empty' }, q || kindFilter.value ? tr('Nothing found.') : tr('No notes yet. The agent will save what matters on its own, and dreaming will gather from chats.'))]));
     }
     search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => load().catch(fail), 200); });
     kindFilter.addEventListener('change', () => load().catch(fail));
-    host.append(h('div', { class: 'graph-toolbar' }, h('div', { class: 'settings-search graph-search' }, icon('search'), search), kindFilter), list);
+    host.append(h('div', { class: 'page' }, h('div', { class: 'page-inner page-wide' }, h('div', { class: 'graph-toolbar' }, h('div', { class: 'settings-search graph-search' }, icon('search'), search), kindFilter), list)));
     await load();
     return () => clearTimeout(timer);
   }
@@ -2689,18 +2707,19 @@ async function settingsMemory(shell) {
         r.error ? h('p', { class: 'dream-error' }, r.error) : null,
         r.diary ? h('div', { class: 'prose dream-diary' }, h('p', {}, r.diary)) : null,
         (st.themes || []).length ? h('div', { class: 'market-tags' }, st.themes.map((t) => h('span', { class: 'pill tag-kind' }, t))) : null,
-        (r.changes || []).length ? h('div', { class: 'dream-changes' }, r.changes.map((c) => h('button', { class: `dream-change ${c.action}`, onclick: () => openNoteEditor({ id: c.id }, { onSaved: () => show(), onOpenTitle: openTitle }).catch(() => toast(tr('Note already deleted'), true)) },
+        (r.changes || []).length ? h('div', { class: 'dream-changes' }, r.changes.map((c) => h('button', { class: `dream-change ${c.action}`, onclick: () => openNoteEditor({ id: c.id }, { onSaved: () => show(), onOpenTitle: openTitle, centerId }).catch(() => toast(tr('Note already deleted'), true)) },
           { created: '+', updated: '~', reinforced: '↑' }[c.action] || '', ` ${c.title}`))) : null);
     }
-    host.append(box);
+    host.append(h('div', { class: 'page' }, h('div', { class: 'page-inner page-wide' }, box)));
     await load();
     return () => clearTimeout(timer);
   }
 
-  page(shell, tr('Memory'), tr('What the agent remembers about you, projects, and devices. Notes are linked with [[Title]], and dreaming gathers what matters from new chats at night.'),
-    h('button', { class: 'btn', onclick: newNote }, icon('plus'), tr('New note')),
-    tabs, host);
-  shell.panel.querySelector('.page-inner').classList.add('page-wide');
+  const newBtn = h('button', { class: 'btn btn-sm mem-new', 'aria-label': tr('New note'), onclick: () => newNote() }, icon('plus'), h('span', { class: 'mem-new-label' }, tr('New note')));
+  shell.panel.replaceChildren(
+    topbar(shell, [h('span', { class: 'current mem-title' }, tr('Memory')), tabs], [newBtn]),
+    host,
+  );
   viewCleanups.push(() => { if (cleanup) cleanup(); });
   await show();
 }
