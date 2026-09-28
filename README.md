@@ -115,6 +115,7 @@ LLM proposal → schema validation → target capability check → policy evalua
 make dev     # .venv with the package in editable mode
 make lint    # ruff + mypy
 make dist    # dist/: install.sh, archive, and latest.json for distribution (requires clean git)
-make release # dist + tag vX.Y.Z
 make core    # Core in the foreground (needs ~/.mensarium/core/config.yaml, see mensarium core)
 ```
+
+A push to `main` runs `make test`; if the version in `src/__init__.py` has no `vX.Y.Z` tag yet, GitHub Actions (`.github/workflows/release.yml`) builds `make dist`, publishes it to mensarium.com, and creates the tag and a GitHub release with notes from `CHANGELOG.md`. Installed Cores pick it up with `mensarium update`.

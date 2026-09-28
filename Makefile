@@ -1,4 +1,4 @@
-.PHONY: dev lint test schemas core target dist release
+.PHONY: dev lint test schemas core target dist
 
 DIST_URL ?= https://mensarium.com
 VERSION := $(shell sed -n 's/^__version__ = "\(.*\)"/\1/p' src/__init__.py)
@@ -36,6 +36,3 @@ dist:
 	sed 's|^MENSARIUM_SOURCE_DEFAULT=""|MENSARIUM_SOURCE_DEFAULT="$(DIST_URL)/dist/mensarium.tar.gz"|' install.sh > dist/install.sh
 	printf '{"version": "%s", "file": "mensarium-%s.tar.gz", "sha256": "%s"}\n' $(VERSION) $(VERSION) $$(shasum -a 256 dist/mensarium.tar.gz | cut -d' ' -f1) > dist/latest.json
 	.venv/bin/python -c "from mensarium.plugins import export_index; export_index('dist/plugins.json')"
-
-release: dist
-	git tag -a v$(VERSION) -m "v$(VERSION)"

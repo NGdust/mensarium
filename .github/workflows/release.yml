@@ -1,0 +1,64 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      DEPLOY: mensarium-deploy@mensarium.com
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - run: make dev
+      - run: make test
+
+      - name: Check version
+        id: version
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/__init__.py)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null; then
+            echo "v$version is already released, bump src/__init__.py to publish" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.version.outputs.new == 'true'
+        run: make dist
+
+      - name: Publish to mensarium.com
+        if: steps.version.outputs.new == 'true'
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          rsync -t "dist/mensarium-$VERSION.tar.gz" dist/mensarium.tar.gz dist/plugins.json "$DEPLOY:dist/"
+          rsync -t dist/install.sh "$DEPLOY:install.sh"
+          rsync -t dist/latest.json "$DEPLOY:dist/"
+
+      - name: Tag and GitHub release
+        if: steps.version.outputs.new == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          awk -v h="## $VERSION" '$0 == h { f = 1; next } /^## / && f { exit } f' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          gh release create "v$VERSION" "dist/mensarium-$VERSION.tar.gz" \
+            --target "$GITHUB_SHA" --title "v$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+          echo "Published v$VERSION, run \`mensarium update\` on the Core host" >> "$GITHUB_STEP_SUMMARY"
