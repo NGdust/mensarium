@@ -1231,20 +1231,60 @@ function contextView(ctx) {
   return view;
 }
 
+// Percent for the compact readouts: a non-empty share never rounds down to a flat 0%.
+function fmtPct(v) {
+  if (v > 0 && v < 1) return `<1%`;
+  return `${Math.round(v).toLocaleString(locale)}%`;
+}
+
+// Ring gauge for the composer chip: how full the context window is, coloured as it fills up.
+const RING_LEN = 2 * Math.PI * 8;
+
+function ctxRing() {
+  const el = h('span', {
+    class: 'ctx-ring',
+    html: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle class="ctx-ring-track" cx="10" cy="10" r="8"/><circle class="ctx-ring-fill" cx="10" cy="10" r="8"/></svg>',
+  });
+  const fill = el.querySelector('.ctx-ring-fill');
+  return {
+    el,
+    // Returns the level so the chip label can follow the same colour.
+    set(percent) {
+      const v = Math.max(0, Math.min(100, percent || 0));
+      const level = v >= 90 ? 'critical' : v >= 75 ? 'high' : v >= 50 ? 'mid' : 'low';
+      fill.setAttribute('stroke-dasharray', `${(v / 100) * RING_LEN} ${RING_LEN}`);
+      el.dataset.level = level;
+      return level;
+    },
+  };
+}
+
 function usageMeter(taskId) {
   let data = null;
   let timer = null;
   let place = null;
   const chip = h('button', { class: 'chip chip-usage', hidden: true, 'aria-haspopup': 'dialog' });
+  const ring = ctxRing();
   const body = h('div', { class: 'usage-body' });
   const cells = (u) => [u.calls, u.prompt_tokens, u.cached_tokens, u.cache_write_tokens, u.completion_tokens]
     .map((n, i) => h('td', { title: (n || 0).toLocaleString(locale) }, i ? fmtTokens(n) : String(n || 0)));
   const render = () => {
     const total = data.total.prompt_tokens + data.total.completion_tokens;
     chip.hidden = !data.total.calls;
-    chip.title = tr('Tokens in this chat: {0}', total.toLocaleString(locale));
+    // The chip shows how full the context is; the token count stays in the tooltip and the popover.
+    const ctx = data.context;
+    const size = ctx ? Math.max(ctx.window || ctx.limit, ctx.tokens) || 0 : 0;
+    const filled = size ? (ctx.tokens / size) * 100 : null;
+    const spent = tr('Tokens in this chat: {0}', total.toLocaleString(locale));
+    chip.title = filled == null ? spent : `${tr('Context filled: {0}', fmtPct(filled))} · ${spent}`;
     chip.setAttribute('aria-label', chip.title);
-    chip.replaceChildren(icon('gauge'), h('span', { class: 'chip-label' }, fmtTokens(total)));
+    if (filled == null) {
+      delete chip.dataset.level;
+      chip.replaceChildren(icon('gauge'), h('span', { class: 'chip-label' }, fmtTokens(total)));
+    } else {
+      chip.dataset.level = ring.set(filled);
+      chip.replaceChildren(ring.el, h('span', { class: 'chip-label' }, fmtPct(filled)));
+    }
     if (!body.isConnected) return;
     body.replaceChildren(
       ...(data.context ? [contextView(data.context)] : []),

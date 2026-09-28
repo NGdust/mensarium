@@ -573,6 +573,17 @@ a.chip:hover { text-decoration: none; }
 .chip-agents[hidden] { display: none; }
 .chip-usage[hidden] { display: none; }
 .chip-usage .chip-label { font: 12.5px var(--mono); }
+.chip-usage[data-level="high"] .chip-label { color: var(--orange); }
+.chip-usage[data-level="critical"] .chip-label { color: var(--danger); }
+/* context fill as a ring: the arc grows with the percent and warms up as the window fills */
+.ctx-ring { display: inline-flex; flex: none; width: 16px; height: 16px; color: var(--accent); }
+.ctx-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.ctx-ring circle { fill: none; stroke-width: 3; }
+.ctx-ring-track { stroke: var(--line-strong); }
+.ctx-ring-fill { stroke: currentColor; stroke-linecap: round; transition: stroke-dasharray 0.35s var(--ease), stroke 0.25s var(--ease); }
+.ctx-ring[data-level="mid"] { color: var(--warn); }
+.ctx-ring[data-level="high"] { color: var(--orange); }
+.ctx-ring[data-level="critical"] { color: var(--danger); }
 .usage-pop { width: min(520px, calc(100vw - 16px)); max-width: none; padding: 14px 16px 12px; }
 .usage-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
 .usage-head strong { font-size: 13.5px; font-weight: 600; }

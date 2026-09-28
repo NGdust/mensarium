@@ -48,6 +48,7 @@ const RU = {
   'Output': 'Вывод',
   'Total': 'Всего',
   'Context': 'Контекст',
+  'Context filled: {0}': 'Контекст заполнен на {0}',
   'of {0} tokens': 'из {0} токенов',
   'System prompt': 'Системный промпт',
   'Plugins and MCP': 'Плагины и MCP',
