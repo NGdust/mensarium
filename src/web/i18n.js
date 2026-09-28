@@ -911,6 +911,7 @@ const RU = {
   'Read the folder again': 'Прочитать папку заново',
   'Retry': 'Повторить',
   'About the project': 'О проекте',
+  'Rename': 'Переименовать',
   'Source': 'Источник',
   'Last read': 'Последнее чтение',
   'Branch on the device': 'Ветка на устройстве',

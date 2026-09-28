@@ -3773,8 +3773,37 @@ async function viewProject(id) {
   shell.setActive(null);
   let p;
   try { p = await get(`/v1/projects/${id}`); } catch (err) { fail(err); go('#/'); return; }
-  const desc = h('span', {});
   const body = h('div', {});
+  // The name turns into a field on click; Enter or leaving the field saves it, Escape keeps the old one.
+  const titleEl = h('span', { class: 'title-edit', role: 'button', tabindex: '0', title: tr('Rename') });
+  let editing = false;
+  const rename = () => {
+    if (editing) return;
+    editing = true;
+    const input = h('input', { type: 'text', class: 'title-input', maxlength: 120, value: p.name, 'aria-label': tr('Name') });
+    let done = false;
+    const finish = async (save) => {
+      if (done) return;
+      done = true;
+      const name = input.value.trim();
+      if (save && name && name !== p.name) {
+        try { show({ ...(await api(`/v1/projects/${id}`, { method: 'PUT', body: JSON.stringify({ name }) })), chats: p.chats }); } catch (err) { fail(err); }
+      }
+      editing = false;
+      titleEl.textContent = p.name;
+      input.replaceWith(titleEl);
+    };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
+    titleEl.replaceWith(input);
+    input.focus();
+    input.select();
+  };
+  titleEl.addEventListener('click', rename);
+  titleEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); rename(); } });
   const newChatBtn = h('a', { class: 'btn btn-primary', href: `#/projects/${id}/new` }, icon('plus'), tr('New chat'));
   // Cleared on leaving the page and right after a delete, so a late poll cannot bring the project back.
   let alive = true;
@@ -3809,7 +3838,7 @@ async function viewProject(id) {
     const busy = p.status === 'creating' || p.syncing;
     const chats = Array.isArray(p.chats) ? p.chats : [];
     const skipped = p.skipped || [];
-    desc.textContent = [ready ? kindLabel(p) : null, `${p.source_name || ''}:${p.source_path}`].filter(Boolean).join(' · ');
+    if (!editing) titleEl.textContent = p.name;
     newChatBtn.classList.toggle('hidden', !ready);
     const reread = busy || !p.source_online ? null
       : h('button', { class: 'icon-btn', title: p.git_url ? tr('Pull from origin and read again') : tr('Read the folder again'), 'aria-label': p.git_url ? tr('Pull from origin and read again') : tr('Read the folder again'), onclick: (e) => sync(e.currentTarget) }, icon('refresh'));
@@ -3850,7 +3879,7 @@ async function viewProject(id) {
     if (alive) show(next);
   };
 
-  page(shell, p.name, desc, [infoBtn, newChatBtn, deleteBtn], body);
+  page(shell, titleEl, null, [infoBtn, newChatBtn, deleteBtn], body);
   show(p);
   const iv = setInterval(() => load().catch(() => {}), 3000);
   viewCleanups.push(() => clearInterval(iv));
