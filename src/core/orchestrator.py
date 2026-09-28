@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import contextlib
 import hashlib
 import logging
 import secrets
@@ -147,6 +148,7 @@ class Orchestrator:
         self.artifacts_dir = artifacts_dir
         self.attachments = AttachmentStore(repo, artifacts_dir, workspace_id)
         self.runners: dict[str, asyncio.Task[None]] = {}
+        self.preparing: dict[str, asyncio.Task[None]] = {}
         self.controls: dict[str, str] = {}
         self.approval_waiters: dict[str, asyncio.Future[str]] = {}
         self.running_requests: dict[str, tuple[str, str]] = {}
@@ -178,6 +180,7 @@ class Orchestrator:
         attachments: list[str] | None = None,
         base: str | None = None,
         branch: str | None = None,
+        workspace: bool = True,
     ) -> dict[str, Any]:
         profile = await self.load_profile(profile_id)
         target = await self.repo.get_target(target_id)
@@ -208,6 +211,12 @@ class Orchestrator:
                 for name in (base, branch):
                     if name and not BRANCH_RE.fullmatch(name):
                         raise TaskError(f"{name!r} is not a valid branch name")
+            if not workspace:
+                assert self.projects
+                if project["kind"] != "repo" or base or branch:
+                    raise TaskError("only a git repository project chat can work without a workspace, and then without a branch")
+                if not self.projects.can(target_id, "inplace"):
+                    raise TaskError("this device's client is outdated; update it to work without a workspace")
         elif base or branch:
             raise TaskError("a branch is chosen only for a project chat")
         task_id = new_id("task")
@@ -226,8 +235,8 @@ class Orchestrator:
                 "provider": provider,
                 "automation_id": automation_id,
                 "project_id": project_id,
-                "branch": (branch or branch_name(task_id, text)) if project else None,
-                "base_ref": None if not project else "snapshot" if project["kind"] == "folder" else base or repo_base(project),
+                "branch": (branch or branch_name(task_id, text)) if project and workspace else None,
+                "base_ref": None if not project or not workspace else "snapshot" if project["kind"] == "folder" else base or repo_base(project),
                 "budget": profile.limits.model_dump(),
                 "trace_id": new_id("tr"),
                 "created_at": now,
@@ -235,15 +244,36 @@ class Orchestrator:
             }
         )
         await self.repo.audit(self.workspace_id, "user", "task.created", {"task_id": task_id, "target_id": target_id})
+        if not text and not files:
+            # A project chat opened before its first message waits idle; its workspace is prepared meanwhile.
+            await self.repo.update_task(task_id, {"status": "IDLE"})
+            if project and workspace:
+                self._prepare(task_id)
+            return await self._task(task_id)
         await self._add_user_message(task_id, text, files)
         self._start(task_id)
         return await self._task(task_id)
+
+    def _prepare(self, task_id: str) -> None:
+        job = asyncio.create_task(self._prepare_job(task_id))
+        self.preparing[task_id] = job
+        job.add_done_callback(lambda _: self.preparing.pop(task_id, None))
+
+    async def _prepare_job(self, task_id: str) -> None:
+        try:
+            await self._checkout(await self._task(task_id))
+        except Stop as s:
+            await self.bus.emit(task_id, "task.project", {"kind": "checkout", "error": s.reason})
+        except Exception:
+            log.exception("workspace preparation failed", extra={"task_id": task_id})
 
     async def post_message(self, task_id: str, text: str, attachments: list[str] | None = None) -> dict[str, Any]:
         task = await self._task(task_id)
         if task_id in self.runners or task["status"] not in TERMINAL_STATUSES:
             raise TaskError("task is running; wait for it to finish or pause it first")
         files = await self._bind_attachments(task_id, attachments)
+        if not task["input"]:
+            await self.repo.update_task(task_id, {"input": text or ", ".join(f"[{a.name}]" for a in files)})
         await self._add_user_message(task_id, text, files)
         self._start(task_id)
         return await self._task(task_id)
@@ -296,6 +326,9 @@ class Orchestrator:
 
     async def delete(self, task_id: str) -> None:
         await self._task(task_id)
+        if job := self.preparing.get(task_id):
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(asyncio.shield(job), 60)
         rows = [*await self.repo.list_children(task_id), {"id": task_id}]
         for row in rows:
             runner = self.runners.get(row["id"])
@@ -423,7 +456,7 @@ class Orchestrator:
             if task.get("parent_id"):
                 self.bus.parents[task_id] = task["parent_id"]
             profile = await self.load_profile(task["profile_id"])
-            if task.get("project_id") and not task.get("parent_id") and not task.get("base_sha"):
+            if task.get("project_id") and task.get("branch") and not task.get("parent_id") and not task.get("base_sha"):
                 await self._checkout(task)
                 task = await self._task(task_id)
             await self._loop(task, profile)
@@ -550,7 +583,8 @@ class Orchestrator:
                 assert self.projects
                 wt_task = str(task.get("parent_id") or task_id)
                 try:
-                    self.workdirs[task_id] = self.projects.worktree(project, target, wt_task)
+                    # A chat without a workspace works right in the project folder.
+                    self.workdirs[task_id] = self.projects.worktree(project, target, wt_task) if task.get("branch") else str(project["source_path"])
                 except ProjectError as e:
                     raise Stop("PAUSED", str(e)) from e
                 base = f"{task.get('base_ref') or 'snapshot'}@{str(task.get('base_sha') or '')[:10]}"
@@ -562,6 +596,7 @@ class Orchestrator:
                     "branch": task.get("branch") or "",
                     "base": base,
                     "instructions": project.get("instructions") or "",
+                    "inplace": not task.get("branch"),
                 }
             toolbox = await self.plugins.toolbox(profile, target)
             if not task.get("parent_id"):

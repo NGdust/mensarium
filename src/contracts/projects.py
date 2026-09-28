@@ -9,6 +9,9 @@ ProjectKind = Literal["repo", "folder"]
 ProjectOpName = Literal["browse", "checkout", "commit", "status", "remove", "branches", "diff", "docs", "revert"]
 # Ops a client lists in capabilities.project_ops; a client without them rejects the frame and never answers.
 EXTRA_OPS: tuple[ProjectOpName, ...] = ("branches", "diff", "docs", "revert")
+# Also listed in capabilities.project_ops: "inplace" means the client takes a workdir anywhere in its allowed roots,
+# so a repo chat without a workspace can work right in the project folder.
+PROJECT_FEATURES: tuple[str, ...] = (*EXTRA_OPS, "inplace")
 OpState = Literal["ok", "conflict", "error"]
 SnapshotState = Literal["ok", "unchanged", "error"]
 

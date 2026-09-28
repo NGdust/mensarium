@@ -7,7 +7,8 @@ from mensarium.shared.crypto import canonical_json, sha256_hex
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import iso_in, now_iso
 
-TERMINAL_STATUSES = {"SUCCEEDED", "FAILED", "FAILED_RECOVERABLE", "CANCELED", "PAUSED"}
+# IDLE is a chat created without a first message: nothing runs until the user writes.
+TERMINAL_STATUSES = {"SUCCEEDED", "FAILED", "FAILED_RECOVERABLE", "CANCELED", "PAUSED", "IDLE"}
 USAGE_FIELDS = tuple(TokenUsage.model_fields)
 
 

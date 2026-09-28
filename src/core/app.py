@@ -116,6 +116,7 @@ class TaskCreate(BaseModel):
     attachments: list[str] = Field(default_factory=list, max_length=MAX_FILES)
     base: str | None = Field(None, min_length=1, max_length=250)
     branch: str | None = Field(None, min_length=1, max_length=200)
+    workspace: bool = True
 
 
 class RevertBody(BaseModel):
@@ -1205,13 +1206,13 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
 
     @app.post("/v1/tasks")
     async def create_task(body: TaskCreate, c: Core = Depends(auth)) -> dict[str, Any]:
-        if not body.input.strip() and not body.attachments:
+        if not body.input.strip() and not body.attachments and not body.project_id:
             raise HTTPException(422, "input is empty")
         try:
             return task_view(
                 await c.orchestrator.create_task(
                     body.profile_id, body.target_id, body.input.strip(), body.mode, body.model, project_id=body.project_id,
-                    provider=body.provider, attachments=body.attachments, base=body.base, branch=body.branch,
+                    provider=body.provider, attachments=body.attachments, base=body.base, branch=body.branch, workspace=body.workspace,
                 )
             )
         except TaskError as e:

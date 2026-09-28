@@ -314,6 +314,7 @@ const STATUS = {
   FAILED_RECOVERABLE: [tr('Interrupted, can be resumed'), 'danger', false],
   CANCELED: [tr('Stopped'), '', false],
   PAUSED: [tr('Paused'), 'warn', false],
+  IDLE: [tr('New'), '', false],
 };
 const REASONS = {
   'paused by user': tr('paused'),
@@ -1416,11 +1417,11 @@ async function viewChat(taskId) {
     setStatus(t.status);
   };
   const btnDelete = h('button', { class: 'icon-btn', title: tr('Delete chat'), 'aria-label': tr('Delete chat'), onclick: () => deleteChat(task) }, icon('trash'));
-  const changes = task.project_id && !task.parent_id ? changesPanel(taskId) : null;
+  const changes = task.project_id && task.branch && !task.parent_id ? changesPanel(taskId) : null;
   const inRepo = state.projects.find((p) => p.id === task.project_id)?.kind === 'repo';
-  const branchPill = inRepo && task.branch
+  const branchPill = !inRepo ? null : task.branch
     ? h('span', { class: 'pill tag branch-pill', title: baseName(task.base_ref) ? `${task.branch} · ${tr('from {0}', task.base_ref)}` : task.branch }, icon('git'), h('span', {}, task.branch))
-    : null;
+    : h('span', { class: 'pill tag branch-pill', title: tr('No workspace: the agent works right in the project folder') }, icon('folder'), h('span', {}, tr('project folder')));
 
   const thread = h('div', { class: 'thread' });
   const inner = h('div', { class: 'thread-inner', role: 'log', 'aria-live': 'polite' });
@@ -1441,7 +1442,7 @@ async function viewChat(taskId) {
   const agents = agentsPanel();
   const usage = usageMeter(taskId);
   const c = composer({
-    placeholder: tr('Reply to the agent'),
+    placeholder: task.input ? tr('Reply to the agent') : tr('Describe the task for the agent'),
     chips: [modeCtl.el, modelCtl.el, agents.el],
     tail: usage.el,
     above: plan.el,
@@ -1801,6 +1802,7 @@ async function viewChat(taskId) {
       case 'task.project':
         if (live) changes?.later(true);
         if (p.kind === 'revert') note('refresh', tr('Changes to {0} reverted', p.path));
+        else if (p.kind === 'checkout' && p.error) note('alert', tr('Could not prepare the working copy: {0}', reasonText(p.error)), 'error');
         else if (p.kind === 'checkout') note(KIND_ICON[project?.kind] || 'folder', project?.kind === 'repo' && p.branch ? [tr('Working copy ready'), p.branch, p.base && p.base !== 'snapshot' ? tr('from {0}', p.base) : null].filter(Boolean).join(' · ') : tr('Working copy ready'));
         else if (p.error != null) note('alert', tr('Could not save this turn: {0}', p.error || tr('error')), 'error');
         else if (p.changed) note('file', tp('{0} file changed|{0} files changed', p.changed));
@@ -3789,7 +3791,7 @@ const BRANCH_OK = /^(?![-/.])(?!.*\.\.)(?!.*\/\/)(?!.*\/\.)(?!.*@\{)(?!.*\.lock(
 
 // The branch a new repo chat starts from: empty starts a new branch from the project's default one, a listed branch
 // is the start of a new chat branch, any other name becomes a new branch from the default one.
-function branchField(data, { onEnter }) {
+function branchField(data, { onEnter, onChange }) {
   const { branches, main, repoMain, current } = data;
   const known = (name) => branches.some((b) => b.name === name);
   const input = h('input', { type: 'text', maxlength: 200, spellcheck: 'false', autocapitalize: 'off', placeholder: tr('Branch or new branch name'), 'aria-label': tr('Branch') });
@@ -3813,11 +3815,11 @@ function branchField(data, { onEnter }) {
     status.classList.toggle('bad', !valid());
     const shown = branches.filter((b) => !q || b.name.toLowerCase().includes(q.toLowerCase())).slice(0, 100);
     list.replaceChildren(...(shown.length
-      ? shown.map((b) => h('button', { class: `ws-item${b.name === q ? ' selected' : ''}`, type: 'button', role: 'option', onclick: () => { input.value = b.name; refresh(); } },
+      ? shown.map((b) => h('button', { class: `ws-item${b.name === q ? ' selected' : ''}`, type: 'button', role: 'option', onclick: () => { input.value = b.name; refresh(); onChange(); } },
         icon('git'), h('span', { class: `ws-name${b.remote ? ' remote' : ''}` }, b.name), ...tags(b).filter(Boolean)))
       : [h('div', { class: 'empty' }, tr('No branches match.'))]));
   };
-  input.addEventListener('input', refresh);
+  input.addEventListener('input', () => { refresh(); onChange(); });
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); if (valid()) onEnter(); } });
   refresh();
   return {
@@ -3828,45 +3830,58 @@ function branchField(data, { onEnter }) {
   };
 }
 
-// A new chat in a repo project: the branch comes first, then the task; sending creates the chat and opens it.
+// A new chat in a repo project: whether it gets its own workspace and from which branch; the chat is created
+// empty and opened, the task is written there.
 function openProjectChat(project) {
-  const source = () => devices().find((t) => t.id === project.source_target_id);
+  const source = devices().find((t) => t.id === project.source_target_id);
+  let workspace = true;
   let field = null;
+  const hint = h('p', { class: 'row-desc ws-hint' });
   const branchBox = h('div', { class: 'ws-field' }, h('div', { class: 'changes-empty' }, tr('Loading...')));
-  const modeCtl = modeSwitch(localStorageGet('mode') === 'full' ? 'full' : 'ask', { target: source, onPick: async (value) => { localStorageSet('mode', value); } });
-  const modelCtl = modelSwitch(null, { onPick: async (provider, model) => {
-    await api('/v1/system/model', { method: 'PUT', body: JSON.stringify({ provider, model }) });
-    if (state.system) state.system.provider = { ...state.system.provider, name: provider, model };
-    state.models = null;
-  } });
-  const c = composer({
-    placeholder: tr('Describe the task for the agent'),
-    chips: [modeCtl.el, modelCtl.el],
-    onSend: async (text, attachments) => {
-      if (source()?.status !== 'online') throw new Error(tr('“{0}” is offline. Turn it on to start a chat in this project.', project.source_name || project.source_target_id));
-      if (field && !field.valid()) { field.input.focus(); throw new Error(tr('This is not a valid branch name.')); }
+  const problem = h('p', { class: 'browser-error', role: 'alert' });
+  const create = h('button', { class: 'btn btn-primary' }, tr('Create chat'));
+  const sync = () => {
+    hint.textContent = workspace
+      ? tr('The chat works in its own copy of the repository on a new branch, so your checkout stays as it is.')
+      : tr('The agent works right in the project folder {0}: its edits land in your files at once, with no branch of its own.', project.source_path);
+    (field?.el || branchBox).classList.toggle('hidden', !workspace);
+    create.disabled = source?.status !== 'online' || (workspace && field && !field.valid());
+  };
+  const wsSwitch = toggleSwitch(true, { label: tr('Create a workspace'), onChange: async (v) => { workspace = v; sync(); } });
+  const wsRow = h('label', { class: 'switch-label ws-toggle' }, wsSwitch, tr('Create a workspace'));
+  create.addEventListener('click', async () => {
+    create.disabled = true;
+    const full = localStorageGet('mode') === 'full' && fullAccessOf(source) === 'allowed';
+    try {
       const task = await post('/v1/tasks', {
-        target_id: project.source_target_id, input: text, attachments, mode: modeCtl.effective(), project_id: project.id,
-        model: modelCtl.value().model || undefined, provider: modelCtl.value().provider || undefined, ...field?.value(),
+        target_id: project.source_target_id, input: '', project_id: project.id, mode: full ? 'full' : 'ask',
+        workspace, ...(workspace ? field?.value() : {}),
       });
       state.tasks.unshift(task);
       go(`#/chat/${task.id}`);
-    },
+    } catch (err) { fail(err); sync(); }
   });
   const modal = openModal(
     h('div', { class: 'modal-head' }, h('h2', {}, tr('New chat in “{0}”', project.name)), h('button', { class: 'icon-btn', onclick: clearLayer, 'aria-label': tr('Close') }, icon('x'))),
-    h('p', {}, tr('The chat works in its own copy of the repository on a new branch, so your checkout stays as it is. Pick the branch to start from or type a name for the new branch.')),
-    branchBox,
-    h('div', { class: 'new-chat-task' }, c.el),
+    wsRow, hint, branchBox, problem,
+    h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: clearLayer }, tr('Cancel')), create),
   );
-  modal.classList.add('modal-wide', 'modal-new-chat');
+  modal.classList.add('modal-wide');
+  if (source?.status !== 'online') problem.textContent = tr('“{0}” is offline. Turn it on to start a chat in this project.', project.source_name || project.source_target_id);
+  sync();
   get(`/v1/projects/${project.id}/branches`).then((r) => {
     if (!modal.isConnected) return;
-    if (!r.default) { branchBox.remove(); c.textarea.focus(); return; }
-    field = branchField({ branches: r.branches || [], main: r.default, repoMain: r.main || r.default, current: r.current }, { onEnter: () => c.textarea.focus() });
+    field = branchField({ branches: r.branches || [], main: r.default, repoMain: r.main || r.default, current: r.current }, { onEnter: () => create.click(), onChange: sync });
     branchBox.replaceWith(field.el);
+    sync();
     field.input.focus();
-  }, () => { branchBox.remove(); if (modal.isConnected) c.textarea.focus(); });
+  }, (err) => {
+    if (!modal.isConnected) return;
+    // An older client can neither list branches nor work in the folder: the chat gets a workspace from the main branch.
+    branchBox.remove();
+    wsRow.remove();
+    if (source?.status === 'online') problem.textContent = /outdated/.test(err.message) ? tr('Update the Mensarium client on “{0}” to pick a branch or work without a workspace; until then the chat starts from the main branch.', project.source_name || '') : err.message;
+  });
 }
 
 // Keeps the sidebar's copy of a project in step with a fresher detail view (the list carries a chat count, not the chats).
@@ -4158,7 +4173,8 @@ async function viewProject(id) {
     return h('div', { class: 'row' },
       h('a', { class: 'row-text', href: `#/chat/${t.id}`, title: t.input },
         h('div', { class: 'row-title' }, h('span', { class: `dot ${cls}${live ? ' live' : ''}`, title: label }), taskTitle(t)),
-        p.kind === 'repo' && t.branch ? h('div', { class: 'row-desc mono' }, [t.branch, baseName(t.base_ref) ? tr('from {0}', t.base_ref) : null].filter(Boolean).join(' · ')) : null),
+        p.kind !== 'repo' ? null : t.branch ? h('div', { class: 'row-desc mono' }, [t.branch, baseName(t.base_ref) ? tr('from {0}', t.base_ref) : null].filter(Boolean).join(' · '))
+          : h('div', { class: 'row-desc' }, tr('project folder, no workspace'))),
       h('div', { class: 'row-value' }, diffStat(t.diff_stat), relTime(t.updated_at)));
   };
 

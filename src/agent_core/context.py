@@ -47,6 +47,16 @@ PROJECT_BLOCK = (
     "CLAUDE.md, read it before working and follow it. The project's environment may be missing on "
     "this machine (dependencies not installed, tests may not run): say so plainly instead of installing toolchains.\n"
 )
+INPLACE_BLOCK = (
+    "\n## Project (set by the harness)\n"
+    "- name: {name}\n"
+    "- source: {source}\n"
+    "- project folder (work here; relative paths and shell cwd resolve to it): {workdir}\n"
+    "This chat has no private copy: you work right in the user's own checkout of the repository, so every edit "
+    "lands in the user's files at once. Do not switch branches, commit, stash, reset or push unless the user "
+    "explicitly asks. If the folder has an AGENTS.md or CLAUDE.md, read it before working and follow it. The "
+    "project's environment may be missing on this machine: say so plainly instead of installing toolchains.\n"
+)
 FOLDER_BLOCK = (
     "\n## Project (set by the harness)\n"
     "- name: {name}\n"
@@ -161,7 +171,7 @@ def build_system_prompt(
     if unattended:
         prompt += UNATTENDED_BLOCK
     if project:
-        block = FOLDER_BLOCK if project["kind"] == "folder" else PROJECT_BLOCK
+        block = FOLDER_BLOCK if project["kind"] == "folder" else INPLACE_BLOCK if project.get("inplace") else PROJECT_BLOCK
         if unrestricted:
             block = block.replace("work only here;", "default directory;")
             block = block.replace("Do not switch branches, do not touch other ", "Keep project edits in this copy by default. Do not switch branches or touch other ")

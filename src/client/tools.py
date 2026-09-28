@@ -97,8 +97,8 @@ class Executor:
 
     def workdir(self, value: str) -> Path:
         resolved = Path(value).expanduser().resolve()
-        if not (resolved == self.projects_root or resolved.is_relative_to(self.projects_root)):
-            raise ToolError("workdir must be inside the projects directory of this device")
+        if not any(resolved == r or resolved.is_relative_to(r) for r in self.roots):
+            raise ToolError("workdir must be inside the allowed folders of this device")
         if not resolved.is_dir():
             raise ToolError("workdir does not exist on this device")
         return resolved

@@ -6,10 +6,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from mensarium.agent_core.context import build_system_prompt
+from mensarium.agent_core.profile import builtin_profiles
 from mensarium.client.config import ClientConfig
 from mensarium.client.projects import ProjectHost
-from mensarium.client.tools import Executor
+from mensarium.client.tools import Executor, ToolError
 from mensarium.contracts.projects import ProjectOp
+from mensarium.contracts.protocol import TargetPolicy
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -109,6 +112,18 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((wt / "new.txt").exists())
         self.assertEqual((await self.op("diff", "task_r", base_sha=base))["data"]["files"], [])
         self.assertEqual((await self.op("revert", "task_r", base_sha=base, path=".env"))["state"], "error")
+
+    def test_workdir_may_be_a_project_folder_inside_the_roots(self) -> None:
+        executor = self.host.executor
+        self.assertEqual(executor.workdir(str(self.repo)), self.repo.resolve())
+        with self.assertRaises(ToolError):
+            executor.workdir(tempfile.gettempdir())
+
+    def test_prompt_tells_an_inplace_chat_it_works_in_the_users_checkout(self) -> None:
+        project = {"name": "demo", "kind": "repo", "source": "mac:/w/demo", "workdir": "/w/demo", "branch": "", "base": "", "instructions": "", "inplace": True}
+        prompt = build_system_prompt(builtin_profiles()[0], "mac", "macos", TargetPolicy(roots=["/w"], command_allowlist=[]), [], project=project)
+        self.assertIn("you work right in the user's own checkout", prompt)
+        self.assertNotIn("your worktree", prompt)
 
 
 if __name__ == "__main__":
