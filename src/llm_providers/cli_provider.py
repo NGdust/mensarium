@@ -144,24 +144,19 @@ def render_transcript(messages: list[Message]) -> str:
     return "\n\n".join(out)
 
 
+_DECODER = json.JSONDecoder()
+
+
 def extract_json_object(text: str) -> dict[str, Any] | None:
     """The first {...} object in the text that has a `type` field; code fences and prose around it are ignored."""
     start = text.find("{")
     while start != -1:
-        depth = 0
-        for i in range(start, len(text)):
-            if text[i] == "{":
-                depth += 1
-            elif text[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        obj = json.loads(text[start : i + 1])
-                    except json.JSONDecodeError:
-                        break
-                    if isinstance(obj, dict) and "type" in obj:
-                        return obj
-                    break
+        try:
+            obj, _ = _DECODER.raw_decode(text, start)
+        except json.JSONDecodeError:
+            obj = None
+        if isinstance(obj, dict) and "type" in obj:
+            return obj
         start = text.find("{", start + 1)
     return None
 
@@ -240,6 +235,22 @@ def parse_answer(obj: dict[str, Any]) -> ModelResponse:
         call = ProposedToolCall(id=new_id("call"), name=str(obj["tool"]), arguments=args, raw_arguments=raw, parse_error=err)
         return ModelResponse(text=str(obj.get("text") or "") or None, tool_calls=[call], finish_reason="tool_calls")
     return ModelResponse(text=str(obj.get("text") or ""), tool_calls=[], finish_reason="stop")
+
+
+_TOOL_CALL = re.compile(r'"type"\s*:\s*"tool_call"')
+_TOOL_NAME = re.compile(r'"tool"\s*:\s*"([\w.-]+)"')
+
+
+def parse_text_answer(text: str) -> ModelResponse:
+    if obj := extract_json_object(text):
+        return parse_answer(obj)
+    if _TOOL_CALL.search(text):
+        # A tool call written as broken JSON must not end the task: the model gets the error back and repeats the call.
+        name = m.group(1) if (m := _TOOL_NAME.search(text)) else "unknown"
+        err = "the answer is not one valid JSON object, send the action again with correctly escaped arguments"
+        call = ProposedToolCall(id=new_id("call"), name=name, arguments=None, raw_arguments=text, parse_error=err)
+        return ModelResponse(text=None, tool_calls=[call], finish_reason="tool_calls")
+    return ModelResponse(text=text, tool_calls=[], finish_reason="stop")
 
 
 @dataclass
@@ -519,9 +530,7 @@ class ClaudeCodeProvider(CliProvider):
         if data.get("is_error"):
             raise LLMError(f"claude error: {str(data.get('result'))[:400]}")
         answer = data.get("structured_output")
-        if not isinstance(answer, dict):
-            answer = extract_json_object(str(data.get("result") or ""))
-        resp = parse_answer(answer) if answer else ModelResponse(text=str(data.get("result") or ""), tool_calls=[], finish_reason="stop")
+        resp = parse_answer(answer) if isinstance(answer, dict) else parse_text_answer(str(data.get("result") or ""))
         usage = data.get("usage") or {}
         read, written = int(usage.get("cache_read_input_tokens") or 0), int(usage.get("cache_creation_input_tokens") or 0)
         resp.usage = TokenUsage(

@@ -108,6 +108,15 @@ class CliUsageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.usage.model_dump(), {"prompt_tokens": 1203, "completion_tokens": 50, "cached_tokens": 1000, "cache_write_tokens": 200})
         self.assertEqual(resp.raw_provider_response["session_id"], "s1")
 
+    def test_text_answer_with_braces_in_strings_or_broken_json(self):
+        edit = {"type": "tool_call", "tool": "files.edit", "arguments": json.dumps({"path": "a.css", "old": ":root {\n", "new": ":root {\n  --ink: 1;\n"}), "text": ""}
+        resp = cli_provider.parse_text_answer("Updating the variables.\n\n" + json.dumps(edit))
+        self.assertEqual(resp.tool_calls[0].arguments, {"path": "a.css", "old": ":root {\n", "new": ":root {\n  --ink: 1;\n"})
+        broken = '{"type": "tool_call", "tool": "shell.bash", "arguments": "{\\"script\\": "grep x"}", "text": ""}'
+        resp = cli_provider.parse_text_answer(broken)
+        self.assertEqual(resp.tool_calls[0].name, "shell.bash")
+        self.assertIsNotNone(resp.tool_calls[0].parse_error)
+
     async def test_codex_resume_and_usage(self):
         provider = cli_provider.CodexCliProvider("test", "codex", "")
         provider.models = ["gpt-x"]
