@@ -450,14 +450,15 @@ def context_parts(
 
 
 def fit_history(max_context_tokens: int, window: int | None, system: str, tools: list[ToolDefinition], max_output_tokens: int) -> int:
-    """History budget in tokens: the profile's, cut so the whole request and the answer fit the model's window.
+    """History budget in tokens: whatever the model's window leaves after the system prompt, tools and the answer.
 
-    Estimated at CHARS_PER_TOKEN with WINDOW_MARGIN of the window to spare. Never below MIN_HISTORY_TOKENS, so a model
-    whose window cannot even hold the system prompt and tools still gets the latest messages."""
+    Estimated at CHARS_PER_TOKEN with WINDOW_MARGIN of the window to spare; the profile's budget applies only when the
+    window is unknown. Never below MIN_HISTORY_TOKENS, so a model whose window cannot even hold the system prompt and
+    tools still gets the latest messages."""
     if not window:
         return max_context_tokens
     room = int(window * (1 - WINDOW_MARGIN)) - max_output_tokens - (len(system) + _tool_chars(tools)) // CHARS_PER_TOKEN
-    return max(MIN_HISTORY_TOKENS, min(max_context_tokens, room))
+    return max(MIN_HISTORY_TOKENS, room)
 
 
 def _tool_chars(tools: list[ToolDefinition]) -> int:

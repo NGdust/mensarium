@@ -83,12 +83,12 @@ class ContextBreakdownTests(unittest.TestCase):
         estimate = context_usage({**ctx, "history_budget": 2000, "window": 8192}, 0)
         self.assertEqual((estimate["tokens"], estimate["limit"], estimate["estimated"], estimate["window"]), (2000, 2000, True, 8192))
 
-    def test_history_is_cut_to_the_model_window(self):
+    def test_history_fills_the_model_window(self):
         tools = [ToolDefinition(name="files.read", description="d" * 3950, parameters={})]
         system = "s" * 36000
         self.assertEqual(fit_history(12000, None, system, tools, 2000), 12000)
-        self.assertEqual(fit_history(12000, 1_000_000, system, tools, 2000), 12000)
         fixed = (len(system) + len(json.dumps(tools[0].model_dump(), ensure_ascii=False))) // 4
+        self.assertEqual(fit_history(12000, 200_000, system, tools, 2000), 180_000 - 2000 - fixed)
         self.assertEqual(fit_history(12000, 20000, system, tools, 2000), 18000 - 2000 - fixed)
         self.assertEqual(fit_history(12000, 8192, system, tools, 2000), MIN_HISTORY_TOKENS)
 

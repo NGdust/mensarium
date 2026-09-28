@@ -647,7 +647,7 @@ class Orchestrator:
                 model = client.vision_model
             window = await client.context_window(model)
             history = fit_history(profile.llm.max_context_tokens, window, system, tool_defs, profile.llm.max_output_tokens)
-            if history < profile.llm.max_context_tokens:
+            if history != profile.llm.max_context_tokens:
                 messages = build_messages(steps, history, images)
             request = ChatRequest(
                 model=model,
