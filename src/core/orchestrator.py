@@ -9,7 +9,14 @@ from typing import TYPE_CHECKING, Any
 
 from mensarium import __version__
 from mensarium.agent_core.actions import ToolCallAction, parse_action
-from mensarium.agent_core.context import MAX_AGENTS, build_messages, build_system_prompt, has_images, strip_images
+from mensarium.agent_core.context import (
+    MAX_AGENTS,
+    build_messages,
+    build_system_prompt,
+    context_parts,
+    has_images,
+    strip_images,
+)
 from mensarium.agent_core.profile import AgentProfile
 from mensarium.contracts.automations import AutomationCreate, AutomationError
 from mensarium.contracts.llm import ChatRequest
@@ -533,6 +540,8 @@ class Orchestrator:
             messages = build_messages(steps, profile.llm.max_context_tokens, await self._recent_images(steps))
             if has_images(messages) and client.vision_model:
                 model = client.vision_model
+            instructions = self.instructions.prompt_files()
+            tool_defs = [toolbox.registry[t].definition() for t in available]
             request = ChatRequest(
                 model=model,
                 system=build_system_prompt(
@@ -548,13 +557,17 @@ class Orchestrator:
                     unattended=bool(task.get("automation_id")) and sum(s["kind"] == "user" for s in steps) == 1,
                     project=project_block,
                     mode=current["mode"] if full_access(target) == "allowed" else "ask",
-                    instructions=self.instructions.prompt_files(),
+                    instructions=instructions,
                 ),
                 messages=messages,
                 temperature=profile.llm.temperature,
                 max_output_tokens=profile.llm.max_output_tokens,
                 timeout_s=self.cfg.llm.providers[client.name].timeout_s,
                 metadata={"task_id": task_id, "trace_id": task["trace_id"]},
+            )
+            context = context_parts(
+                request.system, tool_defs, set(toolbox.owners), request.messages, instructions, skills, memory,
+                profile.llm.max_context_tokens,
             )
             llm_request = await self.bus.emit(task_id, "llm.request", {"step": llm_steps})
             draft = self.bus.draft(task_id, llm_request["seq"])
@@ -563,7 +576,7 @@ class Orchestrator:
                 resp = await self._interruptible(
                     task_id,
                 self.provider.chat(
-                    request, tools=[toolbox.registry[t].definition() for t in available], response_schema=None, provider_id=pid,
+                    request, tools=tool_defs, response_schema=None, provider_id=pid,
                     on_text=draft.feed,
                 ),
                 )
@@ -576,7 +589,7 @@ class Orchestrator:
                         resp = await self._interruptible(
                             task_id,
                             self.provider.chat(
-                                request, tools=[toolbox.registry[t].definition() for t in available], response_schema=None, provider_id=pid,
+                                request, tools=tool_defs, response_schema=None, provider_id=pid,
                                 on_text=draft.feed,
                             ),
                         )
@@ -595,6 +608,7 @@ class Orchestrator:
                 task_id,
                 "llm",
                 {
+                    "input": {"context": context},
                     "output": {"text": action.text, "tool_calls": action.assistant_tool_calls()},
                     "latency_ms": latency,
                     "provider": client.name,

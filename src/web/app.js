@@ -997,10 +997,66 @@ function agentsPanel() {
   };
 }
 
-// Chip with the tokens this chat spent (its sub-agents included); the popover breaks them down per model.
+// Chip with the tokens this chat spent (its sub-agents included); the popover shows what fills the context and
+// breaks the tokens down per model.
 function fmtTokens(n) {
   const [value, unit] = n >= 1e6 ? [n / 1e6, 'M'] : n >= 1e3 ? [n / 1e3, 'K'] : [n || 0, ''];
   return `${value.toLocaleString(locale, { maximumFractionDigits: unit && value < 100 ? 1 : 0 })}${unit}`;
+}
+
+const CONTEXT_PARTS = {
+  system: 'System prompt',
+  tools: 'Tools',
+  plugins: 'Plugins and MCP',
+  instructions: 'User instructions',
+  skills: 'Skills',
+  memory: 'Memory',
+  messages: 'Chat history',
+  free: 'Free until compaction',
+};
+
+// Splits n cells between the values: every non-empty value gets at least one, the rest go by the largest remainder.
+function waffleCells(values, n = 100) {
+  const sum = values.reduce((a, b) => a + b, 0) || 1;
+  const exact = values.map((v) => (v / sum) * n);
+  const cells = exact.map((x) => (x > 0 ? Math.max(1, Math.floor(x)) : 0));
+  const order = exact.map((_, i) => i).filter((i) => exact[i] > 0).sort((a, b) => (exact[b] % 1) - (exact[a] % 1));
+  let left = n - cells.reduce((a, b) => a + b, 0);
+  for (let k = 0; left > 0; k++, left--) cells[order[k % order.length]]++;
+  for (; left < 0; left++) cells[cells.indexOf(Math.max(...cells))]--;
+  return cells;
+}
+
+// What the chat's last model request was made of, against the size at which its history gets compacted.
+function contextView(ctx) {
+  const parts = [...ctx.parts.filter((p) => p.tokens > 0), { key: 'free', tokens: Math.max(0, ctx.limit - ctx.tokens) }];
+  const limit = Math.max(ctx.limit, ctx.tokens) || 1;
+  const pct = (n) => {
+    const v = (n / limit) * 100;
+    return `${v.toLocaleString(locale, { maximumFractionDigits: v && v < 10 ? 1 : 0 })}%`;
+  };
+  const cells = waffleCells(parts.map((p) => p.tokens));
+  const view = h('section', { class: 'ctx' },
+    h('div', { class: 'ctx-head' }, h('strong', {}, tr('Context')),
+      ctx.model ? h('span', { class: 'ctx-model', title: ctx.provider || '' }, ctx.model) : null),
+    h('div', { class: 'ctx-total' },
+      h('span', { class: 'ctx-used' }, `${ctx.estimated ? '≈' : ''}${fmtTokens(ctx.tokens)}`),
+      h('span', { class: 'ctx-of' }, tr('of {0} tokens', fmtTokens(limit))),
+      h('span', { class: 'ctx-pct-total' }, pct(ctx.tokens))),
+    h('div', { class: 'ctx-body' },
+      h('div', { class: 'ctx-grid', 'aria-hidden': 'true' }, parts.map((p, i) =>
+        Array.from({ length: cells[i] }, () => h('i', { class: 'ctx-cell', 'data-part': p.key })))),
+      h('div', { class: 'ctx-legend' }, parts.map((p) =>
+        h('div', { class: 'ctx-row', 'data-part': p.key, title: p.tokens.toLocaleString(locale) },
+          h('i', { class: 'ctx-swatch' }),
+          h('span', { class: 'ctx-name' }, tr(CONTEXT_PARTS[p.key] || p.key), p.count ? h('span', { class: 'ctx-count' }, p.count) : null),
+          h('span', { class: 'ctx-tokens' }, fmtTokens(p.tokens)),
+          h('span', { class: 'ctx-pct' }, pct(p.tokens)))))),
+    h('div', { class: 'ctx-foot' }, tr('History is compacted past {0} tokens', fmtTokens(ctx.history_limit))));
+  const focus = (key) => view.querySelectorAll('[data-part]').forEach((e) => e.classList.toggle('dim', Boolean(key) && e.dataset.part !== key));
+  view.addEventListener('mouseover', (e) => focus(e.target.closest('[data-part]')?.dataset.part));
+  view.addEventListener('mouseleave', () => focus(null));
+  return view;
 }
 
 function usageMeter(taskId) {
@@ -1019,15 +1075,14 @@ function usageMeter(taskId) {
     chip.replaceChildren(icon('gauge'), h('span', { class: 'chip-label' }, fmtTokens(total)));
     if (!body.isConnected) return;
     body.replaceChildren(
+      data.context ? contextView(data.context) : null,
       h('div', { class: 'usage-head' }, h('strong', {}, tr('Tokens in this chat')),
         data.agents ? h('span', { class: 'popover-sub' }, tp('with {0} sub-agent|with {0} sub-agents', data.agents)) : null),
       h('div', { class: 'usage-scroll' }, h('table', { class: 'usage-table' },
         h('thead', {}, h('tr', {}, [tr('Model'), tr('Calls'), tr('Input'), tr('From cache'), tr('To cache'), tr('Output')].map((x) => h('th', {}, x)))),
         h('tbody', {}, data.models.map((m) => h('tr', {},
           h('td', { title: m.model || '' }, m.model || '—', h('span', { class: 'usage-provider' }, m.provider || '')), cells(m)))),
-        data.models.length > 1 ? h('tfoot', {}, h('tr', {}, h('td', {}, tr('Total')), cells(data.total))) : null)),
-      data.last_prompt_tokens ? h('div', { class: 'usage-last' }, tr('Last request: {0} input tokens', fmtTokens(data.last_prompt_tokens))) : null,
-      h('p', { class: 'usage-note' }, tr('Input is every token the model read, the cached part included. From cache: the repeated part of the history the provider served from its prompt cache, much cheaper than plain input. To cache: what the provider stored for the next steps; Claude Code bills it above plain input.')));
+        data.models.length > 1 ? h('tfoot', {}, h('tr', {}, h('td', {}, tr('Total')), cells(data.total))) : null)));
     place?.();
   };
   const refresh = async () => {

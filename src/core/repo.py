@@ -158,14 +158,10 @@ class Repo:
             tuple(task_ids),
         )
 
-    async def last_prompt_tokens(self, task_ids: list[str]) -> int:
-        marks = ",".join("?" for _ in task_ids)
-        row = await self.db.fetchone(
-            "SELECT COALESCE(json_extract(usage, '$.prompt_tokens'), 0) AS n FROM task_steps "
-            f"WHERE kind = 'llm' AND task_id IN ({marks}) ORDER BY created_at DESC LIMIT 1",
-            tuple(task_ids),
+    async def last_llm_step(self, task_id: str) -> dict[str, Any] | None:
+        return await self.db.fetchone(
+            "SELECT * FROM task_steps WHERE task_id = ? AND kind = 'llm' ORDER BY sequence DESC LIMIT 1", (task_id,)
         )
-        return int(row["n"]) if row else 0
 
     async def count_steps(self, task_id: str, kind: str) -> int:
         row = await self.db.fetchone(

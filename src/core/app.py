@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
 from mensarium import __version__
-from mensarium.agent_core.context import INSTRUCTION_FILE_CHARS
+from mensarium.agent_core.context import INSTRUCTION_FILE_CHARS, context_usage
 from mensarium.agent_core.profile import AgentProfile, builtin_profiles
 from mensarium.client.agent import ClientAgent
 from mensarium.client.gateway import auth as ui_auth
@@ -1206,10 +1206,15 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             raise HTTPException(404, "task not found")
         ids = [task_id] + [t["id"] for t in await c.repo.list_children(task_id)]
         models = await c.repo.usage_by_model(ids)
+        step = await c.repo.last_llm_step(task_id)
+        context = None
+        if step and step["input"].get("context"):
+            prompt_tokens = int((step["usage"] or {}).get("prompt_tokens") or 0)
+            context = {**context_usage(step["input"]["context"], prompt_tokens), "model": step["model_id"], "provider": step["provider"]}
         return {
             "models": models,
             "total": {k: sum(int(m[k]) for m in models) for k in ("calls", *USAGE_FIELDS)},
-            "last_prompt_tokens": await c.repo.last_prompt_tokens(ids),
+            "context": context,
             "agents": len(ids) - 1,
         }
 
