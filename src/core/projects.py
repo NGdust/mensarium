@@ -60,7 +60,7 @@ class ProjectManager:
         keys = (
             "id", "name", "kind", "source_target_id", "source_name", "source_path", "default_executor_id", "default_base",
             "git_url", "include_remotes", "fetch_origin", "size_limit_mb", "file_limit_mb", "head_sha", "snapshot_sha",
-            "default_branch", "last_sync_at", "size_bytes", "status", "error", "created_at", "updated_at", "chats",
+            "default_branch", "last_sync_at", "size_bytes", "status", "error", "created_at", "updated_at", "chats", "instructions",
         )
         return {k: p.get(k) for k in keys} | {
             "skipped": p.get("skipped") or [],
@@ -195,6 +195,19 @@ class ProjectManager:
             raise ProjectError(status.detail or "cannot read the changes")
         return {"ready": True, **status.data}
 
+    async def docs(self, project_id: str) -> dict[str, Any]:
+        p = await self.get(project_id)
+        target = self._supports(await self.repo.get_target(str(p["source_target_id"])))
+        if not self.can(str(target["id"]), "docs"):
+            raise ProjectError("this device's client is outdated; update it to see the project's files")
+        try:
+            status = await self._op(str(target["id"]), project_id, "", "docs", self._snapshot_args(p), BROWSE_TIMEOUT_S)
+        except TargetUnavailable as e:
+            raise ProjectError(str(e)) from e
+        if status.state != "ok":
+            raise ProjectError(status.detail or "cannot read the project's files")
+        return status.data
+
     async def create(self, body: ProjectCreate) -> dict[str, Any]:
         project_id = new_id("prj")
         if body.git_url:
@@ -282,6 +295,8 @@ class ProjectManager:
     async def update(self, project_id: str, body: ProjectPatch) -> dict[str, Any]:
         await self.get(project_id)
         values = {k: (int(v) if isinstance(v, bool) else v) for k, v in body.model_dump(exclude_none=True).items()}
+        if body.instructions is not None:
+            values["instructions"] = body.instructions.strip() or None
         if values:
             await self.repo.update_project(project_id, values)
         return self.view(await self.get(project_id))

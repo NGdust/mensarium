@@ -43,8 +43,8 @@ PROJECT_BLOCK = (
     "- your branch: {branch}, started from {base}\n"
     "This worktree is your private copy of the project for this chat. Do not switch branches, do not touch other "
     "worktrees or the source folder, do not push or add remotes unless the user explicitly asks. You may commit; "
-    "the harness also commits your branch at the end of every turn. If the worktree root has an AGENTS.md, read it "
-    "before working and follow it. The project's environment may be missing on "
+    "the harness also commits your branch at the end of every turn. If the worktree root has an AGENTS.md or "
+    "CLAUDE.md, read it before working and follow it. The project's environment may be missing on "
     "this machine (dependencies not installed, tests may not run): say so plainly instead of installing toolchains.\n"
 )
 FOLDER_BLOCK = (
@@ -167,6 +167,8 @@ def build_system_prompt(
             block = block.replace("Do not switch branches, do not touch other ", "Keep project edits in this copy by default. Do not switch branches or touch other ")
             block = block.replace("say so plainly instead of installing toolchains.", "install dependencies or toolchains when needed to complete the user’s task.")
         prompt += block.format(**project)
+        if project.get("instructions"):
+            prompt += f"\n## Project instructions from the user\n{project['instructions']}\n"
     if "plugins.find" in tools:
         prompt += (
             "\n## Missing capabilities\n"

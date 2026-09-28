@@ -549,6 +549,7 @@ class Orchestrator:
                     "workdir": self.workdirs[task_id],
                     "branch": task.get("branch") or "",
                     "base": base,
+                    "instructions": project.get("instructions") or "",
                 }
             toolbox = await self.plugins.toolbox(profile, target)
             if not task.get("parent_id"):

@@ -86,6 +86,13 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("+print('more')", patch)
         self.assertEqual(git(wt, "diff", "--cached", "--name-only"), "")
 
+    async def test_docs_reads_instruction_files_but_not_links(self) -> None:
+        (self.repo / "AGENTS.md").write_text("Run make test.\n")
+        (self.repo / "CLAUDE.md").symlink_to(self.repo / "app.py")
+        status = await self.op("docs")
+        self.assertEqual(status["state"], "ok", status["detail"])
+        self.assertEqual([(f["name"], f["text"]) for f in status["data"]["files"]], [("AGENTS.md", "Run make test.\n")])
+
 
 if __name__ == "__main__":
     unittest.main()

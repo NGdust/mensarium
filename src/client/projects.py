@@ -11,7 +11,9 @@ from mensarium.client.tools import GIT_SAFE_FLAGS, SKIP_DIRS, ExecTimeout, Execu
 from mensarium.contracts.projects import (
     BRANCH_PREFIX,
     BRANCH_RE,
+    DOC_FILES,
     FOLDER_EXCLUDES,
+    INSTRUCTIONS_LIMIT,
     SECRET_EXCLUDES,
     SNAPSHOT_REF,
     ProjectKind,
@@ -239,9 +241,9 @@ class ProjectHost:
             return status
         handler = {
             "browse": self._browse, "checkout": self._checkout, "commit": self._commit, "status": self._status, "remove": self._remove,
-            "branches": self._branches, "diff": self._diff,
+            "branches": self._branches, "diff": self._diff, "docs": self._docs,
         }[req.op]
-        lock = contextlib.nullcontext() if req.op in ("browse", "branches", "diff") else self._lock(req.project_id)
+        lock = contextlib.nullcontext() if req.op in ("browse", "branches", "diff", "docs") else self._lock(req.project_id)
         try:
             async with lock:
                 result = await handler(req.project_id, req.task_id, req.args)
@@ -359,6 +361,17 @@ class ProjectHost:
         out = await self._git("status", "--porcelain=v2", "--branch", cwd=wt)
         head = (await self._git("rev-parse", "HEAD", cwd=wt)).strip()
         return {"head_sha": head, "detail": out[:8000]}
+
+    async def _docs(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
+        src = self._source(str(a["source_path"]), project_id, a.get("git_url"))
+        files = []
+        for name in DOC_FILES:
+            path = src / name
+            if path.is_symlink() or not path.is_file():
+                continue
+            text = path.read_bytes()[: INSTRUCTIONS_LIMIT * 4].decode(errors="replace")
+            files.append({"name": name, "size": path.stat().st_size, "text": text[:INSTRUCTIONS_LIMIT], "truncated": len(text) > INSTRUCTIONS_LIMIT})
+        return {"data": {"files": files}}
 
     # The chat's changes since its start, uncommitted ones included; a copy of the index keeps the worktree untouched.
     async def _diff(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:

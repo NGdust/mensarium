@@ -25,6 +25,7 @@ COLUMN_MIGRATIONS = [
     ("tasks", "archived_at", "TEXT"),
     ("tasks", "provider", "TEXT"),
     ("automations", "provider", "TEXT"),
+    ("projects", "instructions", "TEXT"),
 ]
 
 SCHEMA = """

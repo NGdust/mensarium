@@ -1159,6 +1159,13 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             raise project_error(e) from e
         return {**c.projects.view(p), "chats": [task_view(t) for t in await c.repo.list_project_tasks(project_id)]}
 
+    @app.get("/v1/projects/{project_id}/docs")
+    async def project_docs(project_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return await c.projects.docs(project_id)
+        except ProjectError as e:
+            raise project_error(e) from e
+
     @app.get("/v1/projects/{project_id}/branches")
     async def project_branches(project_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
         try:

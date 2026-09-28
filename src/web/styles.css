@@ -526,6 +526,13 @@ a.chip:hover { text-decoration: none; }
 .mi-desc { font-size: 12px; line-height: 1.4; color: var(--muted); white-space: normal; }
 .chip-model .chip-label { max-width: 190px; }
 .chip-ws { flex-shrink: 0; }
+.info-section { margin-top: 20px; }
+.info-section h3 { margin: 0 0 2px; font-size: 14px; font-weight: 600; }
+.info-section > .row-desc { margin: 0 0 10px; }
+.project-instructions { margin-bottom: 8px; min-height: 120px; }
+.info-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.project-doc-row + .project-doc-row { border-top: 1px solid var(--line); }
+.project-doc { max-height: 320px; overflow: auto; margin: 0; padding: 10px 16px 14px; font: 12.5px/1.5 var(--mono); white-space: pre-wrap; color: var(--text-2); }
 .chip-ws .chip-label { max-width: 200px; }
 .model-pop { width: 320px; }
 .popover-search { position: relative; margin-bottom: 4px; }

@@ -4015,11 +4015,58 @@ async function viewProject(id) {
   // Source details live in a modal behind the small exclamation-mark button in the page actions.
   const infoBody = h('div', { class: 'rows' });
   const fillInfo = (...rows) => { infoBody.replaceChildren(...rows.flat().filter(Boolean)); return null; };
-  const infoBtn = h('button', { class: 'icon-btn', title: tr('About the project'), 'aria-label': tr('About the project'), onclick: () => openModal(
-    h('div', { class: 'modal-head' }, h('h2', {}, tr('About the project')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
-    infoBody,
-    h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, tr('Close'))),
-  ) }, icon('exclaim'));
+  const infoBtn = h('button', { class: 'icon-btn', title: tr('About the project'), 'aria-label': tr('About the project'), onclick: () => openInfo() }, icon('exclaim'));
+  const openInfo = () => {
+    const limit = 20000;
+    const text = h('textarea', { class: 'market-yaml project-instructions', rows: 7, maxlength: limit, spellcheck: 'false', 'aria-label': tr('Project instructions'),
+      placeholder: tr('For example: run the tests with make test before finishing; do not change the migrations.') });
+    text.value = p.instructions || '';
+    const count = h('span', { class: 'row-desc' });
+    const save = h('button', { class: 'btn btn-sm btn-primary', disabled: true }, tr('Save'));
+    const sync = () => {
+      count.textContent = tr('{0} / {1} characters', text.value.length.toLocaleString(locale), limit.toLocaleString(locale));
+      save.disabled = text.value.trim() === (p.instructions || '');
+    };
+    text.addEventListener('input', sync);
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      try {
+        show({ ...(await api(`/v1/projects/${id}`, { method: 'PUT', body: JSON.stringify({ instructions: text.value }) })), chats: p.chats });
+        text.value = p.instructions || '';
+        toast(tr('Saved'));
+      } catch (err) { fail(err); }
+      sync();
+    });
+    sync();
+    const docs = h('div', { class: 'rows' }, h('div', { class: 'empty rows' }, tr('Loading...')));
+    const docRow = (f) => {
+      const body = h('pre', { class: 'project-doc hidden' }, f.text, f.truncated ? '\n…' : '');
+      const toggle = h('button', { class: 'btn btn-sm', onclick: () => {
+        body.classList.toggle('hidden');
+        toggle.textContent = body.classList.contains('hidden') ? tr('Show') : tr('Hide');
+      } }, tr('Show'));
+      return h('div', { class: 'project-doc-row' },
+        h('div', { class: 'row' }, h('div', { class: 'row-text' }, h('div', { class: 'row-title' }, h('code', {}, f.name)), h('div', { class: 'row-desc' }, fmtBytes(f.size))), h('div', { class: 'row-value' }, toggle)),
+        body);
+    };
+    get(`/v1/projects/${id}/docs`).then(
+      (r) => docs.replaceChildren(...(r.files.length ? r.files.map(docRow) : [h('div', { class: 'empty rows' }, tr('No AGENTS.md or CLAUDE.md in the project folder.'))])),
+      (err) => docs.replaceChildren(h('div', { class: 'empty rows' }, err.message)));
+    openModal(
+      h('div', { class: 'modal-head' }, h('h2', {}, tr('About the project')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
+      infoBody,
+      h('div', { class: 'info-section' },
+        h('h3', {}, tr('Project instructions')),
+        h('p', { class: 'row-desc' }, tr('Added to the system prompt of every chat in this project.')),
+        text,
+        h('div', { class: 'info-foot' }, count, save)),
+      h('div', { class: 'info-section' },
+        h('h3', {}, tr('Instruction files in the project')),
+        h('p', { class: 'row-desc' }, tr('The agent reads them from its working copy on its own; they are shown here for reference.')),
+        docs),
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, tr('Close'))),
+    ).classList.add('modal-wide');
+  };
   let shown = '';
 
   const sync = async (btn) => {

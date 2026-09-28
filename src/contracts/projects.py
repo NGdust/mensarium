@@ -6,9 +6,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from mensarium.shared.redaction import SECRET_FILE_PATTERNS
 
 ProjectKind = Literal["repo", "folder"]
-ProjectOpName = Literal["browse", "checkout", "commit", "status", "remove", "branches", "diff"]
+ProjectOpName = Literal["browse", "checkout", "commit", "status", "remove", "branches", "diff", "docs"]
 # Ops a client lists in capabilities.project_ops; a client without them rejects the frame and never answers.
-EXTRA_OPS: tuple[ProjectOpName, ...] = ("branches", "diff")
+EXTRA_OPS: tuple[ProjectOpName, ...] = ("branches", "diff", "docs")
 OpState = Literal["ok", "conflict", "error"]
 SnapshotState = Literal["ok", "unchanged", "error"]
 
@@ -17,6 +17,9 @@ BRANCH_PREFIX = "mensarium/"
 SECRET_EXCLUDES: tuple[str, ...] = (*SECRET_FILE_PATTERNS, ".netrc", ".npmrc", ".pypirc", "*.kdbx", "credentials*", "secrets.*")
 FOLDER_EXCLUDES = (".DS_Store", "Thumbs.db", "~$*", "*.tmp", ".~lock.*")
 KIND_LABELS = {"repo": "git repository", "folder": "folder"}
+# Instruction files other agents keep at a project root; shown in the project info, never put into prompts.
+DOC_FILES = ("AGENTS.md", "CLAUDE.md")
+INSTRUCTIONS_LIMIT = 20_000
 # Only network transports: local paths, file:// and ext:: would let a clone reach into the device.
 # A conservative subset of git-check-ref-format; the device checks the name with git itself as well.
 BRANCH_RE = re.compile(r"(?![-/.])(?!.*\.\.)(?!.*//)(?!.*/\.)(?!.*@\{)(?!.*\.lock(/|$))[A-Za-z0-9._/+-]+(?<![./])")
@@ -79,6 +82,7 @@ class ProjectPatch(BaseModel):
     default_base: str | None = Field(None, min_length=1, max_length=200)
     size_limit_mb: int | None = Field(None, ge=1, le=20480)
     file_limit_mb: int | None = Field(None, ge=1, le=2048)
+    instructions: str | None = Field(None, max_length=INSTRUCTIONS_LIMIT)
 
 
 class BrowseBody(BaseModel):
