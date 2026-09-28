@@ -470,6 +470,7 @@ class Orchestrator:
     async def _loop(self, task: dict[str, Any], profile: AgentProfile) -> None:
         task_id = task["id"]
         llm_steps = 0
+        memory_notes: str | None = None
 
         while True:
             self._check_control(task_id)
@@ -515,7 +516,9 @@ class Orchestrator:
             if toolbox.skills:
                 available.append("skills.read")
             skills = [(s.name, s.description) for s in toolbox.skills]
-            memory = await self.memory.context() if "memory.search" in available else None
+            if memory_notes is None and "memory.search" in available:
+                memory_notes = await self.memory.context()
+            memory = memory_notes if "memory.search" in available else None
             missing = missing_tools((target.get("capabilities") or {}).get("tools", []))
             outdated = (
                 f"{target.get('agent_version') or 'unknown'} (Core is {__version__}); tools it lacks until the user updates it: "

@@ -5,6 +5,7 @@ from typing import Any
 
 from mensarium.contracts.llm import ModelResponse
 from mensarium.shared.ids import new_id
+from mensarium.shared.toolargs import parse_tool_arguments
 
 
 @dataclass
@@ -58,16 +59,10 @@ def parse_action(resp: ModelResponse) -> AgentAction:
         if not isinstance(obj, dict):
             continue
         if obj.get("type") == "tool_call" and isinstance(obj.get("tool"), str):
-            args = obj.get("arguments")
+            args, raw, err = parse_tool_arguments(obj.get("arguments"))
             return AgentAction(
                 text=str(obj.get("rationale") or ""),
-                call=ToolCallAction(
-                    call_id=new_id("call"),
-                    tool=obj["tool"],
-                    arguments=args if isinstance(args, dict) else None,
-                    raw_arguments=json.dumps(args, ensure_ascii=False),
-                    parse_error=None if isinstance(args, dict) else "arguments must be a JSON object",
-                ),
+                call=ToolCallAction(call_id=new_id("call"), tool=obj["tool"], arguments=args, raw_arguments=raw, parse_error=err),
             )
         if obj.get("type") == "final" and isinstance(obj.get("text"), str):
             return AgentAction(text=obj["text"])

@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 from datetime import timedelta
 from typing import Any
@@ -19,6 +18,7 @@ from mensarium.contracts.llm import (
 )
 from mensarium.llm_providers.base import LLMError
 from mensarium.shared.timeutil import now_iso, utcnow
+from mensarium.shared.toolargs import parse_tool_arguments
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +63,17 @@ def _to_wire(m: Message) -> dict[str, Any]:
     if m.tool_call_id:
         out["tool_call_id"] = m.tool_call_id
     return out
+
+
+def _usage(usage: dict[str, Any], timings: dict[str, Any] | None) -> TokenUsage:
+    """Cached input comes as prompt_tokens_details (OpenAI, OpenRouter) or llama.cpp's timings.cache_n."""
+    details = usage.get("prompt_tokens_details") or {}
+    return TokenUsage(
+        prompt_tokens=int(usage.get("prompt_tokens") or 0),
+        completion_tokens=int(usage.get("completion_tokens") or 0),
+        cached_tokens=int(details.get("cached_tokens") or (timings or {}).get("cache_n") or 0),
+        cache_write_tokens=int(details.get("cache_write_tokens") or 0),
+    )
 
 
 class OpenAICompatibleProvider:
@@ -191,17 +202,7 @@ class OpenAICompatibleProvider:
         calls = []
         for i, tc in enumerate(msg.get("tool_calls") or []):
             fn = tc.get("function", {})
-            raw = fn.get("arguments") or "{}"
-            args, err = None, None
-            if isinstance(raw, dict):
-                args, raw = raw, json.dumps(raw)
-            else:
-                try:
-                    parsed = json.loads(raw)
-                    args = parsed if isinstance(parsed, dict) else None
-                    err = None if args is not None else "arguments must be a JSON object"
-                except json.JSONDecodeError as e:
-                    err = str(e)
+            args, raw, err = parse_tool_arguments(fn.get("arguments") or "{}")
             calls.append(
                 ProposedToolCall(
                     id=tc.get("id") or f"call_{i}",
@@ -217,11 +218,7 @@ class OpenAICompatibleProvider:
             text=msg.get("content"),
             tool_calls=calls,
             finish_reason="tool_calls" if calls else ("length" if finish == "length" else "stop"),
-            usage=TokenUsage(
-                prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0)
-            )
-            if usage
-            else None,
+            usage=_usage(usage, data.get("timings")) if usage else None,
             raw_provider_response=data,
         )
 

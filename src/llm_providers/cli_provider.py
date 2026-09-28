@@ -1,14 +1,20 @@
-"""LLM providers that run a local command-line agent (Claude Code, Codex CLI) as a one-shot model call.
+"""LLM providers that run a local command-line agent (Claude Code, Codex CLI) as a model call.
 
 The agent's own tools are switched off or sandboxed; our tools are described in the prompt and the answer is
-forced into a JSON object by the CLI's schema option, then turned into a native tool call."""
+forced into a JSON object by the CLI's schema option, then turned into a native tool call. A task keeps one CLI
+session: each step resumes it with only the messages it has not seen, so the CLI serves the rest from its cache."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
+import uuid
+from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -34,8 +40,12 @@ from mensarium.llm_providers.local_cli import (
 )
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import now_iso
+from mensarium.shared.toolargs import parse_tool_arguments
 
 log = logging.getLogger(__name__)
+
+MAX_SESSIONS = 32
+ANSWER_NOW = "\n\n### Now answer with exactly one JSON object."
 
 ANSWER_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -129,21 +139,25 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
 def parse_answer(obj: dict[str, Any]) -> ModelResponse:
     kind = obj.get("type")
     if kind == "tool_call" and obj.get("tool"):
-        raw = obj.get("arguments") or "{}"
-        args: dict[str, Any] | None = None
-        err = None
-        if isinstance(raw, dict):
-            args, raw = raw, json.dumps(raw, ensure_ascii=False)
-        else:
-            try:
-                parsed = json.loads(raw or "{}")
-                args = parsed if isinstance(parsed, dict) else None
-                err = None if args is not None else "arguments must be a JSON object"
-            except json.JSONDecodeError as e:
-                err = str(e)
-        call = ProposedToolCall(id=new_id("call"), name=str(obj["tool"]), arguments=args, raw_arguments=str(raw), parse_error=err)
+        args, raw, err = parse_tool_arguments(obj.get("arguments") or "{}")
+        call = ProposedToolCall(id=new_id("call"), name=str(obj["tool"]), arguments=args, raw_arguments=raw, parse_error=err)
         return ModelResponse(text=str(obj.get("text") or "") or None, tool_calls=[call], finish_reason="tool_calls")
     return ModelResponse(text=str(obj.get("text") or ""), tool_calls=[], finish_reason="stop")
+
+
+@dataclass
+class CliSession:
+    """A CLI conversation holding the first len(sent) request messages and its answer to them."""
+
+    id: str
+    model: str
+    system: str
+    sent: list[str]
+    answer_call: str | None
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 class CliProvider:
@@ -162,6 +176,7 @@ class CliProvider:
         self.limits_at: str | None = None
         self.limits_source = ""
         self._workdir: str | None = None
+        self.sessions: OrderedDict[str, CliSession] = OrderedDict()
 
     @property
     def base_url(self) -> str:
@@ -196,24 +211,78 @@ class CliProvider:
             proc.kill()
             await proc.wait()
             raise LLMError(f"{self.title} did not answer within {timeout_s}s") from None
+        except asyncio.CancelledError:
+            proc.kill()
+            raise
         return proc.returncode or 0, out.decode(errors="replace"), err.decode(errors="replace")
 
     async def chat(self, request: ChatRequest, *, tools: list[ToolDefinition], response_schema: dict[str, Any] | None = None) -> ModelResponse:
         system = request.system.rstrip() + "\n\n" + FORMAT_RULES + "\n" + render_tools(tools)
-        prompt = render_transcript(request.messages) + "\n\n### Now answer with exactly one JSON object."
+        model = request.model or self.default_model
+        key = request.metadata.get("task_id")
         timeout = max(request.timeout_s, self.timeout_s)
         attempt = 0
         while True:
+            session, unseen = self._continuation(key, model, system, request.messages)
+            prompt = render_transcript(unseen) + ANSWER_NOW
             try:
-                return await self._call(request.model or self.default_model, system, prompt, timeout)
+                resp = await self._call(model, system, prompt, timeout, resume=session.id if session else None, persist=bool(key))
             except LLMError as e:
+                if session:
+                    self._discard(session.id)
                 if attempt >= self.max_retries or "did not answer" in str(e):
                     raise
                 log.warning("cli provider failed, retrying", extra={"provider": self.name, "error": str(e)})
                 attempt += 1
                 await asyncio.sleep(2 * attempt)
+                continue
+            sid = resp.raw_provider_response.get("session_id")
+            if key and isinstance(sid, str) and sid:
+                if session and session.id != sid:
+                    self._discard(session.id)
+                sent = [_digest(m.model_dump_json()) for m in request.messages]
+                self._keep(key, CliSession(sid, model, _digest(system), sent, resp.tool_calls[0].id if resp.tool_calls else None))
+            return resp
 
-    async def _call(self, model: str, system: str, prompt: str, timeout_s: int) -> ModelResponse:
+    def _continuation(self, key: str | None, model: str, system: str, messages: list[Message]) -> tuple[CliSession | None, list[Message]]:
+        """The task's session if this request extends what it holds by its answer and new messages, with those messages.
+
+        The session is taken out while the call runs, so a failed or cancelled call never leaves a stale one."""
+        s = self.sessions.pop(key, None) if key else None
+        if s is None:
+            return None, messages
+        n = len(s.sent)
+        answer = messages[n] if len(messages) > n + 1 else None
+        calls = (answer.tool_calls or []) if answer else []
+        if (
+            answer is None
+            or answer.role != "assistant"
+            or (calls[0].get("id") if calls else None) != s.answer_call
+            or (s.model, s.system) != (model, _digest(system))
+            or [_digest(m.model_dump_json()) for m in messages[:n]] != s.sent
+        ):
+            self._discard(s.id)
+            return None, messages
+        return s, messages[n + 1 :]
+
+    def _keep(self, key: str, session: CliSession) -> None:
+        self.sessions[key] = session
+        while len(self.sessions) > MAX_SESSIONS:
+            _, old = self.sessions.popitem(last=False)
+            self._discard(old.id)
+
+    def _discard(self, session_id: str) -> None:
+        for path in self._session_files(session_id):
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+
+    def _session_files(self, session_id: str) -> list[Path]:
+        return []
+
+    async def _call(self, model: str, system: str, prompt: str, timeout_s: int, resume: str | None = None, persist: bool = False) -> ModelResponse:
+        """One CLI run. `resume` continues that session with `prompt`; `persist` keeps a new session for resuming."""
         raise NotImplementedError
 
     async def fetch_limits(self) -> list[LimitWindow] | None:
@@ -224,6 +293,8 @@ class CliProvider:
         self.limits, self.limits_at, self.limits_source = windows, now_iso(), source
 
     async def aclose(self) -> None:
+        while self.sessions:
+            self._discard(self.sessions.popitem()[1].id)
         if self._workdir:
             shutil.rmtree(self._workdir, ignore_errors=True)
             self._workdir = None
@@ -247,14 +318,40 @@ class ClaudeCodeProvider(CliProvider):
             return True, f"logged in ({status.get('email') or status.get('authMethod') or 'ok'})"
         return False, "not logged in: run `claude` on the Core host and log in"
 
-    async def _call(self, model: str, system: str, prompt: str, timeout_s: int) -> ModelResponse:
+    def _session_files(self, session_id: str) -> list[Path]:
+        config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+        return [*config_dir.glob(f"projects/*/{session_id}.jsonl"), *config_dir.glob(f"projects/*/{session_id}")]
+
+    async def aclose(self) -> None:
+        workdir = self._workdir
+        await super().aclose()
+        if workdir:
+            config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+            shutil.rmtree(config_dir / "projects" / re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(workdir)), ignore_errors=True)
+
+    async def _call(self, model: str, system: str, prompt: str, timeout_s: int, resume: str | None = None, persist: bool = False) -> ModelResponse:
         # No --json-schema: it registers a tool, and with any tool present the model starts calling our action names
         # as functions. With no tools at all it can only write text, which holds the JSON object.
         # stream-json (not json) because the stream carries `rate_limit_event` with the subscription windows.
         args = [
-            "-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--tools", "", "--setting-sources", "",
+            "-p", "--output-format", "stream-json", "--verbose", "--tools", "", "--setting-sources", "",
             "--strict-mcp-config", "--max-turns", "2", "--model", model, "--system-prompt", system,
         ]  # fmt: skip
+        new_session = None if resume or not persist else str(uuid.uuid4())
+        if resume:
+            args += ["--resume", resume]
+        elif new_session:
+            args += ["--session-id", new_session]
+        else:
+            args.append("--no-session-persistence")
+        try:
+            return await self._run_claude(args, prompt, timeout_s)
+        except LLMError:
+            if new_session:
+                self._discard(new_session)
+            raise
+
+    async def _run_claude(self, args: list[str], prompt: str, timeout_s: int) -> ModelResponse:
         code, out, err = await self._exec(args, prompt, timeout_s)
         data: dict[str, Any] = {}
         for line in out.splitlines():
@@ -275,9 +372,12 @@ class ClaudeCodeProvider(CliProvider):
             answer = extract_json_object(str(data.get("result") or ""))
         resp = parse_answer(answer) if answer else ModelResponse(text=str(data.get("result") or ""), tool_calls=[], finish_reason="stop")
         usage = data.get("usage") or {}
+        read, written = int(usage.get("cache_read_input_tokens") or 0), int(usage.get("cache_creation_input_tokens") or 0)
         resp.usage = TokenUsage(
-            prompt_tokens=int(usage.get("input_tokens", 0)) + int(usage.get("cache_read_input_tokens", 0)),
-            completion_tokens=int(usage.get("output_tokens", 0)),
+            prompt_tokens=int(usage.get("input_tokens") or 0) + read + written,
+            completion_tokens=int(usage.get("output_tokens") or 0),
+            cached_tokens=read,
+            cache_write_tokens=written,
         )
         resp.raw_provider_response = {k: data.get(k) for k in ("session_id", "num_turns", "total_cost_usd", "modelUsage")}
         return resp
@@ -405,7 +505,7 @@ class CodexCliProvider(CliProvider):
         self._set_limits(windows, "codex app-server")
         return windows
 
-    async def _call(self, model: str, system: str, prompt: str, timeout_s: int) -> ModelResponse:
+    async def _call(self, model: str, system: str, prompt: str, timeout_s: int, resume: str | None = None, persist: bool = False) -> ModelResponse:
         if not self.models or model not in self.models:
             await self.list_models()
         if not model:
@@ -419,21 +519,27 @@ class CodexCliProvider(CliProvider):
         schema_file = workdir / "answer-schema.json"
         schema_file.write_text(json.dumps(ANSWER_SCHEMA))
         last = workdir / f"last-{new_id('msg')}.txt"
-        args = [
-            "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--color", "never",
-            "-s", "read-only", "-C", str(workdir), "-m", model, "--output-last-message", str(last),
-            "--output-schema", str(schema_file), "-",
+        common = [
+            "--json", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "-m", model,
+            "--output-last-message", str(last), "--output-schema", str(schema_file),
         ]  # fmt: skip
-        full_prompt = "## System instructions\n" + system + "\n\n## Conversation\n" + prompt
-        code, out, err = await self._exec(args, full_prompt, timeout_s)
+        if resume:
+            args = ["exec", "resume", resume, *common, "-c", 'sandbox_mode="read-only"', "-"]
+            stdin = prompt
+        else:
+            args = ["exec", *common, *([] if persist else ["--ephemeral"]), "--color", "never", "-s", "read-only", "-C", str(workdir), "-"]
+            stdin = "## System instructions\n" + system + "\n\n## Conversation\n" + prompt
+        code, out, err = await self._exec(args, stdin, timeout_s)
         usage: dict[str, Any] = {}
-        failure = ""
+        failure = thread = ""
         for line in out.splitlines():
             try:
                 ev = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if ev.get("type") == "turn.completed":
+            if ev.get("type") == "thread.started":
+                thread = str(ev.get("thread_id") or "")
+            elif ev.get("type") == "turn.completed":
                 usage = ev.get("usage") or {}
             elif ev.get("type") in ("turn.failed", "error"):
                 failure = str((ev.get("error") or {}).get("message") or ev.get("message") or "")
@@ -443,13 +549,26 @@ class CodexCliProvider(CliProvider):
             text = ""
         finally:
             last.unlink(missing_ok=True)
-        if not text:
-            raise LLMError(f"codex returned no answer (exit {code}): {(failure or err or out)[-400:]}")
         try:
-            answer = json.loads(text)
-        except json.JSONDecodeError as e:
-            raise LLMError(f"codex answered without the JSON object: {text[:400]}") from e
+            if not text:
+                raise LLMError(f"codex returned no answer (exit {code}): {(failure or err or out)[-400:]}")
+            try:
+                answer = json.loads(text)
+            except json.JSONDecodeError as e:
+                raise LLMError(f"codex answered without the JSON object: {text[:400]}") from e
+        except LLMError:
+            if thread and not resume:
+                self._discard(thread)
+            raise
         resp = parse_answer(answer)
-        resp.usage = TokenUsage(prompt_tokens=int(usage.get("input_tokens", 0)), completion_tokens=int(usage.get("output_tokens", 0)))
-        resp.raw_provider_response = {"usage": usage}
+        resp.usage = TokenUsage(
+            prompt_tokens=int(usage.get("input_tokens") or 0),
+            completion_tokens=int(usage.get("output_tokens") or 0),
+            cached_tokens=int(usage.get("cached_input_tokens") or 0),
+        )
+        resp.raw_provider_response = {"usage": usage, "session_id": thread or resume}
         return resp
+
+    def _session_files(self, session_id: str) -> list[Path]:
+        codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+        return list(codex_home.glob(f"sessions/*/*/*/rollout-*-{session_id}.jsonl"))

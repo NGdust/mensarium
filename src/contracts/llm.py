@@ -35,8 +35,10 @@ class ProposedToolCall(BaseModel):
 
 
 class TokenUsage(BaseModel):
-    prompt_tokens: int = 0
+    prompt_tokens: int = Field(default=0, description="All input tokens of the request, cached ones included")
     completion_tokens: int = 0
+    cached_tokens: int = Field(default=0, description="Input tokens served from the provider's prompt cache")
+    cache_write_tokens: int = Field(default=0, description="Input tokens written to the prompt cache (providers that bill it)")
 
 
 class ModelResponse(BaseModel):
