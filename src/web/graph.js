@@ -22,7 +22,7 @@ export const kindIcon = (kind) => KIND_ICONS[kind] || 'file';
 
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const HUB_R = 84;
+const HUB_R = 150;
 const TILE_R = 23;
 
 const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
@@ -73,7 +73,7 @@ export function layoutMemory(nodes, links, centerId) {
   const perDepth = [];
   for (const [id, d] of depth) if (id !== centerId) perDepth[d] = (perDepth[d] || 0) + 1;
   const rings = [0];
-  for (let d = 1; d < perDepth.length; d++) rings[d] = Math.max(d === 1 ? 230 : rings[d - 1] + 165, (perDepth[d] * 112) / (2 * Math.PI));
+  for (let d = 1; d < perDepth.length; d++) rings[d] = Math.max(d === 1 ? 310 : rings[d - 1] + 170, (perDepth[d] * 112) / (2 * Math.PI));
   const pos = new Map([[centerId, { x: 0, y: 0, a: 0, r: 0, depth: 0 }]]);
   const span = new Map([[centerId, [-Math.PI / 2, (3 * Math.PI) / 2]]]);
   for (const id of order) {
@@ -100,7 +100,7 @@ export function layoutMemory(nodes, links, centerId) {
   return { pos, tree, cross, rings, parent, adj };
 }
 
-export function createMemoryMap(stage, { icon, onSelect, centerTitle, countText }) {
+export function createMemoryMap(stage, { icon, onSelect, onFile, centerTitle, countText }) {
   const world = el('div', 'mm-world');
   const svg = svgEl('svg', { class: 'mm-lines', width: '1', height: '1' });
   const ringsG = svgEl('g');
@@ -120,6 +120,8 @@ export function createMemoryMap(stage, { icon, onSelect, centerTitle, countText 
   let hovered = null;
   let token = 0;
   let moved = false;
+  let files = [];
+  let hubBox = { hw: HUB_R, hh: HUB_R };
 
   const apply = () => {
     world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.k})`;
@@ -131,7 +133,9 @@ export function createMemoryMap(stage, { icon, onSelect, centerTitle, countText 
     const a = layout.pos.get(from);
     const b = layout.pos.get(to);
     const ang = from === centerId ? b.a : Math.atan2(b.y - a.y, b.x - a.x);
-    const start = from === centerId ? polar(HUB_R, b.a) : { x: a.x + Math.cos(ang) * TILE_R, y: a.y + Math.sin(ang) * TILE_R };
+    // from the centre a line leaves the card at its edge, whatever the card's shape
+    const edge = Math.min(hubBox.hw / Math.max(Math.abs(Math.cos(ang)), 1e-6), hubBox.hh / Math.max(Math.abs(Math.sin(ang)), 1e-6)) + 4;
+    const start = from === centerId ? polar(edge, b.a) : { x: a.x + Math.cos(ang) * TILE_R, y: a.y + Math.sin(ang) * TILE_R };
     const end = { x: b.x - Math.cos(ang) * TILE_R, y: b.y - Math.sin(ang) * TILE_R };
     if (from === centerId) return `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
     const rm = (a.r + b.r) / 2;
@@ -165,25 +169,47 @@ export function createMemoryMap(stage, { icon, onSelect, centerTitle, countText 
     return b;
   }
 
+  // the centre holds the central note and the instruction files the agent reads before every chat
   function hubEl(n) {
-    const b = el('button', 'mm-hub hub-edge');
-    b.type = 'button';
-    b.append(createOrb(64, { animate: true, className: 'md' }));
+    const hub = el('div', 'mm-hub hub-edge');
+    const head = el('button', 'mm-hub-head');
+    head.type = 'button';
+    head.append(createOrb(56, { animate: true, className: 'md' }));
     const title = el('span', 'mm-hub-title');
     title.textContent = n ? n.label : centerTitle;
     const sub = el('span', 'mm-hub-sub');
     sub.textContent = countText(nodes.filter((x) => !x.ghost && x.id !== centerId).length);
-    b.append(title, sub);
-    b.setAttribute('aria-label', title.textContent);
-    if (n && !n.virtual) b.addEventListener('click', () => { select(n.id); onSelect?.(n); });
-    return b;
+    head.append(title, sub);
+    head.setAttribute('aria-label', title.textContent);
+    if (n && !n.virtual) head.addEventListener('click', () => { select(n.id); onSelect?.(n); });
+    hub.append(head);
+    if (files.length) {
+      const grid = el('div', 'mm-files');
+      for (const f of files) {
+        const b = el('button', `mm-file${f.custom ? ' custom' : ''}${f.over ? ' over' : ''}`);
+        b.type = 'button';
+        b.title = f.desc;
+        b.append(icon('file'));
+        const name = el('span', 'mm-file-name');
+        name.textContent = f.name.replace(/\.md$/, '');
+        const dot = el('span', 'mm-file-dot');
+        b.append(name, dot);
+        b.addEventListener('click', () => { select(null); onFile?.(f.name); });
+        grid.append(b);
+      }
+      hub.append(grid);
+    }
+    return hub;
   }
 
   function render() {
     world.querySelectorAll('.mm-node, .mm-hub, .mm-packet').forEach((x) => x.remove());
     ringsG.replaceChildren(...[...layout.rings.slice(1), (layout.rings.at(-1) || 0) + 165, (layout.rings.at(-1) || 0) + 330]
       .filter((r) => r > 0).map((r, i, all) => svgEl('circle', { class: i >= all.length - 2 ? 'mm-ring faint' : 'mm-ring', cx: 0, cy: 0, r })));
-    if (layout.rings.length < 2) ringsG.replaceChildren(...[230, 395].map((r) => svgEl('circle', { class: 'mm-ring faint', cx: 0, cy: 0, r })));
+    if (layout.rings.length < 2) ringsG.replaceChildren(...[310, 480].map((r) => svgEl('circle', { class: 'mm-ring faint', cx: 0, cy: 0, r })));
+    const hub = hubEl(byId.get(centerId));
+    world.append(hub);
+    hubBox = { hw: hub.offsetWidth / 2 || HUB_R, hh: hub.offsetHeight / 2 || HUB_R };
     crossG.replaceChildren();
     treeG.replaceChildren();
     edges = [];
@@ -206,8 +232,6 @@ export function createMemoryMap(stage, { icon, onSelect, centerTitle, countText 
       world.append(b);
       nodeEls.set(n.id, b);
     }
-    const hub = hubEl(byId.get(centerId));
-    world.append(hub);
     nodeEls.set(centerId, hub);
     light();
   }
@@ -292,11 +316,14 @@ export function createMemoryMap(stage, { icon, onSelect, centerTitle, countText 
     send(selected);
   }
 
-  function fit() {
+  // the first view frames the centre and the two nearest rings; "show all" is one button away
+  function fit(all = false) {
     const { w, h } = size();
     if (!layout || !w) return;
-    const outer = Math.max(HUB_R + 40, ...[...layout.pos.values()].map((p) => p.r + 80));
-    const k = Math.max(w < 600 ? 0.42 : 0.3, Math.min(1.1, Math.min(w, h) / (outer * 2 + 40)));
+    const rings = layout.rings.slice(1);
+    const near = w < 600 ? rings[0] : rings[1] ?? rings[0];
+    const outer = all ? Math.max(HUB_R + 60, ...[...layout.pos.values()].map((p) => p.r + 90)) : (near ?? HUB_R) + 90;
+    const k = Math.max(0.3, Math.min(1.1, Math.min(w, h) / (outer * 2 + 20)));
     view = { k, x: w / 2, y: h / 2 };
     apply();
   }
@@ -378,7 +405,11 @@ export function createMemoryMap(stage, { icon, onSelect, centerTitle, countText 
       if (!moved) fit();
     },
     select,
-    fit() { moved = false; fit(); },
+    fit() { moved = false; fit(true); },
+    setFiles(list) {
+      files = list;
+      if (layout) render();
+    },
     zoom: (f) => zoom(f),
     isImplicit: (id) => !!layout?.tree.find((e) => e.to === id && e.implicit),
     destroy() { ro.disconnect(); token++; },

@@ -22,7 +22,7 @@ def default_text(name: str) -> str:
 
 
 class InstructionStore:
-    """Markdown files the user edits in Settings; every chat gets them in the system prompt.
+    """Markdown files the user edits in the centre of the memory page; every chat gets them in the system prompt.
 
     Same set and meaning as the OpenClaw workspace files, minus MEMORY.md: Mensarium keeps memory as notes.
     A file the user has not written falls back to the bundled default."""

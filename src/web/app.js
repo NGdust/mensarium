@@ -1916,7 +1916,6 @@ const SETTINGS = [
   ['channels', 'send', tr('Channels')],
   ['memory', 'graph', tr('Memory')],
   ['skills', 'book', tr('Skills')],
-  ['instructions', 'file', tr('Instructions')],
   ['plugins', 'package', tr('Plugins')],
   ['profiles', 'layers', tr('Profiles')],
   ['audit', 'list', tr('Activity log')],
@@ -1974,9 +1973,10 @@ const copyBtn = (text) => h('button', { class: 'icon-btn', 'aria-label': tr('Cop
 const cmdValue = (cmd) => [h('code', {}, cmd), copyBtn(cmd)];
 
 async function viewSettings(key) {
+  if (key === 'instructions') { go('#/settings/memory'); return; }
   const shell = ensureSettingsShell();
   shell.setActive();
-  const views = { overview: settingsOverview, providers: settingsProviders, model: settingsProviders, devices: settingsDevices, channels: settingsChannels, memory: settingsMemory, skills: settingsSkills, instructions: settingsInstructions, plugins: settingsPlugins, marketplace: settingsPlugins, profiles: settingsProfiles, audit: settingsAudit };
+  const views = { overview: settingsOverview, providers: settingsProviders, model: settingsProviders, devices: settingsDevices, channels: settingsChannels, memory: settingsMemory, skills: settingsSkills, plugins: settingsPlugins, marketplace: settingsPlugins, profiles: settingsProfiles, audit: settingsAudit };
   await (views[key] || settingsOverview)(shell);
 }
 
@@ -2552,12 +2552,39 @@ async function settingsMemory(shell) {
     const side = h('aside', { class: 'graph-side mm-ui hidden' });
     const search = h('input', { type: 'search', placeholder: tr('Find a note'), 'aria-label': tr('Find a note on the graph') });
     let data = { nodes: [], links: [], center: null };
+    let files = [];
+    let limit = 20000;
     const map = createMemoryMap(stage, {
       icon,
       centerTitle: tr('About me'),
       countText: (n) => tp('{0} note around|{0} notes around', n),
       onSelect: (node) => preview(node),
+      onFile: (name) => previewFile(name),
     });
+
+    async function loadFiles() {
+      const ins = await get('/v1/instructions');
+      files = ins.items;
+      limit = ins.limit;
+      map.setFiles(files.map((f) => ({ name: f.name, custom: f.custom, over: f.content.length > limit, desc: INSTRUCTION_DESC[f.name] ? INSTRUCTION_DESC[f.name]() : f.description })));
+    }
+    function previewFile(name) {
+      const f = files.find((x) => x.name === name);
+      if (!f) return;
+      side.classList.remove('hidden');
+      side.replaceChildren(...[
+        h('div', { class: 'graph-side-head' }, h('h3', {}, h('code', {}, f.name)), h('button', { class: 'icon-btn', 'aria-label': tr('Close'), onclick: hideSide }, icon('x'))),
+        h('div', { class: 'graph-side-meta' }, f.custom ? h('span', { class: 'pill accent' }, tr('your text')) : h('span', { class: 'pill' }, tr('default')), f.content.length > limit ? h('span', { class: 'pill warn' }, tr('too long')) : null),
+        h('p', { class: 'muted' }, INSTRUCTION_DESC[f.name] ? INSTRUCTION_DESC[f.name]() : f.description, ' ', tr('The agent reads it at the start of every chat.')),
+        h('div', { class: 'prose graph-side-body', html: markdown(f.content || '') }),
+        h('div', { class: 'market-meta' }, [tr('{0} / {1} characters', f.content.length.toLocaleString(locale), limit.toLocaleString(locale)), f.custom && f.updated_at ? tr('updated {0}', relTime(f.updated_at)) : null].filter(Boolean).join(' · ')),
+        h('div', { class: 'graph-side-actions' },
+          h('button', { class: 'btn btn-sm', onclick: () => openInstructionEditor(f, limit, async () => { await loadFiles(); previewFile(name); }) }, tr('Edit')),
+          f.custom ? h('button', { class: 'btn btn-sm', onclick: async () => {
+            try { await api(`/v1/instructions/${f.name}`, { method: 'PUT', body: JSON.stringify({ content: '' }) }); toast(tr('Back to the default')); await loadFiles(); previewFile(name); } catch (err) { fail(err); }
+          } }, tr('Reset to default')) : null),
+      ].filter(Boolean));
+    }
 
     async function load() {
       data = await get('/v1/memory/graph');
@@ -2627,6 +2654,7 @@ async function settingsMemory(shell) {
     );
     host.append(stage);
     await load();
+    await loadFiles().catch(fail);
     return () => map.destroy();
   }
 
@@ -2650,7 +2678,19 @@ async function settingsMemory(shell) {
     }
     search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => load().catch(fail), 200); });
     kindFilter.addEventListener('change', () => load().catch(fail));
-    host.append(h('div', { class: 'page' }, h('div', { class: 'page-inner page-wide' }, h('div', { class: 'graph-toolbar' }, h('div', { class: 'settings-search graph-search' }, icon('search'), search), kindFilter), list)));
+    const filesBox = h('div', { class: 'rows' }, h('div', { class: 'empty' }, tr('Loading...')));
+    async function loadFiles() {
+      const ins = await get('/v1/instructions');
+      filesBox.replaceChildren(...ins.items.map((f) => h('button', { class: 'note-item', onclick: () => openInstructionEditor(f, ins.limit, loadFiles) },
+        h('span', { class: 'mem-file-icon' }, icon('file')),
+        h('div', { class: 'row-text' },
+          h('div', { class: 'row-title' }, h('code', {}, f.name), f.custom ? null : h('span', { class: 'pill' }, tr('default')), f.content.length > ins.limit ? h('span', { class: 'pill warn' }, tr('too long')) : null),
+          h('div', { class: 'row-desc' }, INSTRUCTION_DESC[f.name] ? INSTRUCTION_DESC[f.name]() : f.description)))));
+    }
+    host.append(h('div', { class: 'page' }, h('div', { class: 'page-inner page-wide' },
+      section(tr('Instruction files'), tr('The agent reads these at the start of every chat: how to work, its persona and name, who you are. Each has a default until you write your own.'), filesBox),
+      section(tr('Notes'), null, h('div', { class: 'graph-toolbar' }, h('div', { class: 'settings-search graph-search' }, icon('search'), search), kindFilter), list))));
+    loadFiles().catch(fail);
     await load();
     return () => clearTimeout(timer);
   }
@@ -2878,72 +2918,37 @@ const INSTRUCTION_HINT = {
   'USER.md': () => tr('# User\n\nName, role, timezone, preferred languages and tools.'),
 };
 
-async function settingsInstructions(shell) {
-  const list = h('div', {}, h('div', { class: 'empty' }, tr('Loading...')));
-  let items = [];
-  let folder = '';
-  let limit = 20000;
-
-  function fileRow(f) {
-    const desc = INSTRUCTION_DESC[f.name] ? INSTRUCTION_DESC[f.name]() : f.description;
-    return h('div', { class: 'row' },
-      h('span', { class: 'market-icon' }, icon('file')),
-      h('div', { class: 'row-text' },
-        h('div', { class: 'row-title' }, h('code', {}, f.name),
-          f.custom ? null : h('span', { class: 'pill' }, tr('default')),
-          f.content.length > limit ? h('span', { class: 'pill warn', title: tr('The agent sees only the first {0} characters', limit.toLocaleString(locale)) }, tr('too long')) : null),
-        h('div', { class: 'row-desc' }, desc)),
-      h('div', { class: 'row-value' },
-        f.custom ? h('span', {}, tr('{0} characters, {1}', f.content.length.toLocaleString(locale), relTime(f.updated_at))) : null,
-        h('button', { class: 'btn btn-sm', onclick: () => editor(f) }, tr('Edit'))));
-  }
-
-  function editor(f) {
-    const body = h('textarea', { class: 'market-yaml skill-body', rows: 18, spellcheck: 'false', 'aria-label': f.name, placeholder: INSTRUCTION_HINT[f.name] ? INSTRUCTION_HINT[f.name]() : '' });
-    body.value = f.content;
-    const count = h('div', { class: 'row-desc' });
-    const updateCount = () => {
-      const n = body.value.length;
-      count.textContent = tr('{0} / {1} characters', n.toLocaleString(locale), limit.toLocaleString(locale));
-      count.classList.toggle('over', n > limit);
-    };
-    body.addEventListener('input', updateCount);
-    updateCount();
-    const put = async (content, done) => {
-      await api(`/v1/instructions/${f.name}`, { method: 'PUT', body: JSON.stringify({ content }) });
-      closeLayer();
-      toast(done);
-      await load();
-    };
-    const save = h('button', { class: 'btn btn-primary' }, tr('Save'));
-    save.addEventListener('click', async () => {
-      save.disabled = true;
-      try { await put(body.value, tr('Saved')); } catch (err) { fail(err); } finally { save.disabled = false; }
-    });
-    const reset = f.custom ? h('button', { class: 'btn btn-sm', onclick: () => put('', tr('Back to the default')).catch(fail) }, tr('Reset to default')) : null;
-    openModal(
-      h('div', { class: 'modal-head' }, h('h2', {}, f.name), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
-      h('p', { class: 'row-desc' }, INSTRUCTION_DESC[f.name] ? INSTRUCTION_DESC[f.name]() : f.description, ' ', tr('The agent sees the first {0} characters at the start of every chat. Saving an empty text brings the default back.', limit.toLocaleString(locale))),
-      h('div', { class: 'plugin-form' }, body, count),
-      h('div', { class: 'modal-actions' }, reset, h('span', { class: 'spacer' }), h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
-    ).classList.add('modal-wide');
-    body.focus();
-  }
-
-  function render() {
-    list.replaceChildren(section(tr('Files'), tr('Files in {0}. Edit them here or in that folder.', folder), h('div', { class: 'rows' }, items.map(fileRow))));
-  }
-
-  async function load() {
-    const data = await get('/v1/instructions');
-    items = data.items;
-    folder = data.folder;
-    limit = data.limit;
-    render();
-  }
-
-  page(shell, tr('Instructions'), tr('Markdown files the agent reads at the start of every chat: how to work, its persona and name, who you are. Same files as an OpenClaw workspace, so you can copy yours over. Each comes with a default until you write your own.'), null, list);
-  await load();
+// The instruction files the agent reads at the start of every chat; an empty save brings the default back.
+function openInstructionEditor(f, limit, onSaved) {
+  const body = h('textarea', { class: 'market-yaml skill-body', rows: 18, spellcheck: 'false', 'aria-label': f.name, placeholder: INSTRUCTION_HINT[f.name] ? INSTRUCTION_HINT[f.name]() : '' });
+  body.value = f.content;
+  const count = h('div', { class: 'row-desc' });
+  const updateCount = () => {
+    const n = body.value.length;
+    count.textContent = tr('{0} / {1} characters', n.toLocaleString(locale), limit.toLocaleString(locale));
+    count.classList.toggle('over', n > limit);
+  };
+  body.addEventListener('input', updateCount);
+  updateCount();
+  const put = async (content, done) => {
+    const saved = await api(`/v1/instructions/${f.name}`, { method: 'PUT', body: JSON.stringify({ content }) });
+    closeLayer();
+    toast(done);
+    await onSaved?.(saved);
+  };
+  const save = h('button', { class: 'btn btn-primary' }, tr('Save'));
+  save.addEventListener('click', async () => {
+    save.disabled = true;
+    try { await put(body.value, tr('Saved')); } catch (err) { fail(err); } finally { save.disabled = false; }
+  });
+  const reset = f.custom ? h('button', { class: 'btn btn-sm', onclick: () => put('', tr('Back to the default')).catch(fail) }, tr('Reset to default')) : null;
+  openModal(
+    h('div', { class: 'modal-head' }, h('h2', {}, f.name), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
+    h('p', { class: 'row-desc' }, INSTRUCTION_DESC[f.name] ? INSTRUCTION_DESC[f.name]() : f.description, ' ', tr('The agent sees the first {0} characters at the start of every chat. Saving an empty text brings the default back.', limit.toLocaleString(locale))),
+    h('div', { class: 'plugin-form' }, body, count),
+    h('div', { class: 'modal-actions' }, reset, h('span', { class: 'spacer' }), h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
+  ).classList.add('modal-wide');
+  body.focus();
 }
 
 function pluginState(p, devices) {
