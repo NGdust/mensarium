@@ -1335,7 +1335,10 @@ async function viewNewChat(projectId = null) {
     ? h('a', { class: 'chip', href: `#/projects/${project.id}`, title: `${project.source_name || ''}:${project.source_path}` }, icon(KIND_ICON[project.kind] || 'folder'), h('span', { class: 'chip-label' }, project.name))
     : null;
   // A repo chat starts its own branch; the chip picks the branch it starts from or names the new one.
-  const ws = project?.kind === 'repo' ? workspacePicker(project) : null;
+  // It opens right away, before the chat is written; cancelling it goes back to the project.
+  const ws = project?.kind === 'repo'
+    ? workspacePicker(project, { onDone: () => c.textarea.focus(), onCancel: () => go(`#/projects/${project.id}`) })
+    : null;
 
   const c = composer({
     placeholder: tr('Describe the task for the agent'),
@@ -3766,14 +3769,14 @@ const BRANCH_OK = /^(?![-/.])(?!.*\.\.)(?!.*\/\/)(?!.*\/\.)(?!.*@\{)(?!.*\.lock(
 
 // The working copy of a new repo chat: empty starts a new branch from the main one, a listed branch is the start,
 // any other name becomes a new branch from the main one. Hidden when the device cannot list branches.
-function workspacePicker(project) {
+function workspacePicker(project, { onDone, onCancel }) {
   let branches = [];
   let main = null;
   let repoMain = null;
   let current = null;
   let value = '';
   const label = h('span', { class: 'chip-label' });
-  const el = h('button', { class: 'chip chip-ws hidden', type: 'button', 'aria-haspopup': 'dialog', onclick: () => open() }, icon('git'), label, icon('chevron'));
+  const el = h('button', { class: 'chip chip-ws hidden', type: 'button', 'aria-haspopup': 'dialog', onclick: () => open(false) }, icon('git'), label, icon('chevron'));
   const known = (name) => branches.some((b) => b.name === name);
   const describe = (name) => (!name
     ? tr('The chat gets its own new branch from {0}.', main)
@@ -3792,9 +3795,11 @@ function workspacePicker(project) {
     current = r.current;
     el.classList.remove('hidden');
     render();
+    if (el.isConnected) open(true);
   }, () => {});
 
-  function open() {
+  function open(first) {
+    const cancel = () => { closeLayer(); if (first) onCancel(); };
     const input = h('input', { type: 'text', value, maxlength: 200, spellcheck: 'false', autocapitalize: 'off', placeholder: tr('Branch or new branch name'), 'aria-label': tr('Branch') });
     const status = h('div', { class: 'ws-status' });
     const list = h('div', { class: 'ws-list', role: 'listbox' });
@@ -3805,6 +3810,7 @@ function workspacePicker(project) {
       value = name;
       render();
       closeLayer();
+      onDone();
     };
     const tags = (b) => [
       b.name === repoMain ? h('span', { class: 'pill tag-kind' }, tr('main')) : null,
@@ -3826,10 +3832,10 @@ function workspacePicker(project) {
     input.addEventListener('input', refresh);
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); if (!done.disabled) apply(input.value); } });
     openModal(
-      h('div', { class: 'modal-head' }, h('h2', {}, tr('Working copy')), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
+      h('div', { class: 'modal-head' }, h('h2', {}, tr('Working copy')), h('button', { class: 'icon-btn', onclick: cancel, 'aria-label': tr('Close') }, icon('x'))),
       h('p', {}, tr('The chat works in its own copy of the repository on a new branch, so your checkout stays as it is. Pick the branch to start from or type a name for the new branch.')),
       input, status, list,
-      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), done),
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: cancel }, tr('Cancel')), done),
     ).classList.add('modal-wide');
     refresh();
     input.focus();
