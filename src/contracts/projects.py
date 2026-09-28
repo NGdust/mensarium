@@ -6,9 +6,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from mensarium.shared.redaction import SECRET_FILE_PATTERNS
 
 ProjectKind = Literal["repo", "folder"]
-ProjectOpName = Literal["browse", "checkout", "commit", "status", "remove", "branches"]
+ProjectOpName = Literal["browse", "checkout", "commit", "status", "remove", "branches", "diff"]
 # Ops a client lists in capabilities.project_ops; a client without them rejects the frame and never answers.
-EXTRA_OPS: tuple[ProjectOpName, ...] = ("branches",)
+EXTRA_OPS: tuple[ProjectOpName, ...] = ("branches", "diff")
 OpState = Literal["ok", "conflict", "error"]
 SnapshotState = Literal["ok", "unchanged", "error"]
 

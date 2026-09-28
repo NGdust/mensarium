@@ -107,6 +107,7 @@ const ICONS = {
   laptop: '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>',
   sliders: '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
   sidebar: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/>',
+  panelRight: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/>',
   chevron: '<path d="m6 9 6 6 6-6"/>',
   arrowLeft: '<path d="M19 12H5M11 18l-6-6 6-6"/>',
   arrowUp: '<path d="M12 19V5M6 11l6-6 6 6"/>',
@@ -1404,6 +1405,7 @@ async function viewChat(taskId) {
     setStatus(t.status);
   };
   const btnDelete = h('button', { class: 'icon-btn', title: tr('Delete chat'), 'aria-label': tr('Delete chat'), onclick: () => deleteChat(task) }, icon('trash'));
+  const changes = task.project_id && !task.parent_id ? changesPanel(taskId) : null;
 
   const thread = h('div', { class: 'thread' });
   const inner = h('div', { class: 'thread-inner', role: 'log', 'aria-live': 'polite' });
@@ -1439,13 +1441,12 @@ async function viewChat(taskId) {
   const crumb = project
     ? h('a', { class: 'crumb-device', href: `#/projects/${project.id}` }, icon(KIND_ICON[project.kind] || 'folder'), project.name, h('span', { class: 'sep' }, '/'))
     : h('span', { class: 'crumb-device' }, icon('laptop'), task.target_name || tr('device'), h('span', { class: 'sep' }, '/'));
+  const chatBody = [thread, h('div', { class: 'thread-banner' }, banner || ''), c.el];
   shell.panel.replaceChildren(
     topbar(shell,
       [crumb, h('span', { class: 'current', title: task.input }, taskTitle(task))],
-      [btnDelete]),
-    thread,
-    h('div', { class: 'thread-banner' }, banner || ''),
-    c.el,
+      [changes?.btn, btnDelete].filter(Boolean)),
+    ...(changes ? [h('div', { class: 'chat-split' }, h('div', { class: 'chat-main' }, chatBody), changes.el)] : chatBody),
   );
 
   function setStatus(status) {
@@ -1712,6 +1713,7 @@ async function viewChat(taskId) {
         break;
       case 'tool_call.result':
         toolResult(p);
+        if (live) changes?.later();
         break;
       case 'task.final':
         a.result.replaceChildren(h('div', { class: 'agent-result-title' }, tr('Report')), h('div', { class: 'prose', html: markdown(p.text) }), ...(p.image_artifact_id ? [shot(p.image_artifact_id, 'msg-shot')] : []));
@@ -1782,6 +1784,7 @@ async function viewChat(taskId) {
         plan.set(p.items || []);
         break;
       case 'task.project':
+        if (live) changes?.later(true);
         if (p.kind === 'checkout') note(KIND_ICON[project?.kind] || 'folder', project?.kind === 'repo' && p.branch ? [tr('Working copy ready'), p.branch, p.base && p.base !== 'snapshot' ? tr('from {0}', p.base) : null].filter(Boolean).join(' · ') : tr('Working copy ready'));
         else if (p.error != null) note('alert', tr('Could not save this turn: {0}', p.error || tr('error')), 'error');
         else if (p.changed) note('file', tp('{0} file changed|{0} files changed', p.changed));
@@ -1837,6 +1840,7 @@ async function viewChat(taskId) {
       case 'tool_call.result':
         stamp(ev);
         toolResult(p);
+        if (live) changes?.later();
         break;
       case 'task.final': {
         finishWork();
@@ -3614,6 +3618,128 @@ async function viewAutomationEditor(id) {
 }
 
 // ---------- projects ----------
+
+// The files a project chat changed since it started, in a side panel behind a topbar button; each opens its diff.
+function changesPanel(taskId) {
+  // On a phone the panel covers the chat, so it opens only by hand there.
+  let open = localStorageGet('changesOpen') === '1' && matchMedia('(min-width: 861px)').matches;
+  let data = null;
+  let error = '';
+  let busy = false;
+  let again = false;
+  let timer = 0;
+  viewCleanups.push(() => clearTimeout(timer));
+  const count = h('span', { class: 'changes-count hidden' });
+  const btn = h('button', { class: 'icon-btn changes-btn', title: tr('Changes'), 'aria-label': tr('Changes'), onclick: () => toggle() }, icon('panelRight'), count);
+  const sum = h('div', { class: 'changes-sum' });
+  const list = h('div', { class: 'changes-list' });
+  const el = h('aside', { class: 'changes', 'aria-label': tr('Changes') },
+    h('div', { class: 'changes-head' }, h('h2', {}, tr('Changes')),
+      h('button', { class: 'icon-btn', title: tr('Refresh'), 'aria-label': tr('Refresh'), onclick: () => load() }, icon('refresh')),
+      h('button', { class: 'icon-btn', title: tr('Close'), 'aria-label': tr('Close'), onclick: () => toggle(false) }, icon('x'))),
+    sum, list);
+
+  const toggle = (value = !open) => {
+    open = value;
+    localStorageSet('changesOpen', open ? '1' : '0');
+    el.classList.toggle('hidden', !open);
+    btn.classList.toggle('active', open);
+    btn.setAttribute('aria-expanded', String(open));
+    if (open) load();
+  };
+  const stat = (f) => (f.binary ? [h('span', { class: 'change-bin' }, tr('binary'))] : [h('span', { class: 'add' }, `+${f.added}`), h('span', { class: 'del' }, `−${f.deleted}`)]);
+  const render = () => {
+    const files = data?.files || [];
+    count.textContent = files.length > 99 ? '99+' : String(files.length);
+    count.classList.toggle('hidden', !files.length);
+    const added = files.reduce((n, f) => n + f.added, 0);
+    const deleted = files.reduce((n, f) => n + f.deleted, 0);
+    sum.replaceChildren(...(files.length ? [tp('{0} file|{0} files', files.length), h('span', { class: 'add' }, `+${added}`), h('span', { class: 'del' }, `−${deleted}`)] : []));
+    if (error) { list.replaceChildren(h('div', { class: 'changes-empty' }, error)); return; }
+    if (!data) { list.replaceChildren(h('div', { class: 'changes-empty' }, tr('Loading...'))); return; }
+    if (!data.ready) { list.replaceChildren(h('div', { class: 'changes-empty' }, tr('The working copy is not ready yet.'))); return; }
+    list.replaceChildren(...(files.length
+      ? files.map((f) => {
+        const cut = f.path.lastIndexOf('/');
+        return h('button', { class: 'change-row', title: f.path, onclick: () => openDiff(taskId, f, stat) },
+          h('span', { class: `change-st st-${f.status}` }, f.status),
+          h('span', { class: 'change-path' }, cut >= 0 ? h('span', { class: 'change-dir' }, f.path.slice(0, cut + 1)) : null, h('span', { class: 'change-name' }, f.path.slice(cut + 1))),
+          h('span', { class: 'change-stat' }, ...stat(f)));
+      })
+      : [h('div', { class: 'changes-empty' }, tr('No changes yet.'))]),
+    data.truncated ? h('div', { class: 'changes-empty' }, tr('Only the first {0} files are shown.', files.length)) : '');
+  };
+  async function load() {
+    if (busy) { again = true; return; }
+    busy = true;
+    try { data = await get(`/v1/tasks/${taskId}/changes`); error = ''; } catch (err) {
+      if (err instanceof AuthError) { fail(err); return; }
+      error = err.message;
+    } finally { busy = false; }
+    render();
+    if (again) { again = false; load(); }
+  }
+  // Tool results refresh an open panel; the end-of-turn commit also refreshes the counter on the button.
+  const later = (always = false) => {
+    if (!open && !always) return;
+    clearTimeout(timer);
+    timer = setTimeout(load, 1200);
+  };
+  toggle(open);
+  if (!open) load();
+  return { el, btn, later };
+}
+
+async function openDiff(taskId, f, stat) {
+  const body = h('div', { class: 'diff-body' }, h('div', { class: 'changes-empty' }, tr('Loading...')));
+  const cut = f.path.lastIndexOf('/');
+  openModal(
+    h('div', { class: 'modal-head diff-head' },
+      h('h2', { title: f.path }, cut >= 0 ? h('span', { class: 'change-dir' }, f.path.slice(0, cut + 1)) : null, f.path.slice(cut + 1)),
+      h('span', { class: 'change-stat' }, ...stat(f)),
+      h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
+    body,
+  ).classList.add('modal-diff');
+  try {
+    const r = await get(`/v1/tasks/${taskId}/changes?path=${encodeURIComponent(f.path)}`);
+    body.replaceChildren(...diffLines(r.patch || ''), r.truncated ? h('div', { class: 'changes-empty' }, tr('The diff is too long; only its beginning is shown.')) : '');
+  } catch (err) {
+    if (err instanceof AuthError) { fail(err); return; }
+    body.replaceChildren(h('div', { class: 'changes-empty' }, err.message));
+  }
+}
+
+// A unified diff as rows with old and new line numbers; the git header lines above the first hunk are dropped.
+function diffLines(patch) {
+  if (!patch.includes('\n@@')) {
+    return [h('div', { class: 'changes-empty' }, /^Binary files /m.test(patch) ? tr('A binary file: its contents are not shown.') : tr('No changes in this file.'))];
+  }
+  const rows = [];
+  let a = 0;
+  let b = 0;
+  let started = false;
+  for (const line of patch.replace(/\n$/, '').split('\n')) {
+    const m = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (m) {
+      started = true;
+      a = Number(m[1]);
+      b = Number(m[2]);
+      rows.push(h('div', { class: 'dl hunk' }, h('span', { class: 'ln' }), h('span', { class: 'ln' }), h('span', { class: 'dt' }, line)));
+    } else if (!started) {
+      continue;
+    } else if (line.startsWith('\\')) {
+      rows.push(h('div', { class: 'dl meta' }, h('span', { class: 'ln' }), h('span', { class: 'ln' }), h('span', { class: 'dt' }, line)));
+    } else {
+      const ch = line[0];
+      const cls = ch === '+' ? 'add' : ch === '-' ? 'del' : 'same';
+      rows.push(h('div', { class: `dl ${cls}` },
+        h('span', { class: 'ln' }, ch === '+' ? '' : String(a++)),
+        h('span', { class: 'ln' }, ch === '-' ? '' : String(b++)),
+        h('span', { class: 'dt' }, line || ' ')));
+    }
+  }
+  return [h('div', { class: 'diff' }, rows)];
+}
 
 // Same rule as BRANCH_RE on the Core: a conservative subset of git check-ref-format.
 const BRANCH_OK = /^(?![-/.])(?!.*\.\.)(?!.*\/\/)(?!.*\/\.)(?!.*@\{)(?!.*\.lock(\/|$))[A-Za-z0-9._/+-]+(?<![./])$/;

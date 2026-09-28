@@ -33,6 +33,9 @@ GIT_ENV = {
 SECRET_GLOBS = [f"**/{pat}" for pat in SECRET_EXCLUDES] + [f"**/{d}/**" for d in SECRET_DIRS]
 SECRET_PATHSPECS = [f":(exclude,glob){g}" for g in SECRET_GLOBS]
 GIT_TIMEOUT = 600
+DIFF_FILES = 2000
+PATCH_BYTES = 400_000
+SHA_RE = re.compile(r"[0-9a-f]{7,64}")
 NO_GIT = "git is not installed on this device"
 NO_ACCESS = (
     "no access to the repository: it is private or does not exist. For a private repository use the ssh address "
@@ -236,9 +239,9 @@ class ProjectHost:
             return status
         handler = {
             "browse": self._browse, "checkout": self._checkout, "commit": self._commit, "status": self._status, "remove": self._remove,
-            "branches": self._branches,
+            "branches": self._branches, "diff": self._diff,
         }[req.op]
-        lock = contextlib.nullcontext() if req.op in ("browse", "branches") else self._lock(req.project_id)
+        lock = contextlib.nullcontext() if req.op in ("browse", "branches", "diff") else self._lock(req.project_id)
         try:
             async with lock:
                 result = await handler(req.project_id, req.task_id, req.args)
@@ -356,6 +359,36 @@ class ProjectHost:
         out = await self._git("status", "--porcelain=v2", "--branch", cwd=wt)
         head = (await self._git("rev-parse", "HEAD", cwd=wt)).strip()
         return {"head_sha": head, "detail": out[:8000]}
+
+    # The chat's changes since its start, uncommitted ones included; a copy of the index keeps the worktree untouched.
+    async def _diff(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
+        wt = self._worktree(project_id, task_id)
+        if not wt.is_dir():
+            raise ToolError("the worktree for this chat is missing on this device")
+        base = str(a["base_sha"])
+        if not SHA_RE.fullmatch(base):
+            raise ToolError("invalid base commit")
+        with tempfile.TemporaryDirectory(prefix="mensarium-index-") as tmp:
+            index = Path(tmp) / "index"
+            real = wt / (await self._git("rev-parse", "--git-path", "index", cwd=wt)).strip()
+            if real.is_file():
+                shutil.copyfile(real, index)
+            env = {"GIT_INDEX_FILE": str(index)}
+            await self._git("add", "-A", "--", ".", *SECRET_PATHSPECS, cwd=wt, env=env)
+            diff = ("diff", "--cached", "--no-color", "--no-ext-diff", "--no-renames", base)
+            if a.get("path"):
+                path = str(a["path"])
+                patch = await self._git(*diff, "--", f":(literal){path}", cwd=wt, env=env)
+                return {"data": {"path": path, "patch": patch[:PATCH_BYTES], "truncated": len(patch) > PATCH_BYTES}}
+            numstat = (await self._git(*diff, "--numstat", "-z", cwd=wt, env=env)).split("\0")
+            names = (await self._git(*diff, "--name-status", "-z", cwd=wt, env=env)).split("\0")
+        kinds = dict(zip(names[1::2], names[0::2], strict=False))
+        files = []
+        for rec in filter(None, numstat):
+            added, deleted, path = rec.split("\t", 2)
+            binary = added == "-"
+            files.append({"path": path, "status": kinds.get(path, "M")[:1], "added": 0 if binary else int(added), "deleted": 0 if binary else int(deleted), "binary": binary})
+        return {"changed": len(files), "data": {"files": files[:DIFF_FILES], "truncated": len(files) > DIFF_FILES}}
 
     async def _remove(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
         kind: ProjectKind = a["kind"]

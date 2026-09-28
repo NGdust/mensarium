@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 
 OP_TIMEOUT_S = 600
 BROWSE_TIMEOUT_S = 30
+DIFF_TIMEOUT_S = 60
 
 
 class ProjectManager:
@@ -175,6 +176,24 @@ class ProjectManager:
         if status.state != "ok":
             raise ProjectError(status.detail or "cannot list the branches")
         return status.data
+
+    async def changes(self, task: dict[str, Any], path: str | None = None) -> dict[str, Any]:
+        if not task.get("project_id") or task.get("parent_id"):
+            raise ProjectError("this chat is not in a project")
+        if not task.get("base_sha"):
+            return {"ready": False, "files": []}
+        target_id = str(task["target_id"])
+        self._supports(await self.repo.get_target(target_id))
+        if not self.can(target_id, "diff"):
+            raise ProjectError("this device's client is outdated; update it to see the changes")
+        args = {"base_sha": task["base_sha"], **({"path": path} if path else {})}
+        try:
+            status = await self._op(target_id, str(task["project_id"]), str(task["id"]), "diff", args, DIFF_TIMEOUT_S)
+        except TargetUnavailable as e:
+            raise ProjectError(str(e)) from e
+        if status.state != "ok":
+            raise ProjectError(status.detail or "cannot read the changes")
+        return {"ready": True, **status.data}
 
     async def create(self, body: ProjectCreate) -> dict[str, Any]:
         project_id = new_id("prj")

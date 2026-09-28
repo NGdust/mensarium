@@ -18,7 +18,7 @@ def git(cwd: Path, *args: str) -> str:
 
 
 @unittest.skipUnless(shutil.which("git"), "git is not installed")
-class ProjectBranchTests(unittest.IsolatedAsyncioTestCase):
+class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -70,6 +70,21 @@ class ProjectBranchTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(branch=branch, start=start):
                 status = await self.op("checkout", "task_x", branch=branch, start=start)
                 self.assertEqual(status["state"], "error")
+
+    async def test_diff_lists_uncommitted_changes_without_secrets(self) -> None:
+        status = await self.op("checkout", "task_d", branch="mensarium/d-1", start="default")
+        base = status["head_sha"]
+        wt = Path(os.environ["MENSARIUM_HOME"]) / "projects" / "prj_1" / "wt" / "task_d"
+        (wt / "app.py").write_text("print('hi')\nprint('more')\n")
+        (wt / "notes.txt").write_text("a\nb\n")
+        (wt / ".env").write_text("API_KEY=test-fixture-only\n")
+        status = await self.op("diff", "task_d", base_sha=base)
+        self.assertEqual(status["state"], "ok", status["detail"])
+        files = {f["path"]: (f["status"], f["added"], f["deleted"]) for f in status["data"]["files"]}
+        self.assertEqual(files, {"app.py": ("M", 1, 0), "notes.txt": ("A", 2, 0)})
+        patch = (await self.op("diff", "task_d", base_sha=base, path="app.py"))["data"]["patch"]
+        self.assertIn("+print('more')", patch)
+        self.assertEqual(git(wt, "diff", "--cached", "--name-only"), "")
 
 
 if __name__ == "__main__":

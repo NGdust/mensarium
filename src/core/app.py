@@ -16,7 +16,7 @@ from typing import Any, Literal
 from urllib.parse import quote, urlparse
 
 import yaml
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
@@ -1205,6 +1205,16 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             )
         except TaskError as e:
             raise task_error(e) from e
+
+    @app.get("/v1/tasks/{task_id}/changes")
+    async def task_changes(task_id: str, path: str | None = Query(None, min_length=1, max_length=1000), c: Core = Depends(auth)) -> dict[str, Any]:
+        task = await c.repo.get_task(task_id)
+        if not task:
+            raise HTTPException(404, "task not found")
+        try:
+            return await c.projects.changes(task, path)
+        except ProjectError as e:
+            raise project_error(e) from e
 
     @app.get("/v1/tasks/{task_id}")
     async def get_task(task_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
