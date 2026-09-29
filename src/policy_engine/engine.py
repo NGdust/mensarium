@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from mensarium.contracts.protocol import AccessMode, TargetPolicy
 from mensarium.contracts.tools import PATH_FIELDS, WRITE_PATH_TOOLS
 from mensarium.shared.redaction import GIT_DIRS, is_secret_path
+from mensarium.shared.secret_refs import secret_refs
 from mensarium.tool_runtime.commands import render
 from mensarium.tool_runtime.mcp import check_arguments
 from mensarium.tool_runtime.registry import REGISTRY, Risk, ToolSpec
@@ -47,6 +48,7 @@ class Decision:
     display: str = ""
     exec_tool: str = ""
     runs_on: str = "target"
+    secrets: list[str] = field(default_factory=list)
 
 
 def _deny(reason: str, risk: Risk = "read") -> Decision:
@@ -246,4 +248,5 @@ def evaluate(
         arguments=args,
         display=spec.display(args),
         exec_tool=exec_tool,
+        secrets=secret_refs(exec_tool, args),
     )

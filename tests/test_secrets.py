@@ -2,8 +2,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from mensarium.contracts.protocol import TargetPolicy
 from mensarium.core.config import CorePaths
 from mensarium.core.secrets import SecretError, SecretStore
+from mensarium.policy_engine.engine import evaluate
+from mensarium.shared.secret_refs import fill_secrets, mask_secrets
+from mensarium.tool_runtime.registry import REGISTRY
 
 
 class FakeRepo:
@@ -41,3 +45,20 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
                     await s.put(bad, "v", "", ["*"])
             await s.delete("GITHUB_TOKEN")
             self.assertEqual(await s.all(), [])
+
+
+class RefsTests(unittest.TestCase):
+    def decision(self, tool, args):
+        return evaluate(tool, args, profile_tools=list(REGISTRY), target_tools=list(REGISTRY),
+                        required_risks=["write", "execute", "network", "destructive"],
+                        target_policy=TargetPolicy(roots=["/workspace"], command_allowlist=["echo"]))
+
+    def test_names_from_shell_and_http(self):
+        bash = self.decision("shell.bash", {"script": 'curl -H "x: $A_KEY" x', "cwd": "/workspace", "secrets": ["A_KEY"]})
+        self.assertEqual(bash.secrets, ["A_KEY"])
+        http = self.decision("net.http", {"url": "https://x.test/?k={{secret:B_KEY}}", "headers": {"Authorization": "Bearer {{secret:A_KEY}}"}})
+        self.assertEqual(sorted(http.secrets), ["A_KEY", "B_KEY"])
+        filled = fill_secrets(http.arguments, {"A_KEY": "aaaa", "B_KEY": "bbbb"})
+        self.assertEqual(filled["headers"]["Authorization"], "Bearer aaaa")
+        self.assertIn("{{secret:A_KEY}}", http.arguments["headers"]["Authorization"])
+        self.assertEqual(mask_secrets("x aaaa y", {"A_KEY": "aaaa"}), "x [secret:A_KEY] y")

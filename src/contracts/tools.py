@@ -50,6 +50,11 @@ class ShellExecArgs(_Args):
     )
     stdin: str | None = Field(None, description="Optional data passed to stdin, e.g. a patch for `git apply`")
     timeout_s: int = Field(120, ge=1, le=3600)
+    secrets: list[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Names of the user's secrets to pass as environment variables with the same names; refer to them as $NAME",
+    )
 
 
 class FilesStatArgs(_Args):
@@ -128,6 +133,11 @@ class ShellBashArgs(_Args):
     script: str = Field(min_length=1, max_length=50_000, description="Bash script: pipes, redirects, loops and && are fine")
     stdin: str | None = Field(None, max_length=2_000_000, description="Optional data passed to stdin")
     timeout_s: int = Field(120, ge=1, le=3600)
+    secrets: list[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Names of the user's secrets to pass as environment variables with the same names; refer to them as $NAME",
+    )
 
 
 class ScreenCaptureArgs(_Args):
