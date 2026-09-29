@@ -46,6 +46,7 @@ class ProjectSync:
         shutil.rmtree(self.inbox, ignore_errors=True)
         hub.inbox = self.inbox
         self.locks: dict[str, asyncio.Lock] = {}
+        self.jobs: set[asyncio.Task[None]] = set()
 
     def mirror(self, project_id: str) -> Mirror:
         return Mirror(project_id)
@@ -185,26 +186,37 @@ class ProjectSync:
         if not missing:
             return
         role = "source" if target_id == p["source_target_id"] else "executor"
-        request_id = new_id("pop")
-        path = self.inbox_file(request_id)
-        try:
-            ensure_private_dir(self.inbox)
-            # The executor's copy is the Core's own: every ref it took is still there. The user may drop a delivered branch.
-            have = list(known.values()) if role == "executor" else [sha for ref in missing if (sha := known.get(ref))]
-            info = await self.mirror(project_id).bundle(path, missing, have)
-            if info is None:
-                return
-            args: dict[str, Any] = {"role": role, "bundle": info.model_dump(), "refs": {ref: ref for ref in missing}}
-            if role == "source":
-                args |= self.manager.snapshot_args(p)
-            status = await self.manager.op(target_id, project_id, "", "fetch", args, request_id=request_id, bundle=path)
-            if status.state != "ok":
-                raise ProjectError(status.detail or "the device could not take the bundle")
-            await self.repo.upsert_project_device(project_id, target_id, role, known_refs={**known, **missing})
-        except MirrorError as e:
-            raise ProjectError(str(e)) from e
-        finally:
-            path.unlink(missing_ok=True)
+        if role == "executor":
+            # The executor's copy is the Core's own: every ref it took is still there.
+            have = list(known.values())
+        else:
+            # The user may drop a branch, so a source bundle falls back to one without prerequisites.
+            have = list({*((device or {}).get("device_refs") or {}).values(), *known.values()})
+        detail = None
+        for prerequisites in ([have, []] if have else [[]]):
+            request_id = new_id("pop")
+            path = self.inbox_file(request_id)
+            try:
+                ensure_private_dir(self.inbox)
+                info = await self.mirror(project_id).bundle(path, missing, prerequisites)
+                if info is None:
+                    # The executor needs only the commits; the source needs the ref too, even to a commit it has.
+                    if role == "executor" or not prerequisites:
+                        return
+                    continue
+                args: dict[str, Any] = {"role": role, "bundle": info.model_dump(), "refs": {ref: ref for ref in missing}}
+                if role == "source":
+                    args |= self.manager.snapshot_args(p)
+                status = await self.manager.op(target_id, project_id, "", "fetch", args, request_id=request_id, bundle=path)
+                if status.state == "ok":
+                    await self.repo.upsert_project_device(project_id, target_id, role, known_refs={**known, **missing})
+                    return
+                detail = status.detail
+            except MirrorError as e:
+                raise ProjectError(str(e)) from e
+            finally:
+                path.unlink(missing_ok=True)
+        raise ProjectError(detail or "the device could not take the bundle")
 
     async def queue(self, project_id: str, target_id: str, task_id: str, kind: str, branch: str | None = None) -> None:
         # Checked under the device's lock: a running delivery either still sees the new head or has already finished.
@@ -216,7 +228,16 @@ class ProjectSync:
                      "status": "pending", "created_at": now, "updated_at": now}
                 )
         if self.hub.is_online(target_id):
+            # In the background: the chat's turn must not wait for a bundle to reach another device.
+            job = asyncio.create_task(self._deliver_job(target_id))
+            self.jobs.add(job)
+            job.add_done_callback(self.jobs.discard)
+
+    async def _deliver_job(self, target_id: str) -> None:
+        try:
             await self.deliver(target_id)
+        except Exception:
+            log.exception("project delivery failed", extra={"target_id": target_id})
 
     async def deliver(self, target_id: str) -> None:
         if not self.can_fetch(target_id):

@@ -12,8 +12,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from mensarium.contracts.projects import ProjectError, ProjectOp, ProjectOpStatus, ProjectSnapshot
 from mensarium.contracts.protocol import Capabilities, TargetHello, TargetInfo, TargetPolicy
+from mensarium.agent_core.profile import builtin_profiles
 from mensarium.core.client_hub import ClientConnection, ClientHub
 from mensarium.core.db import Database
+from mensarium.core.orchestrator import Orchestrator, TaskError
 from mensarium.core.projects import ProjectManager
 from mensarium.core.repo import Repo
 from mensarium.shared import bundles
@@ -73,7 +75,7 @@ class ProjectSyncTests(unittest.IsolatedAsyncioTestCase):
         await self.db.connect()
         self.addAsyncCleanup(self.db.close)
         self.repo = Repo(self.db)
-        ws = await self.repo.get_or_create_workspace()
+        self.ws = ws = await self.repo.get_or_create_workspace()
         for tid in ("tgt_src", "tgt_core"):
             await self.repo.create_target({"id": tid, "workspace_id": ws, "name": tid, "platform": "linux", "hostname": "h", "status": "online", "public_key": "", "created_at": "2026-01-01T00:00:00Z"})
         self.hub = FakeHub(self.repo_path, base / "home" / "projects" / "core-inbox")
@@ -174,16 +176,21 @@ class ProjectSyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_publish_queues_one_delivery_and_hello_delivers(self) -> None:
         head = await self.seed_mirror()
-        git(self.repo_path, "branch", "mensarium/t-1", head)
+        git(self.repo_path, "checkout", "-q", "-b", "mensarium/t-1")
+        (self.repo_path / "b.txt").write_text("chat\n")
+        git(self.repo_path, "add", ".")
+        git(self.repo_path, "commit", "-qm", "chat")
+        chat = git(self.repo_path, "rev-parse", "HEAD")
+        git(self.repo_path, "checkout", "-q", "main")
         await self.repo.create_task({"id": "task_1", "workspace_id": "ws", "profile_id": "p", "target_id": "tgt_core", "input": "x", "status": "IDLE", "trace_id": "tr",
                                      "project_id": "prj_1", "branch": "mensarium/t-1", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"})
         task = {"id": "task_1", "target_id": "tgt_core", "branch": "mensarium/t-1", "head_sha": None}
         self.hub.online.discard("tgt_src")
         for request_id in ("pop_2", "pop_3"):
             path = self.hub.inbox / f"{request_id}.bundle"
-            git(self.repo_path, "bundle", "create", str(path), "refs/heads/mensarium/t-1")
-            status = ProjectOpStatus(request_id=request_id, project_id="prj_1", task_id="task_1", op="commit", state="ok", head_sha=head,
-                                     bundle=bundles.describe(path, {"refs/heads/mensarium/t-1": head}, []))
+            git(self.repo_path, "bundle", "create", str(path), "refs/heads/mensarium/t-1", f"^{head}")
+            status = ProjectOpStatus(request_id=request_id, project_id="prj_1", task_id="task_1", op="commit", state="ok", head_sha=chat,
+                                     bundle=bundles.describe(path, {"refs/heads/mensarium/t-1": chat}, [head]))
             await self.sync.publish(await self.repo.get_project("prj_1") or {}, task, status)
         self.assertEqual(len(await self.repo.list_deliveries(target_id="tgt_src")), 1)
         self.hub.online.add("tgt_src")
@@ -193,14 +200,24 @@ class ProjectSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([d["status"] for d in await self.repo.list_deliveries(target_id="tgt_src", statuses=("delivered",))], ["delivered"])
         fetch, bundle = self.hub.sent[-1]
         self.assertEqual((fetch.args["role"], fetch.args["refs"], fetch.args["source_path"]), ("source", {"refs/heads/mensarium/t-1": "refs/heads/mensarium/t-1"}, "/home/tgt_src/demo"))
+        # The source already has its own main, so only the chat's commit travels.
+        self.assertEqual(fetch.args["bundle"]["prerequisites"], [head])
         self.assertIsNotNone(bundle)
 
     async def test_create_task_needs_a_snapshot_for_a_remote_executor(self) -> None:
-        p = await self.repo.get_project("prj_1") or {}
-        with self.assertRaises(ProjectError) as ctx:
-            await self.sync.resolve_base(p, "snapshot")
+        for profile in builtin_profiles():
+            await self.repo.upsert_profile(self.ws, profile.model_dump())
+        orch = Orchestrator.__new__(Orchestrator)
+        orch.repo, orch.hub, orch.projects, orch.workspace_id = self.repo, self.hub, self.manager, self.ws  # type: ignore[assignment]
+        orch._prepare = lambda task_id: None  # type: ignore[method-assign]
+        # No snapshot on the Core: a named executor is refused, the implicit Core device gives way to the source.
+        with self.assertRaises(TaskError) as ctx:
+            await orch.create_task("coding-agent-v1", "tgt_core", "", project_id="prj_1")
         self.assertIn("no snapshot", str(ctx.exception))
-
+        self.assertEqual((await orch.create_task("coding-agent-v1", None, "", project_id="prj_1"))["target_id"], "tgt_src")
+        await self.seed_mirror()
+        task = await orch.create_task("coding-agent-v1", None, "", project_id="prj_1", branch="feature")
+        self.assertEqual((task["target_id"], task["branch"]), ("tgt_core", "mensarium/feature"))
 
 class HubChunkTests(unittest.IsolatedAsyncioTestCase):
     async def test_hub_drops_chunks_without_a_waiter(self) -> None:

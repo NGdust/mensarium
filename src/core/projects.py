@@ -61,7 +61,7 @@ class ProjectManager:
 
     async def stop(self) -> None:
         self.stopped = True
-        jobs = [*self.jobs.values(), *([self.timer] if self.timer else [])]
+        jobs = [*self.jobs.values(), *self.project_sync.jobs, *([self.timer] if self.timer else [])]
         for job in jobs:
             job.cancel()
         await asyncio.gather(*jobs, return_exceptions=True)
@@ -187,14 +187,15 @@ class ProjectManager:
             "file_limit_mb": int(p.get("file_limit_mb") or 100),
         }
 
-    async def _cleanup(self, target_id: str, project_id: str, task_id: str, args: dict[str, Any]) -> None:
+    async def _cleanup(self, target_id: str, project_id: str, task_id: str, args: dict[str, Any]) -> bool:
         try:
             status = await self.op(target_id, project_id, task_id, "remove", args)
         except (TargetUnavailable, ValidationError) as e:
             log.warning("project cleanup failed", extra={"project_id": project_id, "task_id": task_id, "error": str(e)})
-            return
+            return False
         if status.state != "ok":
             log.warning("project cleanup failed", extra={"project_id": project_id, "task_id": task_id, "error": status.detail})
+        return status.state == "ok"
 
     # ---- public -----------------------------------------------------------------
 
@@ -451,9 +452,14 @@ class ProjectManager:
         if self.hub.is_online(str(project["source_target_id"])):
             await self.refresh(project_id)
         name, ref, sha = await self.project_sync.resolve_base(project, task.get("base_ref"))
-        await self.project_sync.ensure_objects(project, target_id, {ref: sha})
         args = {"role": "executor", "branch": task["branch"], "start": sha, "base_name": name}
-        status = await self.op(target_id, project_id, str(task["id"]), "checkout", args, timeout_s=OP_TIMEOUT_S)
+        for attempt in range(2):
+            await self.project_sync.ensure_objects(project, target_id, {ref: sha})
+            status = await self.op(target_id, project_id, str(task["id"]), "checkout", args, timeout_s=OP_TIMEOUT_S)
+            if attempt or status.state == "ok" or "start commit is missing" not in (status.detail or ""):
+                break
+            # The device lost what the Core thought it had: send the objects again from scratch.
+            await self.repo.upsert_project_device(project_id, target_id, "executor", known_refs={})
         if status.state == "ok":
             status.data.setdefault("base", name)
         return status
@@ -487,7 +493,7 @@ class ProjectManager:
         if target_id == project["source_target_id"]:
             args = {**self.snapshot_args(project), "role": "source", "branch": task.get("branch"), "delete_branch": project["kind"] == "folder"}
             await self._cleanup(target_id, project_id, task_id, args)
-        elif self.hub.is_online(target_id):
-            await self._cleanup(target_id, project_id, task_id, {"role": "executor", "branch": task.get("branch"), "delete_branch": True})
         else:
-            await self.project_sync.queue(project_id, target_id, task_id, "remove", task.get("branch"))
+            args = {"role": "executor", "branch": task.get("branch"), "delete_branch": True}
+            if not (self.hub.is_online(target_id) and await self._cleanup(target_id, project_id, task_id, args)):
+                await self.project_sync.queue(project_id, target_id, task_id, "remove", task.get("branch"))
