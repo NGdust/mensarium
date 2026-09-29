@@ -82,10 +82,11 @@ def _plain(refs: dict[str, str]) -> dict[str, str]:
 # What a chat never commits; a folder project also leaves out caches, dependencies and what its .mensariumignore lists.
 def _write_excludes(git_dir: Path, kind: ProjectKind, ignores: list[Path] | None = None) -> None:
     lines = [*sorted(SKIP_DIRS), *FOLDER_EXCLUDES] if kind == "folder" else []
-    lines += [*SECRET_EXCLUDES, *(f"{d}/" for d in SECRET_DIRS)]
     for ignore in ignores or []:
         if ignore.is_file() and not ignore.is_symlink():
             lines += ignore.read_text(errors="replace").splitlines()
+    # Last: a negation like !.env in .mensariumignore above cannot re-include a secret.
+    lines += [*SECRET_EXCLUDES, *(f"{d}/" for d in SECRET_DIRS)]
     (git_dir / "info").mkdir(exist_ok=True)
     (git_dir / "info" / "exclude").write_text("\n".join(dict.fromkeys(lines)) + "\n")
 

@@ -65,7 +65,7 @@ class ProjectSync:
 
     def can_fetch(self, target_id: str) -> bool:
         hello = self.hub.hello(target_id)
-        return bool(hello and {"bundle", "fetch"} <= set(hello.capabilities.project_ops))
+        return bool(hello and {"bundle", "executor"} <= set(hello.capabilities.project_ops))
 
     # ---- source -> mirror ---------------------------------------------------------
 

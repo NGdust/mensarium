@@ -30,7 +30,7 @@ class FakeHub:
     def __init__(self, repo_path: Path, inbox: Path) -> None:
         self.repo_path, self.inbox = repo_path, inbox
         self.online = {"tgt_src", "tgt_core"}
-        self.ops = ["branches", "diff", "docs", "revert", "fetch", "inplace", "bundle"]
+        self.ops = ["branches", "diff", "docs", "revert", "fetch", "inplace", "bundle", "executor"]
         self.sent: list[Any] = []
         self.answers: list[dict[str, Any]] = []
 
@@ -210,6 +210,9 @@ class ProjectSyncTests(unittest.IsolatedAsyncioTestCase):
         self.hub.ops = ["bundle"]
         await self.sync.deliver("tgt_src")
         self.assertIn("update the Mensarium client", (await self.repo.list_deliveries(target_id="tgt_src"))[0]["error"])
+        # A 0.77 client advertises "fetch" but has no handler for it: "executor" is the real gate.
+        self.hub.ops = ["bundle", "fetch"]
+        self.assertFalse(self.sync.can_fetch("tgt_src"))
         self.hub.ops = FakeHub(self.repo_path, self.hub.inbox).ops
         self.hub.answers += [{"type": "project.snapshot.status", "state": "unchanged", "kind": "repo", "refs": {"refs/heads/main": head, "refs/mensarium/snapshot": head}},
                              {"type": "project.op.status", "task_id": "task_1", "op": "fetch", "state": "ok", "data": {}}]

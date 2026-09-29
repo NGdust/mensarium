@@ -11,8 +11,9 @@ ProjectOpName = Literal["browse", "checkout", "commit", "status", "remove", "bra
 EXTRA_OPS: tuple[ProjectOpName, ...] = ("branches", "diff", "docs", "revert", "fetch")
 # Also listed in capabilities.project_ops: "inplace" means the client takes a workdir anywhere in its allowed roots,
 # so a repo chat without a workspace can work right in the project folder; "bundle" means it ships git bundles
-# with its snapshot and commit answers and takes them back with the fetch op (phase 2 mirror on the Core).
-PROJECT_FEATURES: tuple[str, ...] = (*EXTRA_OPS, "inplace", "bundle")
+# with its snapshot and commit answers and takes them back with the fetch op (phase 2 mirror on the Core);
+# "executor" means the client takes bundles with the fetch op and runs chats from a sha (0.78+).
+PROJECT_FEATURES: tuple[str, ...] = (*EXTRA_OPS, "inplace", "bundle", "executor")
 ProjectRole = Literal["source", "executor"]
 OpState = Literal["ok", "conflict", "error"]
 SnapshotState = Literal["ok", "unchanged", "error"]
