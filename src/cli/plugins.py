@@ -1,5 +1,6 @@
-"""`mensarium plugins` and `mensarium mcp`: manage plugins of the Core running on this machine through its API."""
+"""`mensarium plugins` and `mensarium mcp`: manage plugins of the Core through its API (from the Core host or a paired client)."""
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Annotated, Any
@@ -10,8 +11,9 @@ import typer
 from rich.table import Table
 
 from mensarium.cli.ui import console, fail, ok, warn
-from mensarium.client.config import ClientPaths
+from mensarium.client.config import ClientPaths, load_client_config
 from mensarium.core.config import CorePaths, load_config, read_secret
+from mensarium.shared.crypto import load_or_create_private_key
 
 plugins_app = typer.Typer(help="Plugins: device tools, Core tools and MCP servers", no_args_is_help=True)
 mcp_app = typer.Typer(help="MCP servers (each one is a plugin)", no_args_is_help=True)
@@ -24,9 +26,23 @@ class ApiError(Exception):
 
 
 def _api(method: str, path: str, body: Any = None, content: bytes | None = None) -> Any:
-    paths = CorePaths()
-    if not paths.config.exists():
-        raise ApiError("the Core is not installed on this machine; run this on the Core host")
+    core, client = CorePaths(), ClientPaths()
+    if core.config.exists():
+        status, raw = _via_core(core, method, path, body, content)
+    elif client.config.exists():
+        status, raw = asyncio.run(_via_client(client, method, path, body, content))
+    else:
+        raise ApiError("neither the Core nor a client is set up on this machine; run `mensarium core` or `mensarium client` first")
+    if status >= 400:
+        try:
+            detail = json.loads(raw).get("detail")
+        except ValueError:
+            detail = raw.decode(errors="replace")
+        raise ApiError(str(detail))
+    return json.loads(raw) if raw else None
+
+
+def _via_core(paths: CorePaths, method: str, path: str, body: Any, content: bytes | None) -> tuple[int, bytes]:
     cfg = load_config(paths)
     token = read_secret(paths, "secret://core-cli-token") or ""
     headers = {"Authorization": f"Bearer {token}"}
@@ -38,13 +54,41 @@ def _api(method: str, path: str, body: Any = None, content: bytes | None = None)
         )
     except httpx.ConnectError as e:
         raise ApiError("the Core is not running; start it with `mensarium service restart core`") from e
-    if resp.status_code >= 400:
-        try:
-            detail = resp.json().get("detail")
-        except ValueError:
-            detail = resp.text
-        raise ApiError(str(detail))
-    return resp.json() if resp.content else None
+    return resp.status_code, resp.content
+
+
+async def _via_client(paths: ClientPaths, method: str, path: str, body: Any, content: bytes | None) -> tuple[int, bytes]:
+    """A client machine reaches the Core API through a short signed session, the way its gateway does."""
+    from mensarium.client.gateway.tunnel import CoreOffline, Tunnel
+
+    cfg = load_client_config(paths)
+    tunnel = Tunnel(cfg, paths, load_or_create_private_key(paths.key), session="cli")
+    headers = {"content-type": "text/plain" if content is not None else "application/json"}
+    data = content if content is not None else (json.dumps(body).encode() if body is not None else b"")
+    try:
+        return await tunnel.call(method, path, data, headers)
+    except CoreOffline as e:
+        if str(e):
+            raise ApiError(f"the Core rejected this client ({e}); pair it again with `mensarium client pair`") from e
+        raise ApiError(f"cannot reach the Core at {cfg.server}; is it running and is this client paired?") from e
+    except TimeoutError as e:
+        raise ApiError(f"the Core at {cfg.server} did not answer in time") from e
+
+
+def api_base_url() -> str:
+    """Where the user opens the web UI, for links printed by commands."""
+    core = CorePaths()
+    if core.config.exists():
+        return load_config(core).server.public_url.rstrip("/")
+    return load_client_config(ClientPaths()).server.rstrip("/")
+
+
+def api_target_id() -> str | None:
+    """The device id of this machine: the Core's own device on the Core host, the paired client elsewhere."""
+    if CorePaths().config.exists():
+        return next((str(t["id"]) for t in _api("GET", "/v1/targets") if t.get("core_host")), None)
+    client = ClientPaths()
+    return load_client_config(client).target_id if client.config.exists() else None
 
 
 def _run(method: str, path: str, body: Any = None, content: bytes | None = None) -> Any:

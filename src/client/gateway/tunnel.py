@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import socket
@@ -15,7 +16,7 @@ from mensarium import __version__
 from mensarium.client import moving
 from mensarium.client.agent import FATAL_CLOSE_CODES, platform_id
 from mensarium.client.config import ClientConfig, ClientPaths
-from mensarium.contracts.gateway import ApiCancel, ApiChunk, ApiEnd, ApiRequest, ApiResponse
+from mensarium.contracts.gateway import ApiCancel, ApiChunk, ApiEnd, ApiRequest, ApiResponse, SessionKind
 from mensarium.contracts.protocol import AuthChallenge, AuthResponse, Capabilities, Heartbeat, TargetHello, TargetInfo
 from mensarium.shared.crypto import sign
 from mensarium.shared.ids import new_id
@@ -36,10 +37,11 @@ class Call:
 
 
 class Tunnel:
-    def __init__(self, cfg: ClientConfig, paths: ClientPaths, key: Ed25519PrivateKey) -> None:
+    def __init__(self, cfg: ClientConfig, paths: ClientPaths, key: Ed25519PrivateKey, session: SessionKind = "gateway") -> None:
         self.cfg = cfg
         self.paths = paths
         self.key = key
+        self.session = session
         self.online = False
         self.rejected_reason: str | None = None
         self.calls: dict[str, Call] = {}
@@ -48,7 +50,7 @@ class Tunnel:
 
     def hello(self) -> TargetHello:
         return TargetHello(
-            session="gateway",
+            session=self.session,
             target=TargetInfo(
                 id=self.cfg.target_id,
                 name=self.cfg.name,
@@ -95,7 +97,7 @@ class Tunnel:
             if ok.get("type") != "auth.ok":
                 raise OSError(f"unexpected handshake reply: {ok}")
             self.online, self.rejected_reason = True, None
-            log.info("gateway connected to core", extra={"server": self.cfg.server})
+            log.info("connected to core", extra={"server": self.cfg.server, "session": self.session})
             heartbeat = asyncio.create_task(self._heartbeat())
             try:
                 async for raw in ws:
@@ -133,6 +135,41 @@ class Tunnel:
         elif kind == "api.end":
             call.queue.put_nowait(ApiEnd.model_validate(msg))
             self.calls.pop(call.id, None)
+
+    async def call(self, method: str, path: str, body: bytes = b"", headers: dict[str, str] | None = None) -> tuple[int, bytes]:
+        """One request over a fresh session: for the CLI, which has no long-running gateway."""
+        session = asyncio.create_task(self._session())
+        try:
+            for _ in range(100):
+                if self.online:
+                    break
+                if session.done():
+                    try:
+                        session.result()
+                    except websockets.ConnectionClosed as e:
+                        raise CoreOffline(e.rcvd.reason if e.rcvd and e.rcvd.code in FATAL_CLOSE_CODES else "") from e
+                    except (OSError, websockets.InvalidHandshake, TimeoutError) as e:
+                        raise CoreOffline() from e
+                    raise CoreOffline()
+                await asyncio.sleep(0.1)
+            else:
+                raise CoreOffline()
+            call = await self.open(method, path, headers or {"content-type": "application/json"}, body)
+            status, chunks = 0, []
+            while True:
+                frame = await asyncio.wait_for(call.queue.get(), 300)
+                if isinstance(frame, ApiResponse):
+                    status, chunks = frame.status, [base64.b64decode(frame.body)]
+                elif isinstance(frame, ApiChunk):
+                    chunks.append(base64.b64decode(frame.body))
+                elif frame.error:
+                    raise CoreOffline()
+                else:
+                    return status, b"".join(chunks)
+        finally:
+            session.cancel()
+            with contextlib.suppress(BaseException):
+                await session
 
     async def open(self, method: str, path: str, headers: dict[str, str], body: bytes) -> Call:
         if not self.online or self.ws is None:

@@ -96,7 +96,7 @@ class ClientHub:
         conn = await self._authenticate(ws)
         if conn is None:
             return
-        if conn.session == "gateway":
+        if conn.session in ("gateway", "cli"):
             await self._handle_gateway(conn)
             return
         old = self.connections.get(conn.target_id)
@@ -126,19 +126,23 @@ class ClientHub:
             log.info("target disconnected", extra={"target_id": conn.target_id})
 
     async def _handle_gateway(self, conn: ClientConnection) -> None:
-        """A gateway session only relays API frames; it never receives execution requests."""
+        """A gateway or CLI session only relays API frames; it never receives execution requests.
+
+        Only the gateway is tracked: a short CLI session must not replace a running gateway.
+        """
         ws = conn.ws
-        old = self.gateways.get(conn.target_id)
-        if old:
-            await self._close(old, 4000, "replaced by a new connection")
-        self.gateways[conn.target_id] = conn
-        log.info("gateway connected", extra={"target_id": conn.target_id})
+        if conn.session == "gateway":
+            old = self.gateways.get(conn.target_id)
+            if old:
+                await self._close(old, 4000, "replaced by a new connection")
+            self.gateways[conn.target_id] = conn
+        log.info("api session connected", extra={"target_id": conn.target_id, "session": conn.session})
         try:
             await ws.send_json({"type": "auth.ok", "ts": now_iso()})
             while True:
                 msg = await ws.receive_json()
                 kind = msg.get("type")
-                if kind == "target.heartbeat":
+                if kind == "target.heartbeat" and conn.session == "gateway":
                     await self.repo.update_target(conn.target_id, {"last_seen_at": now_iso()})
                 elif kind in ("api.request", "api.cancel") and self.api:
                     await self.api.handle(conn, msg)
@@ -149,7 +153,7 @@ class ClientHub:
                 del self.gateways[conn.target_id]
             if self.api:
                 self.api.drop(conn)
-            log.info("gateway disconnected", extra={"target_id": conn.target_id})
+            log.info("api session disconnected", extra={"target_id": conn.target_id, "session": conn.session})
 
     async def _authenticate(self, ws: WebSocket) -> ClientConnection | None:
         nonce = secrets.token_urlsafe(32)
@@ -170,9 +174,10 @@ class ClientHub:
         if hello.target.id != auth.target_id:
             await ws.close(4400, "target id mismatch")
             return None
-        if hello.session == "gateway":
-            await self.repo.update_target(auth.target_id, {"last_seen_at": now_iso()})
-            return ClientConnection(ws=ws, target_id=auth.target_id, public_key=target["public_key"], hello=hello, session="gateway")
+        if hello.session in ("gateway", "cli"):
+            if hello.session == "gateway":
+                await self.repo.update_target(auth.target_id, {"last_seen_at": now_iso()})
+            return ClientConnection(ws=ws, target_id=auth.target_id, public_key=target["public_key"], hello=hello, session=hello.session)
         await self.repo.update_target(
             auth.target_id,
             {

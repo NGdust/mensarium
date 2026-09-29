@@ -38,6 +38,7 @@ app.add_typer(mcp_app, name="mcp")
 app.add_typer(skills_app, name="skills")
 app.add_typer(automations_app, name="automations")
 app.add_typer(projects_app, name="projects")
+app.add_typer(projects_app, name="project", hidden=True, help="Alias of `projects`")
 
 @app.command()
 def version(
