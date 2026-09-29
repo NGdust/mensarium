@@ -2,14 +2,19 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from mensarium.agent_core.actions import ToolCallAction
+from mensarium.agent_core.profile import builtin_profiles
 from mensarium.client.config import ClientConfig
 from mensarium.client.tools import Executor, ToolError
-from mensarium.contracts.protocol import TargetPolicy
+from mensarium.contracts.protocol import ExecutionResult, TargetPolicy, ToolOutput
 from mensarium.core.config import CorePaths
+from mensarium.core.orchestrator import Orchestrator
+from mensarium.core.plugins import Toolbox
 from mensarium.core.secrets import SecretError, SecretStore
 from mensarium.policy_engine.engine import evaluate
 from mensarium.shared.crypto import public_key_b64
@@ -96,3 +101,74 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ToolError) as e:
             await self.executor.run("net.http", {"url": "https://x.test/?k=" + "Q" * 2100}, secrets={"K": "Q" * 2100})
         self.assertNotIn("QQQQ", str(e.exception))
+
+
+class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
+    def core(self, secrets_store):
+        core = Orchestrator.__new__(Orchestrator)
+        core.workdirs, core.workspace_id, core.secrets = {}, "workspace", secrets_store
+        core._task = AsyncMock(return_value={"id": "task", "mode": "full"})
+        core._execute, core._await_approval = AsyncMock(), AsyncMock(return_value="apr_1")
+        core.repo = SimpleNamespace(create_tool_call=AsyncMock(), audit=AsyncMock())
+        core.bus = SimpleNamespace(emit=AsyncMock())
+        core._observe = AsyncMock()
+        return core
+
+    async def handle(self, core, call, capabilities=True):
+        profile = builtin_profiles()[0]
+        policy = TargetPolicy(roots=["/workspace"], command_allowlist=["echo"], allow_full_access=True)
+        target = {"id": "tgt_a", "name": "device", "agent_version": "0.81.0", "policy": policy.model_dump(),
+                  "capabilities": {"tools": list(REGISTRY), "secrets": capabilities}}
+        await core._handle_tool_call({"id": "task", "mode": "full"}, profile, Toolbox(profile, dict(REGISTRY), [], {}), target, policy, "step", call)
+
+    async def test_full_access_still_asks_and_passes_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = store(Path(tmp))
+            await s.put("API_TOKEN", "fixture-value-123", "", ["tgt_a"])
+            core = self.core(s)
+            call = ToolCallAction(call_id="c", raw_arguments="{}", tool="shell.bash",
+                                  arguments={"script": 'echo "$API_TOKEN"', "cwd": "/workspace", "secrets": ["API_TOKEN"]})
+            await self.handle(core, call)
+            core._await_approval.assert_awaited_once()
+            self.assertEqual(core._execute.call_args.kwargs["secrets"], {"API_TOKEN": "fixture-value-123"})
+            stored = core.repo.create_tool_call.call_args.args[0]["arguments"]
+            self.assertNotIn("fixture-value-123", str(stored))
+
+    async def test_unknown_or_foreign_secret_is_denied(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = store(Path(tmp))
+            await s.put("API_TOKEN", "fixture-value-123", "", ["tgt_other"])
+            core = self.core(s)
+            call = ToolCallAction(call_id="c", raw_arguments="{}", tool="net.http",
+                                  arguments={"url": "https://x.test/", "headers": {"Authorization": "{{secret:API_TOKEN}}"}})
+            await self.handle(core, call)
+            core._execute.assert_not_awaited()
+            self.assertIn("not allowed on this device", core._observe.call_args.args[2])
+
+    async def test_request_carries_values_but_not_the_secrets_key(self):
+        core = Orchestrator.__new__(Orchestrator)
+        core.workspace_id, core.workdirs, core.running_requests = "workspace", {}, {}
+        core.cfg = SimpleNamespace(execution=SimpleNamespace(request_ttl_s=60))
+        core.hub = SimpleNamespace(hello=lambda _: SimpleNamespace(policy=TargetPolicy(roots=["/workspace"], command_allowlist=[]), capabilities=SimpleNamespace(tools=[])))
+        sent = {}
+
+        async def execute(request, timeout):
+            sent["request"] = request
+            return ExecutionResult(request_id=request.request_id, tool_call_id="tc", status="succeeded", started_at="", finished_at="",
+                                   result=ToolOutput(exit_code=0, stdout="token fixture-value-123"))
+
+        core.hub.execute = execute
+        core.repo = SimpleNamespace(update_tool_call=AsyncMock(), audit=AsyncMock())
+        core.bus = SimpleNamespace(emit=AsyncMock())
+        core._set_status, core._observe = AsyncMock(), AsyncMock()
+        core._store_artifact = AsyncMock(return_value="art_1")
+        decision = evaluate("shell.bash", {"script": "echo $API_TOKEN", "cwd": "/workspace", "secrets": ["API_TOKEN"]},
+                            profile_tools=list(REGISTRY), target_tools=list(REGISTRY), required_risks=[],
+                            target_policy=TargetPolicy(roots=["/workspace"], command_allowlist=[]))
+        call = ToolCallAction(call_id="c", raw_arguments="{}", tool="shell.bash", arguments={})
+        await core._execute({"id": "task", "trace_id": "t", "target_id": "tgt_a"}, builtin_profiles()[0], TargetPolicy(roots=["/workspace"], command_allowlist=[]),
+                            call, "tc", decision, "apr_1", "ask", secrets={"API_TOKEN": "fixture-value-123"})
+        self.assertNotIn("secrets", sent["request"].arguments)
+        self.assertEqual(sent["request"].secrets, {"API_TOKEN": "fixture-value-123"})
+        self.assertIn("[secret:API_TOKEN]", core._observe.call_args.args[2])
+        self.assertNotIn("fixture-value-123", core._observe.call_args.args[2])

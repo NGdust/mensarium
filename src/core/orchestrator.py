@@ -3,7 +3,7 @@ import base64
 import contextlib
 import hashlib
 import logging
-import secrets
+import secrets as token_secrets
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -40,12 +40,13 @@ from mensarium.core.instructions import InstructionStore
 from mensarium.core.memory import Memory, NoteError
 from mensarium.core.plugins import PluginError, PluginManager, Toolbox
 from mensarium.core.repo import TERMINAL_STATUSES, Repo
-from mensarium.core.secrets import SecretStore
+from mensarium.core.secrets import SecretError, SecretStore
 from mensarium.core.skills import SkillStore
 from mensarium.llm_providers.base import LLMError
 from mensarium.llm_providers.router import ProviderRouter
 from mensarium.policy_engine.engine import Decision, evaluate
 from mensarium.shared.ids import new_id
+from mensarium.shared.secret_refs import fill_secrets, mask_secrets
 from mensarium.shared.timeutil import iso_in, now_iso, parse_iso, utcnow
 from mensarium.shared.versions import parse_version
 from mensarium.tool_runtime.registry import AGENT_TOOLS, AUTOMATION_TOOLS, DEVICE_TOOLS, PLAN_TOOLS, REGISTRY
@@ -871,6 +872,12 @@ class Orchestrator:
         )
         if project and project["kind"] == "folder" and call.tool.startswith("git."):
             decision = Decision(allowed=False, reason="git tools are not available in a folder project")
+        values: dict[str, str] = {}
+        if decision.allowed and decision.secrets:
+            try:
+                values = await self._resolve_secrets(decision.secrets, target)
+            except SecretError as e:
+                decision = Decision(allowed=False, reason=str(e))
         if not decision.allowed:
             await self._observe(task_id, call, f"DENIED by policy: {decision.reason}", f"{call.tool} denied")
             await self.bus.emit(
@@ -898,7 +905,7 @@ class Orchestrator:
         if mode == "full" and not in_core and not policy.allow_full_access:
             mode = "ask"
         approval_ref = None
-        if (decision.requires_approval and mode == "ask") or toolbox.registry[call.tool].always_ask:
+        if (decision.requires_approval and mode == "ask") or toolbox.registry[call.tool].always_ask or decision.secrets:
             approval_ref = await self._await_approval(task, {"name": "Core"} if in_core else target, call, tc_id, decision)
             if approval_ref is None:
                 return
@@ -906,7 +913,15 @@ class Orchestrator:
             await self._run_core_tool(task_id, call, tc_id, decision, toolbox)
             return
 
-        await self._execute(task, profile, policy, call, tc_id, decision, approval_ref, mode)
+        await self._execute(task, profile, policy, call, tc_id, decision, approval_ref, mode, secrets=values)
+
+    async def _resolve_secrets(self, names: list[str], target: dict[str, Any]) -> dict[str, str]:
+        if self.secrets is None:
+            raise SecretError("secrets are not available")
+        values = await self.secrets.resolve(names, str(target["id"]))
+        if not (target.get("capabilities") or {}).get("secrets"):
+            raise SecretError("the client on this device is too old to receive secrets; ask the user to update it")
+        return values
 
     async def _await_approval(
         self, task: dict[str, Any], target: dict[str, Any], call: ToolCallAction, tc_id: str, decision: Decision
@@ -933,6 +948,7 @@ class Orchestrator:
                     "display": decision.display,
                     "arguments": decision.arguments,
                     "target_name": target["name"],
+                    "secrets": decision.secrets,
                 },
             },
         )
@@ -940,7 +956,14 @@ class Orchestrator:
             self.workspace_id,
             "core",
             "approval.requested",
-            {"task_id": task_id, "tool_call_id": tc_id, "tool": call.tool, "risk": decision.risk, "display": decision.display},
+            {
+                "task_id": task_id,
+                "tool_call_id": tc_id,
+                "tool": call.tool,
+                "risk": decision.risk,
+                "display": decision.display,
+                "secrets": decision.secrets,
+            },
         )
         waiter: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self.approval_waiters[approval_id] = waiter
@@ -986,6 +1009,8 @@ class Orchestrator:
         decision: Decision,
         approval_ref: str | None,
         mode: AccessMode,
+        *,
+        secrets: dict[str, str] | None = None,
     ) -> None:
         task_id = task["id"]
         hello = self.hub.hello(task["target_id"])
@@ -993,6 +1018,10 @@ class Orchestrator:
             await self.repo.update_tool_call(tc_id, {"status": "not_executed"})
             await self._observe(task_id, call, "ERROR: target is offline; the action was not executed.", "target offline")
             raise Stop("PAUSED", "target offline")
+        values = secrets or {}
+        arguments = {k: v for k, v in decision.arguments.items() if k != "secrets"}
+        if values and decision.exec_tool == "net.http":
+            arguments = fill_secrets(arguments, values)
         request = ExecutionRequest(
             request_id=new_id("req"),
             trace_id=task["trace_id"],
@@ -1002,13 +1031,14 @@ class Orchestrator:
             tool_call_id=tc_id,
             issued_at=now_iso(),
             expires_at=iso_in(self.cfg.execution.request_ttl_s),
-            nonce=secrets.token_hex(32),
+            nonce=token_secrets.token_hex(32),
             policy_snapshot_hash=policy_snapshot_hash(hello.policy, hello.capabilities.tools),
             tool=decision.exec_tool,
-            arguments=decision.arguments,
+            arguments=arguments,
             approval_ref=approval_ref,
             mode=mode,
             workdir=self.workdirs.get(task_id),
+            secrets=values,
         )
         await self.repo.update_tool_call(tc_id, {"status": "executing", "request_id": request.request_id})
         await self._set_status(task_id, "EXECUTING")
@@ -1052,6 +1082,7 @@ class Orchestrator:
 
         await self._set_status(task_id, "OBSERVING")
         content, truncated = self._format_result(result)
+        content = mask_secrets(content, values)
         artifact_id = None
         if len(content) > ARTIFACT_THRESHOLD or call.tool in ("shell.exec", "shell.bash"):
             artifact_id = await self._store_artifact(task_id, tc_id, content)
