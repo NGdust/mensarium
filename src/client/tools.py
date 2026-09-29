@@ -50,6 +50,7 @@ from mensarium.contracts.tools import (
     ShellExecArgs,
     SystemVolumeArgs,
 )
+from mensarium.shared.gitflags import GIT_SAFE_FLAGS
 from mensarium.shared.paths import ensure_private_dir, projects_dir
 from mensarium.shared.redaction import GIT_DIRS, SECRET_DIRS, SECRET_FILE_PATTERNS, is_secret_path, redact
 from mensarium.tool_runtime.mcp import McpError
@@ -60,7 +61,6 @@ if TYPE_CHECKING:
 MAX_READ_BYTES = 2_000_000
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".ruff_cache", ".pytest_cache", "dist", "build", ".next", ".idea"}  # fmt: skip
 SECRET_ENV = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|PRIVATE|CREDENTIAL|_KEY$)", re.I)
-GIT_SAFE_FLAGS = ("-c", "color.ui=never", "-c", "commit.gpgSign=false", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
 _FULL_ACCESS: ContextVar[bool] = ContextVar("mensarium_full_access", default=False)
 _WORKDIR: ContextVar[Path | None] = ContextVar("mensarium_workdir", default=None)
 
