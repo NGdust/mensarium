@@ -70,7 +70,7 @@ class OAuthTests(unittest.IsolatedAsyncioTestCase):
         await self.manager.install(CATALOG["mcp-notion"], "catalog")
         self.assertIn("_oauth", (await self.manager.get("mcp-notion")).missing())
 
-        url = await self.manager.oauth_start("mcp-notion", ORIGIN)
+        url = (await self.manager.oauth_start("mcp-notion", ORIGIN))["url"]
 
         q = {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
         self.assertTrue(url.startswith(f"{NOTION}/authorize?"))
@@ -85,13 +85,21 @@ class OAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls.count("POST /register"), 1)
         self.assertEqual(len(self.manager.oauth.pending), 1)
 
+    def test_redirect_prefers_loopback_over_plain_http(self):
+        self.manager.core_port = 8799
+        self.assertEqual(self.manager.redirect("https://core.example.com", "1.2.3.4"), ("https://core.example.com/v1/oauth/callback", False))
+        self.assertEqual(self.manager.redirect("http://localhost:8790", "1.2.3.4"), ("http://localhost:8790/v1/oauth/callback", False))
+        self.assertEqual(self.manager.redirect("http://194.87.128.55:8788", "1.2.3.4"), ("http://127.0.0.1:8799/v1/oauth/callback", True))
+        self.manager.gateway_loopback = lambda ip: "http://127.0.0.1:8790" if ip == "1.2.3.4" else None
+        self.assertEqual(self.manager.redirect("http://194.87.128.55:8788", "1.2.3.4"), ("http://127.0.0.1:8790/v1/oauth/callback", False))
+
     async def test_callback_stores_tokens_and_refreshes_expired(self):
         calls: list[dict[str, str]] = []
         self.manager.oauth = OAuthFlow(transport=httpx.MockTransport(google_token_server(calls)))
         await self.manager.install(CATALOG["google-gmail"], "catalog")
         await self.manager.configure("google-gmail", values={"client_id": "gid"}, secrets={"client_secret": "gsecret"})
 
-        url = await self.manager.oauth_start("google-gmail", ORIGIN)
+        url = (await self.manager.oauth_start("google-gmail", ORIGIN))["url"]
         q = {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
         self.assertEqual(q["scope"], "https://www.googleapis.com/auth/gmail.readonly")
         self.assertEqual(q["access_type"], "offline")

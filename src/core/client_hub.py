@@ -77,6 +77,14 @@ class ClientHub:
     def gateway_online(self, target_id: str) -> bool:
         return target_id in self.gateways
 
+    def gateway_loopback(self, ip: str) -> str | None:
+        """The loopback origin of a gateway on the machine the browser sits on, judged by the connection address."""
+        for conn in self.gateways.values():
+            port = conn.hello.capabilities.gateway_port
+            if port and conn.ws.client and conn.ws.client.host == ip:
+                return f"http://127.0.0.1:{port}"
+        return None
+
     async def handle(self, ws: WebSocket) -> None:
         await ws.accept()
         conn = await self._authenticate(ws)

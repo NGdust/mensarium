@@ -41,6 +41,7 @@ class Capabilities(BaseModel):
     projects: bool = False
     projects_root: str | None = None
     project_ops: list[str] = []
+    gateway_port: int | None = None  # gateway sessions: the loopback port a browser on that machine can reach
 
 
 class TargetHello(BaseModel):

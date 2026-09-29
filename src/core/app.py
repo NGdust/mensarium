@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import yaml
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket
@@ -209,6 +209,10 @@ class OAuthStartBody(BaseModel):
     origin: str = Field(pattern=r"^https?://[^/\s]+$", max_length=300)
 
 
+class OAuthFinishBody(BaseModel):
+    url: str = Field(max_length=4000, description="The address the browser landed on after signing in")
+
+
 class PluginConfigBody(BaseModel):
     values: dict[str, Any] = {}
     secrets: dict[str, str | None] = {}
@@ -310,6 +314,8 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         plugins = PluginManager(repo, paths, workspace_id)
         plugins.send_plugins = lambda target_id, servers: hub.request_plugins(target_id, servers, cfg.execution.request_ttl_s)
         plugins.device_tools_supported = lambda target_id: hub.supports(target_id, "mcp.call")
+        plugins.gateway_loopback = hub.gateway_loopback
+        plugins.core_port = cfg.server.port
         hub.on_connect = plugins.sync_device
         await plugins.start()
         catalog = Catalog(cfg.plugins.catalog_url)
@@ -908,12 +914,34 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             raise plugin_error(e) from e
         return await plugin_view(c, plugin_id)
 
+    def browser_ip(request: Request) -> str:
+        return request.client.host if request.client else ""
+
+    @app.get("/v1/oauth/redirect")
+    async def oauth_redirect(request: Request, origin: str = Query(pattern=r"^https?://[^/\s]+$", max_length=300), c: Core = Depends(auth)) -> dict[str, Any]:
+        redirect_uri, manual = c.plugins.redirect(origin, browser_ip(request))
+        return {"redirect_uri": redirect_uri, "manual": manual}
+
     @app.post("/v1/plugins/{plugin_id}/oauth/start")
-    async def oauth_start(plugin_id: str, body: OAuthStartBody, c: Core = Depends(auth)) -> dict[str, str]:
+    async def oauth_start(plugin_id: str, body: OAuthStartBody, request: Request, c: Core = Depends(auth)) -> dict[str, Any]:
         try:
-            return {"url": await c.plugins.oauth_start(plugin_id, body.origin)}
+            return await c.plugins.oauth_start(plugin_id, body.origin, browser_ip(request))
         except PluginError as e:
             raise plugin_error(e) from e
+
+    @app.post("/v1/plugins/{plugin_id}/oauth/finish")
+    async def oauth_finish(plugin_id: str, body: OAuthFinishBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        """Manual completion: the user pasted the address the provider sent the browser to."""
+        q = {k: v[0] for k, v in parse_qs(urlparse(body.url.strip()).query).items()}
+        if q.get("error"):
+            raise HTTPException(409, q.get("error_description") or q["error"])
+        if not q.get("state") or not q.get("code"):
+            raise HTTPException(422, "the address has no code and state; paste the whole address from the browser's address bar")
+        try:
+            await c.plugins.oauth_finish(q["state"], q["code"], plugin_id)
+        except PluginError as e:
+            raise plugin_error(e) from e
+        return await plugin_view(c, plugin_id)
 
     @app.get("/v1/oauth/callback", include_in_schema=False)
     async def oauth_callback(request: Request, state: str = "", code: str = "", error: str = "", error_description: str = "") -> HTMLResponse:

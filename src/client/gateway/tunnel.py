@@ -56,7 +56,7 @@ class Tunnel:
                 hostname=socket.gethostname(),
                 agent_version=__version__,
             ),
-            capabilities=Capabilities(tools=[]),
+            capabilities=Capabilities(tools=[], gateway_port=self.cfg.gateway.port),
             policy=self.cfg.policy,
         )
 

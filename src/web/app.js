@@ -3124,20 +3124,40 @@ async function settingsPlugins(shell) {
     if (!p.oauth) return null;
     const o = p.oauth;
     const needs = p.missing.filter((k) => k in (p.settings || {}));
-    const redirect = location.origin + o.redirect_path;
+    const redirectLine = h('div', { class: 'row-desc' });
+    const manualNote = h('div', { class: 'row-desc hidden' }, tr('This address does not open in your browser: after signing in, copy the address the browser lands on and paste it below.'));
+    const pasted = h('input', { type: 'text', placeholder: 'http://127.0.0.1:.../v1/oauth/callback?code=...&state=...', 'aria-label': tr('Address after sign-in') });
+    const finish = h('button', { class: 'btn btn-sm btn-primary' }, tr('Finish'));
+    finish.addEventListener('click', async () => {
+      if (!pasted.value.trim()) return;
+      finish.disabled = true;
+      try { await post(`/v1/plugins/${p.id}/oauth/finish`, { url: pasted.value.trim() }); toast(tr('Connected')); await reopen(); } catch (err) { fail(err); } finally { finish.disabled = false; }
+    });
+    const manualRow = h('div', { class: 'secret-field hidden' }, pasted, finish);
+    let manual = false;
+    get(`/v1/oauth/redirect?origin=${encodeURIComponent(location.origin)}`).then((r) => {
+      manual = r.manual;
+      redirectLine.replaceChildren(...(o.own_client ? [tr('Redirect URI for the OAuth client: '), h('code', {}, r.redirect_uri), ' ', copyBtn(r.redirect_uri)] : []));
+      manualNote.classList.toggle('hidden', !manual);
+    }).catch(() => {});
     const connect = h('button', { class: `btn btn-sm${o.connected ? '' : ' btn-primary'}`, disabled: !p.installed || needs.length > 0 }, icon('link'), o.connected ? tr('Reconnect') : tr('Connect'));
     connect.addEventListener('click', async () => {
       connect.disabled = true;
       try {
-        const { url } = await post(`/v1/plugins/${p.id}/oauth/start`, { origin: location.origin });
-        const tab = window.open(url, '_blank', 'noopener');
-        const onMessage = async (ev) => {
-          if (ev.data?.mensarium !== 'oauth') return;
-          window.removeEventListener('message', onMessage);
-          if (ev.data.ok) toast(tr('Connected'));
-          await reopen();
-        };
-        window.addEventListener('message', onMessage);
+        const r = await post(`/v1/plugins/${p.id}/oauth/start`, { origin: location.origin });
+        const tab = window.open(r.url, '_blank', 'noopener');
+        if (r.manual) {
+          manualRow.classList.remove('hidden');
+          pasted.focus();
+        } else {
+          const onMessage = async (ev) => {
+            if (ev.data?.mensarium !== 'oauth') return;
+            window.removeEventListener('message', onMessage);
+            if (ev.data.ok) toast(tr('Connected'));
+            await reopen();
+          };
+          window.addEventListener('message', onMessage);
+        }
         if (!tab) toast(tr('Allow pop-ups for this page to sign in'));
       } catch (err) { fail(err); } finally { connect.disabled = false; }
     });
@@ -3145,12 +3165,14 @@ async function settingsPlugins(shell) {
       try { await api(`/v1/plugins/${p.id}/oauth`, { method: 'DELETE' }); toast(tr('Disconnected')); await reopen(); } catch (err) { fail(err); }
     } }, tr('Disconnect')) : null;
     const state = o.connected
-      ? [h('span', { class: 'dot ok' }), h('span', {}, o.rescope ? tr('Connected, but not for everything that is turned on: reconnect') : tr('Connected {0}', fmtDate(o.connected_at)))]
+      ? [h('span', { class: 'dot ok' }), h('span', {}, o.rescope ? tr('Connected, but not for everything that is turned on: reconnect') : tr('Connected {0}', relTime(o.connected_at)))]
       : [h('span', { class: 'dot' }), h('span', {}, needs.length ? tr('Save the settings above, then connect') : tr('Not connected'))];
     return h('div', { class: 'plugin-mcp' },
       h('div', { class: 'field-label' }, tr('Account')),
       h('div', { class: `plugin-status ${o.connected ? 'ok' : ''}` }, ...state, h('span', { class: 'spacer' }), disconnect, ' ', connect),
-      o.own_client ? h('div', { class: 'row-desc' }, tr('Redirect URI for the OAuth client: '), h('code', {}, redirect), ' ', copyBtn(redirect)) : null);
+      redirectLine,
+      manualNote,
+      manualRow);
   }
 
   function mcpBlock(p, onChange) {
