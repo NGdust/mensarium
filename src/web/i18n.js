@@ -191,6 +191,7 @@ const RU = {
   'Empty': 'Пусто',
   'Always in the agent\'s context': 'Всегда в контексте агента',
   'Loading...': 'Загружаем...',
+  'Loading earlier messages…': 'Загружаем предыдущие сообщения…',
   'All types': 'Все типы',
   'Note type': 'Тип заметок',
   'Search notes': 'Поиск по заметкам',

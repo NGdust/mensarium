@@ -1455,10 +1455,14 @@ function outdatedBanner(t) {
 // ---------- chat ----------
 
 async function viewChat(taskId) {
+const TURNS = 10;
+
   const shell = ensureAppShell();
   shell.setActive(null);
   let task;
-  try { task = await get(`/v1/tasks/${taskId}`); } catch (err) { fail(err); go('#/'); return; }
+  let history;
+  try { [task, history] = await Promise.all([get(`/v1/tasks/${taskId}`), get(`/v1/tasks/${taskId}/history?turns=${TURNS}`)]); }
+  catch (err) { fail(err); go('#/'); return; }
   state.lastChat = `#/chat/${taskId}`;
 
   const act = async (action) => {
@@ -1473,7 +1477,8 @@ async function viewChat(taskId) {
     : h('span', { class: 'pill tag branch-pill', title: tr('No workspace: the agent works right in the project folder') }, icon('folder'), h('span', {}, tr('project folder')));
 
   const thread = h('div', { class: 'thread' });
-  const inner = h('div', { class: 'thread-inner', role: 'log', 'aria-live': 'polite' });
+  const loader = h('div', { class: 'thread-more', hidden: true }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), tr('Loading earlier messages…'));
+  const inner = h('div', { class: 'thread-inner', role: 'log', 'aria-live': 'polite' }, loader);
   thread.append(inner);
 
   const target = () => state.targets.find((t) => t.id === task.target_id);
@@ -1525,8 +1530,16 @@ async function viewChat(taskId) {
 
   // --- rendering ---
   let stick = true;
-  thread.addEventListener('scroll', () => { stick = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 120; });
-  const add = (node) => { inner.append(node); if (stick) thread.scrollTop = thread.scrollHeight; return node; };
+  // Like a messenger: the chat opens at its last turns and older ones are fetched as the user scrolls up.
+  // `past` renders such a chunk into `sink` with its own activity state and without touching the live widgets.
+  let past = false;
+  let sink = inner;
+  const scrollDown = () => { thread.scrollTop = thread.scrollHeight; };
+  thread.addEventListener('scroll', () => {
+    stick = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 120;
+    if (thread.scrollTop < 300) loadOlder();
+  });
+  const add = (node) => { sink.append(node); if (stick) scrollDown(); return node; };
   let lastAgent = false;
 
   const agentMsg = (bodyNode, live = false) => {
@@ -1608,7 +1621,7 @@ async function viewChat(taskId) {
     say(w.actions ? tp('{0} action|{0} actions', w.actions) : tr('Details'), false, w);
     w.meta.textContent = secs < 60 ? tr('{0} s', secs) : tr('{0} min', Math.round(secs / 60));
   }
-  const logAdd = (node) => { ensureWork().log.append(node); if (stick) thread.scrollTop = thread.scrollHeight; return node; };
+  const logAdd = (node) => { ensureWork().log.append(node); if (stick) scrollDown(); return node; };
 
   const base = (path) => String(path || '').split('/').filter(Boolean).pop() || String(path || '');
   const clip = (text, n) => (String(text).length > n ? `${String(text).slice(0, n - 1)}…` : String(text));
@@ -1751,7 +1764,7 @@ async function viewChat(taskId) {
   function handleAgent(id, event, p, ev, live) {
     const a = agents.get(id);
     if (!a) return;
-    const active = isRunning(task.status);
+    const active = !past && isRunning(task.status);
     const into = (node) => a.log.append(node);
     const anote = (ic, text, cls = '') => into(h('div', { class: `note ${cls}` }, icon(ic), h('span', {}, text)));
     switch (event) {
@@ -1806,7 +1819,7 @@ async function viewChat(taskId) {
       d.node = agentMsg(d.body, true);
     }
     d.body.innerHTML = markdown(d.text);
-    if (stick) thread.scrollTop = thread.scrollHeight;
+    if (stick) scrollDown();
   }
   function settleDraft(body) {
     const d = draft;
@@ -1824,13 +1837,13 @@ async function viewChat(taskId) {
     const ev = { created_at: createdAt };
     switch (event) {
       case 'user.message':
-        plan.set([]); // Also clears stale plans while replaying events from older server versions.
+        if (!past) plan.set([]); // Also clears stale plans while replaying events from older server versions.
         finishWork();
         lastAgent = false;
         add(h('div', { class: 'msg-user' }, h('div', { class: 'bubble-user' }, p.text ? h('div', { class: 'bubble-text' }, p.text) : null, attachmentList(p.attachments))));
         break;
       case 'task.status':
-        setStatus(p.status);
+        if (!past) setStatus(p.status);
         if (!isRunning(p.status)) finishWork();
         if (!isRunning(p.status) && p.status !== 'SUCCEEDED') dropDraft();
         if (['PAUSED', 'CANCELED', 'FAILED', 'FAILED_RECOVERABLE'].includes(p.status)) {
@@ -1838,15 +1851,15 @@ async function viewChat(taskId) {
         }
         break;
       case 'task.mode':
-        modeCtl.set(p.mode);
+        if (!past) modeCtl.set(p.mode);
         note(MODES[p.mode]?.icon || 'shield', tr('Mode: {0}', (MODES[p.mode]?.label || p.mode).toLowerCase()));
         break;
       case 'task.model':
-        modelCtl.set(p);
+        if (!past) modelCtl.set(p);
         note('robot', tr('Model: {0}', [p.provider, p.model].filter(Boolean).join(' · ')));
         break;
       case 'task.plan':
-        plan.set(p.items || []);
+        if (!past) plan.set(p.items || []);
         break;
       case 'task.project':
         if (live) changes?.later(true);
@@ -1926,7 +1939,7 @@ async function viewChat(taskId) {
   }
 
   const openedAt = Date.now();
-  let lastSeq = 0;
+  let lastSeq = history.events.length ? history.events[history.events.length - 1].seq : 0;
   let es = null;
   let delay = 1000;
   let closed = false;
@@ -1950,8 +1963,49 @@ async function viewChat(taskId) {
     };
   };
   connect();
+  // Older turns render into a fragment with a fresh activity block, then go in above the loader with the view kept in place.
+  const renderPast = (events) => {
+    const saved = { sink, work, lastAgent, draft, draftFor, stick };
+    ({ sink, work, lastAgent, draft, draftFor, stick } = { sink: document.createDocumentFragment(), work: null, lastAgent: false, draft: null, draftFor: null, stick: false });
+    past = true;
+    for (const ev of events) handle(ev, false);
+    finishWork();
+    const frag = sink;
+    past = false;
+    ({ sink, work, lastAgent, draft, draftFor, stick } = saved);
+    return frag;
+  };
+  let firstSeq = history.events.length ? history.events[0].seq : 0;
+  let hasMore = history.has_more;
+  let loading = false;
+  async function loadOlder() {
+    if (loading || !hasMore) return;
+    loading = true;
+    loader.hidden = false;
+    let r;
+    try { r = await get(`/v1/tasks/${taskId}/history?before=${firstSeq}&turns=${TURNS}`); }
+    catch (err) { fail(err); return; }
+    finally { loading = false; loader.hidden = true; }
+    if (closed) return;
+    hasMore = r.has_more;
+    if (r.events.length) firstSeq = r.events[0].seq;
+    const frag = renderPast(r.events);
+    const height = thread.scrollHeight;
+    const top = thread.scrollTop;
+    loader.after(frag);
+    thread.scrollTop = top + thread.scrollHeight - height;
+    if (thread.scrollTop < 300) loadOlder();
+  }
+
+  stick = false;
+  for (const ev of history.events) handle(ev, false);
+  stick = true;
+  scrollDown();
+  const grow = new ResizeObserver(() => { if (stick) scrollDown(); });
+  grow.observe(inner);
   usage.refresh();
-  viewCleanups.push(() => { closed = true; if (es) es.close(); });
+  if (thread.scrollTop < 300) loadOlder();
+  viewCleanups.push(() => { closed = true; grow.disconnect(); if (es) es.close(); });
   if (!c.textarea.disabled) c.textarea.focus();
 }
 

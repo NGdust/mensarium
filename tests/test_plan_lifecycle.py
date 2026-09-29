@@ -46,6 +46,21 @@ class PlanLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 events = await self.repo.list_events("chat")
                 self.assertEqual([e["event"] for e in events[-2:]], ["task.plan", "task.status"])
 
+    async def test_history_is_paged_by_whole_user_turns(self):
+        await self.core._set_status("chat", "PAUSED")
+        for text in ("first", "second", "third"):
+            await self.core.post_message("chat", text)
+            await self.core._set_status("chat", "PAUSED")
+        events, more = await self.repo.list_history("chat", turns=2)
+        self.assertTrue(more)
+        self.assertEqual(events[0]["event"], "user.message")
+        self.assertEqual([e["payload"]["text"] for e in events if e["event"] == "user.message"], ["second", "third"])
+        older, more = await self.repo.list_history("chat", before=events[0]["seq"], turns=2)
+        self.assertFalse(more)
+        self.assertEqual(older[0]["event"], "task.status")
+        self.assertEqual([e["payload"]["text"] for e in older if e["event"] == "user.message"], ["first"])
+        self.assertEqual(older[-1]["seq"] + 1, events[0]["seq"])
+
     async def test_pause_and_resume_keep_current_plan(self):
         await self.core._set_status("chat", "PAUSED")
         self.assertEqual((await self.repo.get_task("chat"))["plan"], self.plan)

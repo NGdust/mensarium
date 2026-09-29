@@ -433,6 +433,20 @@ class Repo:
             "SELECT * FROM task_events WHERE task_id = ? AND seq > ? ORDER BY seq", (task_id, after)
         )
 
+    async def list_history(self, task_id: str, before: int = 0, turns: int = 10) -> tuple[list[dict[str, Any]], bool]:
+        """The last `turns` user turns before `before` (0 = the end), cut at user.message so a turn stays whole."""
+        end = before or 1 << 62
+        starts = await self.db.fetchall(
+            "SELECT seq FROM task_events WHERE task_id = ? AND event = 'user.message' AND seq < ? ORDER BY seq DESC LIMIT ?",
+            (task_id, end, turns),
+        )
+        start = starts[-1]["seq"] if len(starts) == turns else 0
+        events = await self.db.fetchall(
+            "SELECT * FROM task_events WHERE task_id = ? AND seq >= ? AND seq < ? ORDER BY seq", (task_id, start, end)
+        )
+        older = await self.db.fetchone("SELECT 1 FROM task_events WHERE task_id = ? AND seq < ? LIMIT 1", (task_id, start))
+        return events, older is not None
+
     # audit (hash chain)
     async def audit(self, workspace_id: str, actor: str, event_type: str, payload: dict[str, Any]) -> None:
         last = await self.db.fetchone("SELECT hash FROM audit_events ORDER BY rowid DESC LIMIT 1")

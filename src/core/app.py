@@ -1411,6 +1411,15 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         except TaskError as e:
             raise task_error(e) from e
 
+    @app.get("/v1/tasks/{task_id}/history")
+    async def task_history(
+        task_id: str, before: int = 0, turns: int = Query(10, ge=1, le=50), c: Core = Depends(auth)
+    ) -> dict[str, Any]:
+        if not await c.repo.get_task(task_id):
+            raise HTTPException(404, "task not found")
+        events, more = await c.repo.list_history(task_id, before, turns)
+        return {"events": events, "has_more": more}
+
     @app.get("/v1/tasks/{task_id}/events")
     async def task_events(task_id: str, request: Request, after: int = 0, c: Core = Depends(auth)) -> StreamingResponse:
         if not await c.repo.get_task(task_id):

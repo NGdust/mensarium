@@ -36,6 +36,7 @@ function chat() {
     plan: { set: value => { items = value; } },
     usage: { later: () => {} },
     stick: false,
+    past: false,
     work: null,
   });
   vm.runInContext(source.slice(start, end), context);
