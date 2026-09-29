@@ -9,7 +9,7 @@ import typer
 from rich.markup import escape
 from rich.table import Table
 
-from mensarium.cli.plugins import ApiError, _run
+from mensarium.cli.plugins import ApiError, _api, _run
 from mensarium.cli.ui import console, fail, ok, warn
 
 projects_app = typer.Typer(help="Projects: folders and git repositories the agent works on in isolated copies", no_args_is_help=True)
@@ -91,7 +91,6 @@ def projects_init(
     if not folder.is_dir():
         fail(f"{folder} is not a folder")
         raise typer.Exit(1)
-    _ensure_root(folder)
     try:
         target_id = api_target_id()
     except ApiError as e:
@@ -100,6 +99,7 @@ def projects_init(
     if not target_id:
         fail("this machine is not a device of the Core: pair it with `mensarium client`, or turn on the Core's own device")
         raise typer.Exit(1)
+    _ensure_root(folder, target_id)
     p = _run("POST", "/v1/projects", {"name": name or folder.name, "source_target_id": target_id, "source_path": str(folder)})
     console.print(f"Reading {escape(str(folder))}...")
     deadline = time.monotonic() + 600
@@ -115,7 +115,7 @@ def projects_init(
     ok(f"Project {escape(p['name'])} ({p['kind_label']}) is ready: {api_base_url()}/#/projects/{p['id']}")
 
 
-def _ensure_root(folder: Path) -> None:
+def _ensure_root(folder: Path, target_id: str) -> None:
     """A project must lie inside the device's allowed folders; on a client the user may add one here."""
     from mensarium.cli import service
     from mensarium.client.config import ClientPaths, load_client_config, save_client_config
@@ -134,16 +134,32 @@ def _ensure_root(folder: Path) -> None:
     cfg = load_client_config(client)
     if any(folder.is_relative_to(Path(r).expanduser().resolve()) for r in cfg.roots):
         return
-    if not questionary.confirm(f"{folder} is outside this device's folders. Add it?", default=True).ask():
+    answer = questionary.confirm(f"{folder} is outside this device's folders. Add it?", default=False).ask()
+    if answer is None:
+        fail("cannot ask here: run it in a terminal, or add the folder with `mensarium client setup`")
+        raise typer.Exit(1)
+    if not answer:
         raise typer.Exit(1)
     cfg.roots.append(str(folder))
     save_client_config(client, cfg)
     if service.is_installed("client"):
         service.restart("client")
         console.print("Client restarted with the new folder; waiting for it to reconnect...")
-        time.sleep(5)
+        if not _wait_online(target_id):
+            warn("the client has not reconnected to the Core yet; the Core may fail to read the folder")
     else:
         warn("Restart `mensarium client run` so the Core sees the new folder")
+
+
+def _wait_online(target_id: str) -> bool:
+    for _ in range(30):
+        time.sleep(1)
+        try:
+            if any(t["id"] == target_id and t["status"] == "online" for t in _api("GET", "/v1/targets")):
+                return True
+        except ApiError:
+            pass
+    return False
 
 
 @projects_app.command("sync")

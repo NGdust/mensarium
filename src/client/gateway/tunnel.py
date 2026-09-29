@@ -30,6 +30,10 @@ class CoreOffline(Exception):
     pass
 
 
+class CoreFailed(Exception):
+    """The Core took the request but failed to answer it; carries the Core's error text."""
+
+
 @dataclass
 class Call:
     id: str
@@ -162,8 +166,10 @@ class Tunnel:
                     status, chunks = frame.status, [base64.b64decode(frame.body)]
                 elif isinstance(frame, ApiChunk):
                     chunks.append(base64.b64decode(frame.body))
-                elif frame.error:
+                elif frame.error == "core-offline":
                     raise CoreOffline()
+                elif frame.error:
+                    raise CoreFailed(frame.error)
                 else:
                     return status, b"".join(chunks)
         finally:

@@ -59,8 +59,10 @@ def _via_core(paths: CorePaths, method: str, path: str, body: Any, content: byte
 
 async def _via_client(paths: ClientPaths, method: str, path: str, body: Any, content: bytes | None) -> tuple[int, bytes]:
     """A client machine reaches the Core API through a short signed session, the way its gateway does."""
-    from mensarium.client.gateway.tunnel import CoreOffline, Tunnel
+    from mensarium.client.gateway.tunnel import CoreFailed, CoreOffline, Tunnel
 
+    if not paths.key.exists():
+        raise ApiError("this client has no key; pair it again with `mensarium client`")
     cfg = load_client_config(paths)
     tunnel = Tunnel(cfg, paths, load_or_create_private_key(paths.key), session="cli")
     headers = {"content-type": "text/plain" if content is not None else "application/json"}
@@ -71,6 +73,8 @@ async def _via_client(paths: ClientPaths, method: str, path: str, body: Any, con
         if str(e):
             raise ApiError(f"the Core rejected this client ({e}); pair it again with `mensarium client pair`") from e
         raise ApiError(f"cannot reach the Core at {cfg.server}; is it running and is this client paired?") from e
+    except CoreFailed as e:
+        raise ApiError(str(e)) from e
     except TimeoutError as e:
         raise ApiError(f"the Core at {cfg.server} did not answer in time") from e
 
