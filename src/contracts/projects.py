@@ -158,6 +158,7 @@ class ProjectSnapshot(BaseModel):
     size_limit_mb: int = 1024
     file_limit_mb: int = 100
     known: dict[str, str] = {}
+    bundle: bool = False
     issued_at: str
     expires_at: str
     nonce: str

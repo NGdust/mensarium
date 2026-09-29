@@ -347,18 +347,22 @@ class ClientAgent:
             log.warning("invalid project request", extra={"type": raw.get("type"), "error": str(e)})
             return
         reason = self._check_signed(req, raw)
-        if isinstance(req, ProjectSnapshot):
-            answer = (
-                ProjectSnapshotStatus(request_id=req.request_id, project_id=req.project_id, state="error", detail=reason)
-                if reason
-                else await self.projects.snapshot(req, self._send)
-            )
-        else:
-            answer = (
-                ProjectOpStatus(request_id=req.request_id, project_id=req.project_id, task_id=req.task_id, op=req.op, state="error", detail=reason)
-                if reason
-                else await self.projects.op(req, self._send)
-            )
+        try:
+            if isinstance(req, ProjectSnapshot):
+                answer = (
+                    ProjectSnapshotStatus(request_id=req.request_id, project_id=req.project_id, state="error", detail=reason)
+                    if reason
+                    else await self.projects.snapshot(req, self._send)
+                )
+            else:
+                answer = (
+                    ProjectOpStatus(request_id=req.request_id, project_id=req.project_id, task_id=req.task_id, op=req.op, state="error", detail=reason)
+                    if reason
+                    else await self.projects.op(req, self._send)
+                )
+        except websockets.ConnectionClosed:
+            log.warning("project bundle not delivered: connection closed", extra={"request_id": req.request_id})
+            return
         answer.signature = sign(self.key, answer.model_dump())
         try:
             await self._send(answer.model_dump())

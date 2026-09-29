@@ -53,10 +53,10 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         status = await self.host.op(req, send=self.send)
         return status.model_dump()
 
-    async def snapshot(self, known: dict[str, str] | None = None) -> dict:
+    async def snapshot(self, known: dict[str, str] | None = None, bundle: bool = True) -> dict:
         from mensarium.contracts.projects import ProjectSnapshot
         req = ProjectSnapshot(request_id="s", target_id="device", project_id="prj_1", source_path=str(self.repo), kind="repo",
-                              known=known or {}, issued_at="", expires_at="", nonce="")
+                              known=known or {}, bundle=bundle, issued_at="", expires_at="", nonce="")
         return (await self.host.snapshot(req, send=self.send)).model_dump()
 
     def bundle_heads(self, request_id: str) -> str:
@@ -66,6 +66,8 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         return git(self.repo, "bundle", "list-heads", str(path))
 
     async def test_snapshot_ships_only_moved_refs_and_reports_main(self) -> None:
+        self.assertIsNone((await self.snapshot(bundle=False))["bundle"])
+        self.assertEqual(self.sent, [])
         first = await self.snapshot()
         self.assertEqual(first["state"], "ok", first["detail"])
         self.assertEqual(first["main"], "main")

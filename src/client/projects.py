@@ -162,7 +162,7 @@ class ProjectHost:
                 result = await self._snapshot(req.project_id, req.source_path, req.kind, req.include_remotes, req.fetch_origin, req.size_limit_mb, req.file_limit_mb, req.git_url)
                 status = status.model_copy(update=result)
                 status.state = "unchanged" if status.refs == req.known else "ok"
-                if status.state == "ok" and send is not None:
+                if status.state == "ok" and req.bundle and send is not None:
                     src = self._source(req.source_path, req.project_id, req.git_url, exists=not req.git_url)
                     moved = {ref: sha for ref, sha in status.refs.items() if req.known.get(ref) != sha}
                     base = self._base(status.kind or "repo", req.project_id)
@@ -170,7 +170,7 @@ class ProjectHost:
         except (ToolError, ExecTimeout, OSError) as e:
             return ProjectSnapshotStatus(request_id=req.request_id, project_id=req.project_id, state="error", detail=str(e))
         finally:
-            self.active.discard(req.request_id)
+            self._done(req.request_id)
         return status
 
     async def _snapshot(
@@ -255,20 +255,20 @@ class ProjectHost:
             for sha in sorted({known[ref] for ref in refs if known.get(ref)}):
                 if SHA_RE.fullmatch(sha) and await self._rev(base, f"{sha}^{{commit}}", cwd):
                     have.append(sha)
-            code, out, err = await self._call(*base, "bundle", "create", "--quiet", str(path), *refs, *(f"^{sha}" for sha in have), cwd=cwd)
-            if code != 0 and "empty bundle" in (err + out).lower():
+            revs = [*refs, *(f"^{sha}" for sha in have)]
+            if int((await self._git(*base, "rev-list", "--count", *revs, cwd=cwd)).strip() or 0) == 0:
                 return None
-            if code != 0 and have:
-                # A known commit may be cut off from the refs after a history rewrite: send everything instead.
-                have = []
-                code, out, err = await self._call(*base, "bundle", "create", "--quiet", str(path), *refs, cwd=cwd)
-            if code != 0:
-                raise ToolError((err or out).strip()[:2000] or "git bundle create failed")
+            await self._git(*base, "bundle", "create", "--quiet", str(path), *revs, cwd=cwd)
             for seq, data in enumerate(bundles.chunks(path)):
                 await send(ProjectBundle(request_id=request_id, project_id=project_id, seq=seq, data=data).model_dump())
             return bundles.describe(path, refs, have)
         finally:
             path.unlink(missing_ok=True)
+
+    def _done(self, request_id: str) -> None:
+        self.active.discard(request_id)
+        if SAFE_ID.fullmatch(request_id):
+            (self.inbox / f"{request_id}.bundle").unlink(missing_ok=True)
 
     # A project.bundle frame for a request being handled right now; anything else is dropped.
     def receive_chunk(self, msg: dict[str, Any]) -> None:
@@ -314,7 +314,7 @@ class ProjectHost:
             status.detail = str(e) if not isinstance(e, KeyError) else f"missing argument {e}"
             return status
         finally:
-            self.active.discard(req.request_id)
+            self._done(req.request_id)
         return status.model_copy(update={"state": "ok", **result})
 
     async def _browse(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
@@ -417,18 +417,22 @@ class ProjectHost:
         if head != before:
             names = await self._git("diff", "--name-only", before, head, cwd=wt)
             changed = len([n for n in names.splitlines() if n.strip()])
-        bundle = None
+        result: dict[str, Any] = {"head_sha": head, "changed": changed, "bundle": None}
         branch = str(a.get("branch") or "")
         if send is not None and branch and head != a.get("known_head"):
-            ref = f"refs/heads/{_ref_name(branch)}"
-            known = str(a.get("known_head") or a.get("base_sha") or "")
-            bundle = await self._bundle_up([], wt, {ref: head}, {ref: known} if known else {}, project_id, request_id, send)
+            # The turn is already committed: a failed upload must not hide the new head from the Core.
+            try:
+                ref = f"refs/heads/{_ref_name(branch)}"
+                known = str(a.get("known_head") or a.get("base_sha") or "")
+                result["bundle"] = await self._bundle_up([], wt, {ref: head}, {ref: known} if known else {}, project_id, request_id, send)
+            except (ToolError, ExecTimeout, OSError) as e:
+                result["detail"] = f"bundle not sent: {e}"
         base = str(a.get("base_sha") or "")
         if not SHA_RE.fullmatch(base):
-            return {"head_sha": head, "changed": changed, "bundle": bundle}
+            return result
         rows = [r.split("\t", 2) for r in (await self._git("diff", "--numstat", "-z", "--no-renames", base, head, cwd=wt)).split("\0") if r]
         stat = {"files": len(rows), "added": sum(int(r[0]) for r in rows if r[0].isdigit()), "deleted": sum(int(r[1]) for r in rows if r[1].isdigit())}
-        return {"head_sha": head, "changed": changed, "data": {"stat": stat}, "bundle": bundle}
+        return {**result, "data": {"stat": stat}}
 
     async def _status(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
         wt = self._worktree(project_id, task_id)
