@@ -40,6 +40,7 @@ from mensarium.core.instructions import InstructionStore
 from mensarium.core.memory import Memory, NoteError
 from mensarium.core.plugins import PluginError, PluginManager, Toolbox
 from mensarium.core.repo import TERMINAL_STATUSES, Repo
+from mensarium.core.secrets import SecretStore
 from mensarium.core.skills import SkillStore
 from mensarium.llm_providers.base import LLMError
 from mensarium.llm_providers.router import ProviderRouter
@@ -155,6 +156,7 @@ class Orchestrator:
         self.interrupts: dict[str, asyncio.Event] = {}
         self.automations: AutomationManager | None = None
         self.projects: ProjectManager | None = None
+        self.secrets: SecretStore | None = None
         self.workdirs: dict[str, str] = {}
 
     # ---- public API -------------------------------------------------------

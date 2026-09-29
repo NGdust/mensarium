@@ -38,6 +38,7 @@ from mensarium.contracts.gateway import GATEWAY_SCOPE_KEY
 from mensarium.contracts.plugins import Plugin
 from mensarium.contracts.projects import BrowseBody, ProjectCreate, ProjectError, ProjectPatch
 from mensarium.contracts.protocol import AccessMode, CoreIdentity, PairRequest, PairResponse
+from mensarium.contracts.secrets import SecretPut
 from mensarium.contracts.skills import OS, SkillError, SkillMeta, SkillRequires
 from mensarium.core import distribution, pairing
 from mensarium.core.api_tunnel import ApiTunnel
@@ -62,6 +63,7 @@ from mensarium.core.providers import ProviderError, Providers
 from mensarium.core.push import PushError, PushManager
 from mensarium.core.releases import ReleaseError, fetch_latest, spawn_update, updater
 from mensarium.core.repo import USAGE_FIELDS, Repo
+from mensarium.core.secrets import SecretError, SecretStore
 from mensarium.core.skills import SkillStore
 from mensarium.llm_providers.router import ProviderRouter
 from mensarium.shared.crypto import fingerprint, load_or_create_private_key, public_key_b64, sign
@@ -100,6 +102,7 @@ class Core:
     automations: AutomationManager
     projects: ProjectManager
     limits: LimitsStore
+    secrets: SecretStore
     device_id: str | None
 
 
@@ -350,6 +353,8 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         await plugins.start()
         catalog = Catalog(cfg.plugins.catalog_url)
         orchestrator = Orchestrator(repo, hub, bus, provider, cfg, workspace_id, paths.artifacts, memory, plugins, skills, catalog, instructions)
+        secret_store = SecretStore(paths, repo)
+        orchestrator.secrets = secret_store
         device = await ensure_device(repo, paths, cfg, public_key_b64(key), workspace_id)
         projects.device_id = device[0].target_id if device else None
         await projects.start()
@@ -399,6 +404,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             automations=automations,
             projects=projects,
             limits=limits,
+            secrets=secret_store,
             device_id=device[0].target_id if device else None,
         )
         try:
@@ -1224,6 +1230,31 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             return c.instructions.save(name, body.content)
         except InstructionError as e:
             raise HTTPException(404, str(e)) from e
+
+    def secret_error(e: SecretError) -> HTTPException:
+        return HTTPException(404 if "not found" in str(e) else 400, str(e))
+
+    @app.get("/v1/secrets")
+    async def list_secrets(c: Core = Depends(auth)) -> dict[str, Any]:
+        return {"items": [s.model_dump() for s in await c.secrets.all()]}
+
+    @app.put("/v1/secrets/{name}")
+    async def put_secret(name: str, body: SecretPut, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            info = await c.secrets.put(name, body.value, body.description, body.targets)
+        except SecretError as e:
+            raise secret_error(e) from e
+        await c.repo.audit(c.workspace_id, "user", "secret.saved", {"name": name, "targets": info.targets})
+        return info.model_dump()
+
+    @app.delete("/v1/secrets/{name}")
+    async def delete_secret(name: str, c: Core = Depends(auth)) -> dict[str, bool]:
+        try:
+            await c.secrets.delete(name)
+        except SecretError as e:
+            raise secret_error(e) from e
+        await c.repo.audit(c.workspace_id, "user", "secret.deleted", {"name": name})
+        return {"ok": True}
 
     def note_error(e: NoteError) -> HTTPException:
         return HTTPException(404 if "not found" in str(e) else 409, str(e))
