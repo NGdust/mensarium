@@ -2,6 +2,8 @@ import asyncio
 import contextlib
 import logging
 import secrets
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
@@ -17,7 +19,7 @@ from mensarium.contracts.projects import (
     ProjectSnapshot,
 )
 from mensarium.core.client_hub import ClientHub, TargetUnavailable
-from mensarium.core.mirror import Mirror
+from mensarium.core.mirror import Mirror, MirrorError
 from mensarium.core.project_sync import ProjectSync
 from mensarium.core.repo import Repo
 from mensarium.shared.ids import new_id
@@ -28,6 +30,10 @@ log = logging.getLogger(__name__)
 OP_TIMEOUT_S = 600
 BROWSE_TIMEOUT_S = 30
 DIFF_TIMEOUT_S = 60
+
+
+async def _no_event(task_id: str, payload: dict[str, Any]) -> None:
+    return None
 
 
 class ProjectManager:
@@ -43,6 +49,7 @@ class ProjectManager:
         self.timer: asyncio.Task[None] | None = None
         self.stopped = False
         self.deleting: set[str] = set()
+        self.bus_emit: Callable[[str, dict[str, Any]], Awaitable[Any]] = _no_event
 
     # ---- lifecycle --------------------------------------------------------------
 
@@ -64,6 +71,7 @@ class ProjectManager:
     # ---- views ------------------------------------------------------------------
 
     def view(self, p: dict[str, Any]) -> dict[str, Any]:
+        executor = self.executor_of(p)
         keys = (
             "id", "name", "kind", "source_target_id", "source_name", "source_path", "default_executor_id", "default_base",
             "git_url", "include_remotes", "fetch_origin", "size_limit_mb", "file_limit_mb", "head_sha", "snapshot_sha",
@@ -75,22 +83,36 @@ class ProjectManager:
             "source_online": self.hub.is_online(str(p["source_target_id"])),
             "syncing": str(p["id"]) in self.jobs,
             "mirror": self.project_sync.mirror(str(p["id"])).exists,
+            "executor_id": executor,
+            "executor_name": p.get("executor_name"),
+            "executor_online": bool(executor and self.hub.is_online(executor)),
         }
 
     async def all(self) -> list[dict[str, Any]]:
-        return [self.view(p) for p in await self.repo.list_projects()]
+        return [self.view(await self._with_executor(p)) for p in await self.repo.list_projects()]
 
     async def get(self, project_id: str) -> dict[str, Any]:
         p = await self.repo.get_project(project_id)
         if not p:
             raise ProjectError("project not found")
-        return p
+        return await self._with_executor(p)
+
+    async def _with_executor(self, p: dict[str, Any]) -> dict[str, Any]:
+        executor = self.executor_of(p)
+        target = await self.repo.get_target(executor) if executor else None
+        return {**p, "executor_name": target["name"] if target else None}
+
+    def executor_of(self, project: dict[str, Any]) -> str | None:
+        return project.get("default_executor_id") or self.device_id
 
     # ---- device calls -----------------------------------------------------------
 
     def can(self, target_id: str, op: str) -> bool:
         hello = self.hub.hello(target_id)
         return bool(hello and op in hello.capabilities.project_ops)
+
+    def can_execute(self, target_id: str) -> bool:
+        return self.project_sync.can_fetch(target_id)
 
     def _supports(self, target: dict[str, Any] | None) -> dict[str, Any]:
         if not target or target["status"] == "revoked":
@@ -103,10 +125,18 @@ class ProjectManager:
         return target
 
     async def op(
-        self, target_id: str, project_id: str, task_id: str, op: ProjectOpName, args: dict[str, Any], timeout_s: float | None = None
+        self,
+        target_id: str,
+        project_id: str,
+        task_id: str,
+        op: ProjectOpName,
+        args: dict[str, Any],
+        timeout_s: float | None = None,
+        request_id: str | None = None,
+        bundle: Path | None = None,
     ) -> ProjectOpStatus:
         msg = ProjectOp(
-            request_id=new_id("pop"),
+            request_id=request_id or new_id("pop"),
             target_id=target_id,
             project_id=project_id,
             task_id=task_id,
@@ -116,7 +146,7 @@ class ProjectManager:
             expires_at=iso_in(self.ttl_s),
             nonce=secrets.token_hex(32),
         )
-        raw = await self.hub.project_request(msg, timeout_s or self.ttl_s)
+        raw = await self.hub.project_request(msg, timeout_s or self.ttl_s, bundle=bundle)
         status: ProjectOpStatus | None = None
         try:
             status = ProjectOpStatus.model_validate(raw)
@@ -146,7 +176,7 @@ class ProjectManager:
             nonce=secrets.token_hex(32),
         )
 
-    def _snapshot_args(self, p: dict[str, Any]) -> dict[str, Any]:
+    def snapshot_args(self, p: dict[str, Any]) -> dict[str, Any]:
         return {
             "source_path": p["source_path"],
             "kind": p["kind"],
@@ -186,7 +216,7 @@ class ProjectManager:
         if not self.can(str(target["id"]), "branches"):
             raise ProjectError("this device's client is outdated; update it to pick a branch")
         try:
-            status = await self.op(str(target["id"]), project_id, "", "branches", self._snapshot_args(p), BROWSE_TIMEOUT_S)
+            status = await self.op(str(target["id"]), project_id, "", "branches", self.snapshot_args(p), BROWSE_TIMEOUT_S)
         except TargetUnavailable as e:
             raise ProjectError(str(e)) from e
         if status.state != "ok":
@@ -234,7 +264,7 @@ class ProjectManager:
         if not self.can(str(target["id"]), "docs"):
             raise ProjectError("this device's client is outdated; update it to see the project's files")
         try:
-            status = await self.op(str(target["id"]), project_id, "", "docs", self._snapshot_args(p), BROWSE_TIMEOUT_S)
+            status = await self.op(str(target["id"]), project_id, "", "docs", self.snapshot_args(p), BROWSE_TIMEOUT_S)
         except TargetUnavailable as e:
             raise ProjectError(str(e)) from e
         if status.state != "ok":
@@ -352,6 +382,15 @@ class ProjectManager:
         values = {k: (int(v) if isinstance(v, bool) else v) for k, v in body.model_dump(exclude_none=True).items()}
         if body.instructions is not None:
             values["instructions"] = body.instructions.strip() or None
+        if body.default_executor_id is not None:
+            # A setting: the device may be off now, but it must be able to run project chats.
+            target = await self.repo.get_target(body.default_executor_id)
+            if not target or target["status"] == "revoked":
+                raise ProjectError("unknown or revoked device")
+            if not (target.get("capabilities") or {}).get("projects"):
+                raise ProjectError("this device's client does not support projects; update it and make sure git is installed")
+            if body.default_executor_id == self.device_id:
+                values["default_executor_id"] = None
         if values:
             await self.repo.update_project(project_id, values)
         return self.view(await self.get(project_id))
@@ -369,7 +408,14 @@ class ProjectManager:
         self.deleting.add(project_id)
         try:
             if remove_shadow or p["kind"] == "repo":
-                await self._cleanup(str(p["source_target_id"]), project_id, "", {**self._snapshot_args(p), "delete_shadow": remove_shadow, "delete_clone": bool(p.get("git_url"))})
+                await self._cleanup(str(p["source_target_id"]), project_id, "", {**self.snapshot_args(p), "delete_shadow": remove_shadow, "delete_clone": bool(p.get("git_url"))})
+            for d in await self.repo.list_project_devices(project_id):
+                if d["role"] != "executor":
+                    continue
+                if self.hub.is_online(str(d["target_id"])):
+                    await self._cleanup(str(d["target_id"]), project_id, "", {"role": "executor", "delete_repo": True})
+                else:
+                    log.info("project copy left on an offline device", extra={"project_id": project_id, "target_id": d["target_id"]})
             await asyncio.to_thread(self.project_sync.mirror(project_id).delete)
             await self.repo.delete_project_devices(project_id)
             await self.repo.delete_project(project_id)
@@ -387,21 +433,36 @@ class ProjectManager:
         return f"{root}/{project['id']}/wt/{task_id}"
 
     async def checkout(self, project: dict[str, Any], task: dict[str, Any]) -> ProjectOpStatus:
-        self._supports(await self.repo.get_target(str(task["target_id"])))
-        # An older client knows only the snapshot start; a repo chat on a newer one starts from a branch.
-        start = "snapshot"
-        if project["kind"] == "repo" and self.can(str(task["target_id"]), "branches"):
-            start = str(task.get("base_ref") or "default")
-        args = {**self._snapshot_args(project), "branch": task["branch"], "start": start}
-        status = await self.op(str(task["target_id"]), str(project["id"]), str(task["id"]), "checkout", args, timeout_s=OP_TIMEOUT_S)
+        target_id, project_id = str(task["target_id"]), str(project["id"])
+        self._supports(await self.repo.get_target(target_id))
+        if target_id == project["source_target_id"]:
+            # An older client knows only the snapshot start; a repo chat on a newer one starts from a branch.
+            start = "snapshot"
+            if project["kind"] == "repo" and self.can(target_id, "branches"):
+                start = str(task.get("base_ref") or "default")
+            args = {**self.snapshot_args(project), "role": "source", "branch": task["branch"], "start": start}
+            status = await self.op(target_id, project_id, str(task["id"]), "checkout", args, timeout_s=OP_TIMEOUT_S)
+            if status.state == "ok":
+                status.data.setdefault("base", start)
+            return status
+        if not self.can_execute(target_id):
+            raise ProjectError("this device's client is outdated; update it to run project chats")
+        # Another device starts from the Core's copy: fresh when the source is on, as last read when it is off.
+        if self.hub.is_online(str(project["source_target_id"])):
+            await self.refresh(project_id)
+        name, ref, sha = await self.project_sync.resolve_base(project, task.get("base_ref"))
+        await self.project_sync.ensure_objects(project, target_id, {ref: sha})
+        args = {"role": "executor", "branch": task["branch"], "start": sha, "base_name": name}
+        status = await self.op(target_id, project_id, str(task["id"]), "checkout", args, timeout_s=OP_TIMEOUT_S)
         if status.state == "ok":
-            status.data.setdefault("base", start)
+            status.data.setdefault("base", name)
         return status
 
     async def commit(self, project: dict[str, Any], task: dict[str, Any], message: str) -> tuple[ProjectOpStatus, str | None]:
         """The device's answer, and why its chat branch did not reach the mirror, if it did not."""
         target_id = str(task["target_id"])
-        args = {**self._snapshot_args(project), "message": message, "base_sha": task.get("base_sha")}
+        role = "source" if target_id == project["source_target_id"] else "executor"
+        args = {**self.snapshot_args(project), "role": role, "message": message, "base_sha": task.get("base_sha")}
         if Mirror.enabled() and self.project_sync.can_bundle(target_id):
             # The device cuts the bundle at known_head, so it must be a commit the mirror has; else it falls back to base_sha.
             mirror, head = self.project_sync.mirror(str(project["id"])), task.get("head_sha")
@@ -417,5 +478,16 @@ class ProjectManager:
         return status, None
 
     async def remove(self, project: dict[str, Any], task: dict[str, Any]) -> None:
-        args = {**self._snapshot_args(project), "branch": task.get("branch"), "delete_branch": project["kind"] == "folder"}
-        await self._cleanup(str(task["target_id"]), str(project["id"]), str(task["id"]), args)
+        target_id, project_id, task_id = str(task["target_id"]), str(project["id"]), str(task["id"])
+        await self.repo.cancel_task_deliveries(task_id)
+        mirror = self.project_sync.mirror(project_id)
+        if task.get("branch") and mirror.exists:
+            with contextlib.suppress(MirrorError):
+                await mirror.delete_ref(f"refs/heads/{task['branch']}")
+        if target_id == project["source_target_id"]:
+            args = {**self.snapshot_args(project), "role": "source", "branch": task.get("branch"), "delete_branch": project["kind"] == "folder"}
+            await self._cleanup(target_id, project_id, task_id, args)
+        elif self.hub.is_online(target_id):
+            await self._cleanup(target_id, project_id, task_id, {"role": "executor", "branch": task.get("branch"), "delete_branch": True})
+        else:
+            await self.project_sync.queue(project_id, target_id, task_id, "remove", task.get("branch"))

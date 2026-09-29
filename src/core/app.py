@@ -118,7 +118,7 @@ class ChannelBody(BaseModel):
 
 
 class TaskCreate(BaseModel):
-    target_id: str
+    target_id: str | None = Field(None, max_length=100)
     input: str
     profile_id: str = "coding-agent-v1"
     mode: AccessMode = "ask"
@@ -317,6 +317,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         plugins.gateway_loopback = hub.gateway_loopback
         plugins.core_port = cfg.server.port
         projects = ProjectManager(repo, workspace_id, hub, cfg.execution.request_ttl_s, cfg.projects.sync_interval_s)
+        projects.bus_emit = lambda task_id, payload: bus.emit(task_id, "task.project", payload)
 
         async def on_connect(target_id: str) -> None:
             await plugins.sync_device(target_id)
@@ -1275,7 +1276,12 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             p = await c.projects.get(project_id)
         except ProjectError as e:
             raise project_error(e) from e
-        return {**c.projects.view(p), "chats": [task_view(t) for t in await c.repo.list_project_tasks(project_id)]}
+        return {
+            **c.projects.view(p),
+            "chats": [task_view(t) for t in await c.repo.list_project_tasks(project_id)],
+            "devices": await device_choices(c),
+            "deliveries": await c.repo.list_deliveries(project_id=project_id),
+        }
 
     @app.get("/v1/projects/{project_id}/docs")
     async def project_docs(project_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
@@ -1321,6 +1327,8 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     async def create_task(body: TaskCreate, c: Core = Depends(auth)) -> dict[str, Any]:
         if not body.input.strip() and not body.attachments and not body.project_id:
             raise HTTPException(422, "input is empty")
+        if not body.target_id and not body.project_id:
+            raise HTTPException(422, "target_id is required")
         try:
             return task_view(
                 await c.orchestrator.create_task(

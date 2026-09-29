@@ -7,6 +7,8 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pydantic import ValidationError
+
 from mensarium.contracts.projects import (
     CHAT_REFS,
     DEVICE_REFS,
@@ -16,11 +18,12 @@ from mensarium.contracts.projects import (
     device_ref,
     mirror_ref,
 )
-from mensarium.core.client_hub import ClientHub
+from mensarium.core.client_hub import ClientHub, TargetUnavailable
 from mensarium.core.mirror import Mirror, MirrorError
 from mensarium.core.repo import Repo
 from mensarium.shared import bundles
-from mensarium.shared.paths import projects_dir
+from mensarium.shared.ids import new_id
+from mensarium.shared.paths import ensure_private_dir, projects_dir
 from mensarium.shared.timeutil import now_iso, parse_iso, utcnow
 
 if TYPE_CHECKING:
@@ -42,6 +45,7 @@ class ProjectSync:
         self.inbox = projects_dir() / "core-inbox"
         shutil.rmtree(self.inbox, ignore_errors=True)
         hub.inbox = self.inbox
+        self.locks: dict[str, asyncio.Lock] = {}
 
     def mirror(self, project_id: str) -> Mirror:
         return Mirror(project_id)
@@ -52,6 +56,10 @@ class ProjectSync:
     def can_bundle(self, target_id: str) -> bool:
         hello = self.hub.hello(target_id)
         return bool(hello and "bundle" in hello.capabilities.project_ops)
+
+    def can_fetch(self, target_id: str) -> bool:
+        hello = self.hub.hello(target_id)
+        return bool(hello and {"bundle", "fetch"} <= set(hello.capabilities.project_ops))
 
     # ---- source -> mirror ---------------------------------------------------------
 
@@ -113,6 +121,7 @@ class ProjectSync:
                 return
             if p["source_target_id"] == target_id and p["status"] != "creating":
                 await self.manager.refresh(str(p["id"]))
+        await self.deliver(target_id)
 
     async def run_forever(self) -> None:
         while not self.manager.stopped:
@@ -133,6 +142,7 @@ class ProjectSync:
 
     async def publish(self, project: dict[str, Any], task: dict[str, Any], status: ProjectOpStatus) -> None:
         path = self.inbox_file(status.request_id)
+        role = "source" if task["target_id"] == project["source_target_id"] else "executor"
         try:
             if status.bundle is None or not task.get("branch") or not Mirror.enabled() or project["id"] in self.manager.deleting:
                 return
@@ -141,9 +151,104 @@ class ProjectSync:
             bundles.check(path, status.bundle)
             await mirror.init()
             await mirror.fetch_bundle(path, {ref: ref})
-            role = "source" if task["target_id"] == project["source_target_id"] else "executor"
             await self.repo.upsert_project_device(str(project["id"]), str(task["target_id"]), role)
         except (ValueError, MirrorError) as e:
             raise ProjectError(f"cannot store the chat branch: {e}") from e
         finally:
             path.unlink(missing_ok=True)
+        # A bundle came in, so the head moved: the source gets the chat branch back.
+        if role == "executor":
+            await self.queue(str(project["id"]), str(project["source_target_id"]), str(task["id"]), "branch")
+
+    # ---- mirror -> executor and source -----------------------------------------------
+
+    async def resolve_base(self, p: dict[str, Any], base_ref: str | None) -> tuple[str, str, str]:
+        src, mirror = str(p["source_target_id"]), self.mirror(str(p["id"]))
+        name = base_ref or "snapshot"
+        if not mirror.exists or await mirror.rev(f"{DEVICE_REFS}{src}/snapshot") is None:
+            raise ProjectError("the project has no snapshot on the Core yet; turn its device on and sync the project")
+        if name == "snapshot":
+            refs = [f"{DEVICE_REFS}{src}/snapshot"]
+        else:
+            name = str(p.get("main_branch") or p.get("default_branch") or "main") if name == "default" else name
+            refs = [f"{DEVICE_REFS}{src}/heads/{name}", f"{DEVICE_REFS}{src}/remotes/{name}"]
+        for ref in refs:
+            if sha := await mirror.rev(ref):
+                return name, ref, sha
+        raise ProjectError(f"branch {name} is not in the Core's copy of the project")
+
+    async def ensure_objects(self, p: dict[str, Any], target_id: str, refs: dict[str, str]) -> None:
+        project_id = str(p["id"])
+        device = await self.repo.get_project_device(project_id, target_id)
+        known = dict((device or {}).get("known_refs") or {})
+        missing = {ref: sha for ref, sha in refs.items() if known.get(ref) != sha}
+        if not missing:
+            return
+        role = "source" if target_id == p["source_target_id"] else "executor"
+        request_id = new_id("pop")
+        path = self.inbox_file(request_id)
+        try:
+            ensure_private_dir(self.inbox)
+            # The executor's copy is the Core's own: every ref it took is still there. The user may drop a delivered branch.
+            have = list(known.values()) if role == "executor" else [sha for ref in missing if (sha := known.get(ref))]
+            info = await self.mirror(project_id).bundle(path, missing, have)
+            if info is None:
+                return
+            args: dict[str, Any] = {"role": role, "bundle": info.model_dump(), "refs": {ref: ref for ref in missing}}
+            if role == "source":
+                args |= self.manager.snapshot_args(p)
+            status = await self.manager.op(target_id, project_id, "", "fetch", args, request_id=request_id, bundle=path)
+            if status.state != "ok":
+                raise ProjectError(status.detail or "the device could not take the bundle")
+            await self.repo.upsert_project_device(project_id, target_id, role, known_refs={**known, **missing})
+        except MirrorError as e:
+            raise ProjectError(str(e)) from e
+        finally:
+            path.unlink(missing_ok=True)
+
+    async def queue(self, project_id: str, target_id: str, task_id: str, kind: str, branch: str | None = None) -> None:
+        # Checked under the device's lock: a running delivery either still sees the new head or has already finished.
+        async with self.locks.setdefault(target_id, asyncio.Lock()):
+            if not await self.repo.find_delivery(task_id, target_id, kind, ("pending", "failed")):
+                now = now_iso()
+                await self.repo.create_delivery(
+                    {"id": new_id("dlv"), "project_id": project_id, "target_id": target_id, "task_id": task_id, "kind": kind, "branch": branch,
+                     "status": "pending", "created_at": now, "updated_at": now}
+                )
+        if self.hub.is_online(target_id):
+            await self.deliver(target_id)
+
+    async def deliver(self, target_id: str) -> None:
+        if not self.can_fetch(target_id):
+            return
+        async with self.locks.setdefault(target_id, asyncio.Lock()):
+            for d in await self.repo.list_deliveries(target_id=target_id):
+                if self.manager.stopped:
+                    return
+                p = await self.repo.get_project(str(d["project_id"]))
+                task = await self.repo.get_task(str(d["task_id"]))
+                if p is None or p["id"] in self.manager.deleting or (task is None and d["kind"] == "branch"):
+                    await self.repo.update_delivery(str(d["id"]), {"status": "canceled"})
+                    continue
+                try:
+                    if d["kind"] == "branch":
+                        assert task is not None
+                        ref = f"refs/heads/{task['branch']}"
+                        mirror = self.mirror(str(p["id"]))
+                        sha = await mirror.rev(ref) if mirror.exists else None
+                        if sha is None:
+                            raise ProjectError("the chat branch is not in the Core's copy of the project")
+                        await self.ensure_objects(p, target_id, {ref: sha})
+                    else:
+                        args = {"role": "executor", "branch": d.get("branch") or (task or {}).get("branch"), "delete_branch": True}
+                        status = await self.manager.op(target_id, str(p["id"]), str(d["task_id"]), "remove", args)
+                        if status.state != "ok":
+                            raise ProjectError(status.detail or "the device could not remove the worktree")
+                    await self.repo.update_delivery(str(d["id"]), {"status": "delivered", "error": None})
+                    await self.repo.audit(self.workspace_id, "core", "project.delivered", {"delivery_id": d["id"], "task_id": d["task_id"], "target_id": target_id, "kind": d["kind"]})
+                    if task:
+                        await self.manager.bus_emit(str(task["id"]), {"kind": "delivered", "target_id": target_id})
+                except (ProjectError, TargetUnavailable, ValidationError) as e:
+                    await self.repo.update_delivery(str(d["id"]), {"status": "failed", "error": (str(e).strip() or type(e).__name__)[:300]})
+                    if isinstance(e, TargetUnavailable):
+                        return

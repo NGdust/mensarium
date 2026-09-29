@@ -170,7 +170,7 @@ class Orchestrator:
     async def create_task(
         self,
         profile_id: str,
-        target_id: str,
+        target_id: str | None,
         text: str,
         mode: AccessMode = "ask",
         model: str | None = None,
@@ -183,14 +183,6 @@ class Orchestrator:
         workspace: bool = True,
     ) -> dict[str, Any]:
         profile = await self.load_profile(profile_id)
-        target = await self.repo.get_target(target_id)
-        if not target or target["status"] == "revoked":
-            raise TaskError("unknown or revoked target")
-        platform = str(target["platform"]).split("-")[0]
-        if platform not in profile.allowed_targets:
-            raise TaskError(f"profile {profile.id} does not allow {platform} targets")
-        if mode == "full" and (access := full_access(target)) != "allowed":
-            raise TaskError(FULL_ACCESS_ERRORS[access])
         project = None
         if project_id:
             assert self.projects
@@ -200,25 +192,50 @@ class Orchestrator:
                 raise TaskError(str(e)) from e
             if project["status"] != "ready":
                 raise TaskError("the project is not ready; sync it first")
-            if target_id != project["source_target_id"]:
-                raise TaskError("in this version a project chat runs on the project's source device")
+            source = str(project["source_target_id"])
+            if not workspace:
+                target_id = target_id or source
+                if target_id != source:
+                    raise TaskError("a chat without a workspace runs only on the project's own device")
+            target_id = target_id or self.projects.executor_of(project) or source
+        elif base or branch:
+            raise TaskError("a branch is chosen only for a project chat")
+        if not target_id:
+            raise TaskError("target_id is required")
+        target = await self.repo.get_target(target_id)
+        if not target or target["status"] == "revoked":
+            raise TaskError("unknown or revoked target")
+        platform = str(target["platform"]).split("-")[0]
+        if platform not in profile.allowed_targets:
+            raise TaskError(f"profile {profile.id} does not allow {platform} targets")
+        if mode == "full" and (access := full_access(target)) != "allowed":
+            raise TaskError(FULL_ACCESS_ERRORS[access])
+        if project:
+            assert self.projects
+            remote = target_id != project["source_target_id"]
             if base or branch:
-                assert self.projects
                 if project["kind"] != "repo":
                     raise TaskError("only a git repository project takes a branch")
-                if not self.projects.can(target_id, "branches"):
+                # On another device the base comes from the Core's copy, so the device needs no branch support.
+                if not remote and not self.projects.can(target_id, "branches"):
                     raise TaskError("this device's client is outdated; update it to pick a branch")
                 for name in (base, branch):
                     if name and not BRANCH_RE.fullmatch(name):
                         raise TaskError(f"{name!r} is not a valid branch name")
             if not workspace:
-                assert self.projects
                 if project["kind"] != "repo" or base or branch:
                     raise TaskError("only a git repository project chat can work without a workspace, and then without a branch")
                 if not self.projects.can(target_id, "inplace"):
                     raise TaskError("this device's client is outdated; update it to work without a workspace")
-        elif base or branch:
-            raise TaskError("a branch is chosen only for a project chat")
+            if remote:
+                if not self.hub.is_online(target_id):
+                    raise TaskError(f"{target['name']} is offline; turn it on or pick another device for this project's chats")
+                if not self.projects.can_execute(target_id):
+                    raise TaskError(f"{target['name']} cannot run project chats; update its client or pick another device")
+                try:
+                    await self.projects.project_sync.resolve_base(project, self._base_ref(project, base))
+                except ProjectError as e:
+                    raise TaskError(str(e)) from e
         task_id = new_id("task")
         files = await self._bind_attachments(task_id, attachments)
         now = now_iso()
@@ -236,7 +253,7 @@ class Orchestrator:
                 "automation_id": automation_id,
                 "project_id": project_id,
                 "branch": (branch or branch_name(task_id, text)) if project and workspace else None,
-                "base_ref": None if not project or not workspace else "snapshot" if project["kind"] == "folder" else base or repo_base(project),
+                "base_ref": self._base_ref(project, base) if project and workspace else None,
                 "budget": profile.limits.model_dump(),
                 "trace_id": new_id("tr"),
                 "created_at": now,
@@ -253,6 +270,10 @@ class Orchestrator:
         await self._add_user_message(task_id, text, files)
         self._start(task_id)
         return await self._task(task_id)
+
+    @staticmethod
+    def _base_ref(project: dict[str, Any], base: str | None) -> str:
+        return "snapshot" if project["kind"] == "folder" else base or repo_base(project)
 
     def _prepare(self, task_id: str) -> None:
         job = asyncio.create_task(self._prepare_job(task_id))
@@ -599,6 +620,9 @@ class Orchestrator:
                     "base": base,
                     "instructions": project.get("instructions") or "",
                     "inplace": not task.get("branch"),
+                    "executor": str(target["name"]),
+                    "remote": target["id"] != project["source_target_id"],
+                    "snapshot_at": str(project.get("last_sync_at") or ""),
                 }
             toolbox = await self.plugins.toolbox(profile, target)
             if not task.get("parent_id"):

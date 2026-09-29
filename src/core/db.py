@@ -28,6 +28,7 @@ COLUMN_MIGRATIONS = [
     ("projects", "instructions", "TEXT"),
     ("tasks", "diff_stat", "TEXT"),
     ("projects", "main_branch", "TEXT"),
+    ("project_deliveries", "branch", "TEXT"),
 ]
 
 SCHEMA = """

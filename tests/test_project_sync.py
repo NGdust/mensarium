@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from mensarium.contracts.projects import ProjectOp, ProjectOpStatus, ProjectSnapshot
+from mensarium.contracts.projects import ProjectError, ProjectOp, ProjectOpStatus, ProjectSnapshot
 from mensarium.contracts.protocol import Capabilities, TargetHello, TargetInfo, TargetPolicy
 from mensarium.core.client_hub import ClientConnection, ClientHub
 from mensarium.core.db import Database
@@ -137,6 +137,69 @@ class ProjectSyncTests(unittest.IsolatedAsyncioTestCase):
         await self.sync.publish(await self.repo.get_project("prj_1") or {}, {"id": "task_1", "target_id": "tgt_src", "branch": "mensarium/x-1", "head_sha": None}, status)
         self.assertEqual(await self.sync.mirror("prj_1").rev("refs/heads/mensarium/x-1"), head)
         self.assertFalse(path.exists())
+
+
+    async def seed_mirror(self) -> str:
+        head = git(self.repo_path, "rev-parse", "HEAD")
+        self.hub.answers.append({"type": "project.snapshot.status", "state": "ok", "kind": "repo", "head_sha": head, "snapshot_sha": head, "branch": "main", "main": "main",
+                                 "refs": {"refs/heads/main": head, "refs/mensarium/snapshot": head}, "make_bundle": (["refs/heads/main", "refs/mensarium/snapshot"], [])})
+        await self.sync.sync_source(await self.repo.get_project("prj_1") or {})
+        return head
+
+    async def test_executor_checkout_gets_objects_first(self) -> None:
+        head = await self.seed_mirror()
+        p = await self.repo.get_project("prj_1") or {}
+        self.assertEqual(await self.sync.resolve_base(p, "default"), ("main", "refs/devices/tgt_src/heads/main", head))
+        self.assertEqual((await self.sync.resolve_base(p, "snapshot"))[2], head)
+        with self.assertRaises(ProjectError):
+            await self.sync.resolve_base(p, "nope")
+        # The source is off: the chat still starts from the Core's copy.
+        self.hub.online.discard("tgt_src")
+        self.hub.answers += [{"type": "project.op.status", "task_id": "", "op": "fetch", "state": "ok", "data": {}},
+                             {"type": "project.op.status", "task_id": "task_1", "op": "checkout", "state": "ok", "head_sha": head, "data": {"base": "main"}}]
+        task = {"id": "task_1", "target_id": "tgt_core", "branch": "mensarium/t-1", "base_ref": "default"}
+        status = await self.manager.checkout(p, task)
+        self.assertEqual(status.head_sha, head)
+        fetch, bundle = self.hub.sent[-2]
+        self.assertEqual((fetch.op, fetch.args["role"], list(fetch.args["refs"])), ("fetch", "executor", ["refs/devices/tgt_src/heads/main"]))
+        self.assertIsNotNone(bundle)
+        self.assertEqual(self.hub.sent[-1][0].args["start"], head)
+        self.assertEqual((await self.repo.get_project_device("prj_1", "tgt_core") or {})["known_refs"], {"refs/devices/tgt_src/heads/main": head})
+        # The source is back: its snapshot is read first, and the objects are already on the executor.
+        self.hub.online.add("tgt_src")
+        self.hub.answers += [{"type": "project.snapshot.status", "state": "unchanged", "kind": "repo", "refs": {"refs/heads/main": head, "refs/mensarium/snapshot": head}},
+                             {"type": "project.op.status", "task_id": "task_2", "op": "checkout", "state": "ok", "head_sha": head, "data": {"base": "main"}}]
+        await self.manager.checkout(p, {**task, "id": "task_2"})
+        self.assertEqual([m.op if isinstance(m, ProjectOp) else "snapshot" for m, _ in self.hub.sent[-2:]], ["snapshot", "checkout"])
+
+    async def test_publish_queues_one_delivery_and_hello_delivers(self) -> None:
+        head = await self.seed_mirror()
+        git(self.repo_path, "branch", "mensarium/t-1", head)
+        await self.repo.create_task({"id": "task_1", "workspace_id": "ws", "profile_id": "p", "target_id": "tgt_core", "input": "x", "status": "IDLE", "trace_id": "tr",
+                                     "project_id": "prj_1", "branch": "mensarium/t-1", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"})
+        task = {"id": "task_1", "target_id": "tgt_core", "branch": "mensarium/t-1", "head_sha": None}
+        self.hub.online.discard("tgt_src")
+        for request_id in ("pop_2", "pop_3"):
+            path = self.hub.inbox / f"{request_id}.bundle"
+            git(self.repo_path, "bundle", "create", str(path), "refs/heads/mensarium/t-1")
+            status = ProjectOpStatus(request_id=request_id, project_id="prj_1", task_id="task_1", op="commit", state="ok", head_sha=head,
+                                     bundle=bundles.describe(path, {"refs/heads/mensarium/t-1": head}, []))
+            await self.sync.publish(await self.repo.get_project("prj_1") or {}, task, status)
+        self.assertEqual(len(await self.repo.list_deliveries(target_id="tgt_src")), 1)
+        self.hub.online.add("tgt_src")
+        self.hub.answers += [{"type": "project.snapshot.status", "state": "unchanged", "kind": "repo", "refs": {"refs/heads/main": head, "refs/mensarium/snapshot": head}},
+                             {"type": "project.op.status", "task_id": "task_1", "op": "fetch", "state": "ok", "data": {}}]
+        await self.sync.on_connect("tgt_src")
+        self.assertEqual([d["status"] for d in await self.repo.list_deliveries(target_id="tgt_src", statuses=("delivered",))], ["delivered"])
+        fetch, bundle = self.hub.sent[-1]
+        self.assertEqual((fetch.args["role"], fetch.args["refs"], fetch.args["source_path"]), ("source", {"refs/heads/mensarium/t-1": "refs/heads/mensarium/t-1"}, "/home/tgt_src/demo"))
+        self.assertIsNotNone(bundle)
+
+    async def test_create_task_needs_a_snapshot_for_a_remote_executor(self) -> None:
+        p = await self.repo.get_project("prj_1") or {}
+        with self.assertRaises(ProjectError) as ctx:
+            await self.sync.resolve_base(p, "snapshot")
+        self.assertIn("no snapshot", str(ctx.exception))
 
 
 class HubChunkTests(unittest.IsolatedAsyncioTestCase):
