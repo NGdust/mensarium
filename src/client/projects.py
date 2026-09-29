@@ -56,6 +56,8 @@ NO_ACCESS = (
 )
 SAFE_ID = re.compile(r"[A-Za-z0-9_-]+")
 INCOMING_TTL = 600
+INCOMING_MAX = 4
+FULL_SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 log = logging.getLogger(__name__)
 Send = Callable[[dict[str, Any]], Awaitable[None]]
@@ -288,12 +290,15 @@ class ProjectHost:
         if SAFE_ID.fullmatch(request_id):
             (self.inbox / f"{request_id}.bundle").unlink(missing_ok=True)
 
-    # A project.bundle frame for a request being handled now, or one whose signed op has not arrived yet (a fetch).
-    def receive_chunk(self, msg: dict[str, Any]) -> None:
+    def _expire(self) -> None:
         now = time.monotonic()
         for rid in [rid for rid, until in self.incoming.items() if until < now]:
             del self.incoming[rid]
             (self.inbox / f"{rid}.bundle").unlink(missing_ok=True)
+
+    # A project.bundle frame for a request being handled now, or one whose signed op has not arrived yet (a fetch).
+    def receive_chunk(self, msg: dict[str, Any]) -> None:
+        self._expire()
         try:
             chunk = ProjectBundle.model_validate(msg)
         except ValidationError:
@@ -301,7 +306,10 @@ class ProjectHost:
         if not SAFE_ID.fullmatch(chunk.request_id):
             return
         if chunk.request_id not in self.active:
-            self.incoming.setdefault(chunk.request_id, now + INCOMING_TTL)
+            if chunk.request_id not in self.incoming and len(self.incoming) >= INCOMING_MAX:
+                log.warning("bundle chunk dropped", extra={"request_id": chunk.request_id, "error": "too many pending bundles"})
+                return
+            self.incoming[chunk.request_id] = time.monotonic() + INCOMING_TTL
         try:
             bundles.append_chunk(self.inbox / f"{_safe_id(chunk.request_id)}.bundle", chunk.data)
         except (BundleTooLarge, ToolError, ValueError, OSError) as e:
@@ -331,6 +339,7 @@ class ProjectHost:
         }[req.op]
         lock = contextlib.nullcontext() if req.op in ("browse", "branches", "diff", "docs") else self._lock(req.project_id)
         self.incoming.pop(req.request_id, None)
+        self._expire()
         self.active.add(req.request_id)
         try:
             async with lock:
@@ -414,7 +423,7 @@ class ProjectHost:
         start = str(a["start"])
         base_name = start
         if executor:
-            if not SHA_RE.fullmatch(start) or not await self._rev(base, f"{start}^{{commit}}", cwd):
+            if not FULL_SHA_RE.fullmatch(start) or not await self._rev(base, f"{start}^{{commit}}", cwd):
                 raise ToolError("the start commit is missing on this device")
             base_name = str(a.get("base_name") or start[:10])
         elif start == "snapshot":

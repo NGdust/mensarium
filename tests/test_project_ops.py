@@ -199,7 +199,12 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         status = await self.op("remove", "", role="executor", delete_repo=True)
         self.assertFalse(bare.exists())
 
-    async def test_fetch_refuses_a_checked_out_branch(self) -> None:
+    async def test_fetch_into_the_source_takes_a_free_branch_and_refuses_a_checked_out_one(self) -> None:
+        main = git(self.repo, "rev-parse", "main")
+        status = await self.fetch_into("source", {"refs/heads/main": "refs/heads/mensarium/d-1"}, ["refs/heads/main"], request_id="f0")
+        self.assertEqual(status["state"], "ok", status["detail"])
+        self.assertEqual(git(self.repo, "rev-parse", "refs/heads/mensarium/d-1"), main)
+        self.assertEqual(git(self.repo, "symbolic-ref", "--short", "HEAD"), "feature/login")
         await self.op("checkout", "task_s", branch="mensarium/s-1", start="default")
         status = await self.fetch_into("source", {"refs/heads/mensarium/s-1": "refs/heads/mensarium/s-1"}, ["refs/heads/main"], request_id="f2")
         self.assertEqual(status["state"], "error")
