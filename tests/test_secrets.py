@@ -157,7 +157,7 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             list_children=AsyncMock(return_value=[]),
             update_task=AsyncMock(),
             audit=AsyncMock(),
-            get_approval=AsyncMock(),
+            get_approval=AsyncMock(return_value={"task_id": "task"}),
         )
         core.bus = SimpleNamespace(emit=AsyncMock())
         core.decide = AsyncMock()
