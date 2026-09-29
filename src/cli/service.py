@@ -14,13 +14,15 @@ COMMANDS: dict[str, list[str]] = {"core": ["core", "serve"], "client": ["client"
 LOG_DIRS = {"core": "core", "client": "client", "gateway": "client"}
 LEGACY_LABEL, LEGACY_UNIT = "com.mensarium.target", "mensarium-target.service"
 APP_BUNDLE_ID = "com.mensarium.agent"
+# "Mensarium.app" is what Safari names a web app made from the UI page, so the launcher lives under its own name
+APP_BUNDLE_NAME, LEGACY_APP_BUNDLE_NAME = "Mensarium Agent.app", "Mensarium.app"
 INFO_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>Mensarium</string>
 <key>CFBundleIdentifier</key><string>{bundle_id}</string>
-<key>CFBundleName</key><string>Mensarium</string>
-<key>CFBundleDisplayName</key><string>Mensarium</string>
+<key>CFBundleName</key><string>Mensarium Agent</string>
+<key>CFBundleDisplayName</key><string>Mensarium Agent</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>{version}</string>
@@ -32,20 +34,32 @@ INFO_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
-def app_bundle() -> Path:
-    return Path.home() / "Applications" / "Mensarium.app"
+def app_bundle(name: str = APP_BUNDLE_NAME) -> Path:
+    return Path.home() / "Applications" / name
+
+
+def owns_bundle(app: Path) -> bool:
+    """True for a bundle we made (or none at all); a Safari web app or another app under our name is left alone."""
+    info = app / "Contents" / "Info.plist"
+    return not app.exists() or (info.exists() and f"<string>{APP_BUNDLE_ID}</string>" in info.read_text())
 
 
 def install_app_bundle() -> Path | None:
-    """Mensarium.app around a tiny launcher that runs the agent as its child, so macOS shows Mensarium with its icon
-    in Privacy & Security instead of the Python interpreter. Returns the launcher path, or None off macOS."""
+    """Mensarium Agent.app around a tiny launcher that runs the agent as its child, so macOS shows Mensarium with its
+    icon in Privacy & Security instead of the Python interpreter. Returns the launcher path, or None off macOS
+    and when a foreign app already sits at that path."""
     if sys.platform != "darwin":
         return None
     src = Path(str(resources.files("mensarium.client") / "macos"))
     launcher = src / "Mensarium"
     if not launcher.exists():
         return None
+    legacy = app_bundle(LEGACY_APP_BUNDLE_NAME)
+    if legacy.exists() and owns_bundle(legacy):
+        shutil.rmtree(legacy, ignore_errors=True)
     app = app_bundle()
+    if not owns_bundle(app):
+        return None
     macos, res = app / "Contents" / "MacOS", app / "Contents" / "Resources"
     macos.mkdir(parents=True, exist_ok=True)
     res.mkdir(parents=True, exist_ok=True)
@@ -205,7 +219,9 @@ def uninstall(role: Unit) -> None:
     if kind == "launchd":
         _plist_path(role).unlink(missing_ok=True)
         if role == "client":
-            shutil.rmtree(app_bundle(), ignore_errors=True)
+            for app in (app_bundle(), app_bundle(LEGACY_APP_BUNDLE_NAME)):
+                if app.exists() and owns_bundle(app):
+                    shutil.rmtree(app, ignore_errors=True)
     elif kind == "systemd":
         _systemctl("disable", _unit_name(role))
         (_systemd_user_dir() / _unit_name(role)).unlink(missing_ok=True)
@@ -236,6 +252,15 @@ def _remove_legacy() -> bool:
 def migrate_legacy_client() -> bool:
     """Replace the pre-0.38 target service with the client one; returns True when something was replaced."""
     if not _remove_legacy():
+        return False
+    install("client")
+    return True
+
+
+def migrate_app_bundle() -> bool:
+    """Reinstall a client service that still starts through the pre-0.75 Mensarium.app launcher."""
+    plist = _plist_path("client")
+    if backend() != "launchd" or not plist.exists() or f"/{LEGACY_APP_BUNDLE_NAME}/" not in plist.read_text():
         return False
     install("client")
     return True

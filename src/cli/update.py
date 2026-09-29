@@ -92,7 +92,7 @@ def install(base: str, latest: dict[str, Any]) -> list[str]:
     configured = {"core": CorePaths().config.exists(), "client": ClientPaths().config.exists(), "gateway": False}
     if configured["client"]:
         configured["gateway"] = load_client_config(ClientPaths()).gateway.enabled
-        if service.migrate_legacy_client():
+        if service.migrate_legacy_client() or service.migrate_app_bundle():
             restarted.append("client")
     for role in ("core", "client", "gateway"):
         if configured[role] and role not in restarted and service.is_installed(role):  # type: ignore[arg-type]
