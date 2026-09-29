@@ -472,9 +472,15 @@ class ClaudeCodeProvider(CliProvider):
         # No --json-schema: it registers a tool, and with any tool present the model starts calling our action names
         # as functions. With no tools at all it can only write text, which holds the JSON object.
         # stream-json (not json) because the stream carries `rate_limit_event` with the subscription windows.
+        # The system prompt goes through a file: with tool schemas rendered into it, it outgrows the 128 KiB
+        # a single command-line argument may hold on Linux (E2BIG).
+        fd, path = tempfile.mkstemp(prefix="mensarium-system-", suffix=".md", dir=self.workdir())
+        os.close(fd)
+        system_file = Path(path)
+        system_file.write_text(system)
         args = [
             "-p", "--output-format", "stream-json", "--verbose", "--tools", "", "--setting-sources", "",
-            "--strict-mcp-config", "--max-turns", "2", "--model", model, "--system-prompt", system,
+            "--strict-mcp-config", "--max-turns", "2", "--model", model, "--system-prompt-file", str(system_file),
         ]  # fmt: skip
         if on_text:
             args.append("--include-partial-messages")
@@ -497,6 +503,8 @@ class ClaudeCodeProvider(CliProvider):
             if new_session:
                 self._discard(new_session)
             raise
+        finally:
+            system_file.unlink(missing_ok=True)
         usage = resp.raw_provider_response.get("modelUsage") or {}
         if window := max((int(u.get("contextWindow") or 0) for u in usage.values() if isinstance(u, dict)), default=0):
             self.windows[model] = window

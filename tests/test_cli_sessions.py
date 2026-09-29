@@ -100,10 +100,16 @@ class CliUsageTests(unittest.IsolatedAsyncioTestCase):
         provider = cli_provider.ClaudeCodeProvider("test", "claude", "claude-sonnet-5")
         result = {"type": "result", "session_id": "s1", "result": '{"type": "final", "tool": "", "arguments": "", "text": "done"}',
                   "usage": {"input_tokens": 3, "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 200, "output_tokens": 50}}
-        with patch.object(provider, "_exec", new_callable=AsyncMock, return_value=(0, json.dumps(result), "")) as execute:
+        async def fake_exec(args, stdin, timeout_s, env=None, on_line=None):
+            self.assertEqual(Path(args[args.index("--system-prompt-file") + 1]).read_text(), "sys")
+            return 0, json.dumps(result), ""
+
+        with patch.object(provider, "_exec", side_effect=fake_exec) as execute:
             resp = await provider._call("claude-sonnet-5", "sys", "prompt", 10, resume="s1", persist=True)
         args = execute.call_args.args[0]
         self.assertEqual(args[args.index("--resume") + 1], "s1")
+        self.assertNotIn("--system-prompt", args)
+        self.assertFalse(Path(args[args.index("--system-prompt-file") + 1]).exists())
         self.assertNotIn("--no-session-persistence", args)
         self.assertEqual(resp.usage.model_dump(), {"prompt_tokens": 1203, "completion_tokens": 50, "cached_tokens": 1000, "cache_write_tokens": 200})
         self.assertEqual(resp.raw_provider_response["session_id"], "s1")
