@@ -147,18 +147,21 @@ def render_transcript(messages: list[Message]) -> str:
 _DECODER = json.JSONDecoder()
 
 
-def extract_json_object(text: str) -> dict[str, Any] | None:
-    """The first {...} object in the text that has a `type` field; code fences and prose around it are ignored."""
+def json_objects(text: str) -> list[dict[str, Any]]:
+    """The top-level {...} objects in the text that have a `type` field; code fences and prose around them are ignored."""
+    found = []
     start = text.find("{")
     while start != -1:
         try:
-            obj, _ = _DECODER.raw_decode(text, start)
+            obj, end = _DECODER.raw_decode(text, start)
         except json.JSONDecodeError:
             obj = None
         if isinstance(obj, dict) and "type" in obj:
-            return obj
-        start = text.find("{", start + 1)
-    return None
+            found.append(obj)
+            start = text.find("{", end)
+        else:
+            start = text.find("{", start + 1)
+    return found
 
 
 _TEXT_FIELD = re.compile(r'"text"\s*:\s*"')
@@ -239,10 +242,24 @@ def parse_answer(obj: dict[str, Any]) -> ModelResponse:
 
 _TOOL_CALL = re.compile(r'"type"\s*:\s*"tool_call"')
 _TOOL_NAME = re.compile(r'"tool"\s*:\s*"([\w.-]+)"')
+_ACTION_NAME = re.compile(r"[a-z_]+\.[\w.-]+")
+
+
+def _loose_tool_call(obj: dict[str, Any]) -> dict[str, Any] | None:
+    """A tool call written with a wrong `type`, e.g. {"type": "files.edit", "tool": "files.edit", ...}."""
+    tool = obj.get("tool") or obj.get("type")
+    if obj.get("type") == "final" or not isinstance(tool, str) or not _ACTION_NAME.fullmatch(tool):
+        return None
+    return {**obj, "type": "tool_call", "tool": tool}
 
 
 def parse_text_answer(text: str) -> ModelResponse:
-    if obj := extract_json_object(text):
+    # Models sometimes write a stray object before the real one: take the first proper action, then a tool call
+    # with a wrong type, and never let an object that is neither end the task as an empty final answer.
+    objects = json_objects(text)
+    if obj := next((o for o in objects if (o["type"] == "tool_call" and o.get("tool")) or o["type"] == "final"), None):
+        return parse_answer(obj)
+    if obj := next(filter(None, map(_loose_tool_call, objects)), None):
         return parse_answer(obj)
     if _TOOL_CALL.search(text):
         # A tool call written as broken JSON must not end the task: the model gets the error back and repeats the call.
@@ -250,6 +267,9 @@ def parse_text_answer(text: str) -> ModelResponse:
         err = "the answer is not one valid JSON object, send the action again with correctly escaped arguments"
         call = ProposedToolCall(id=new_id("call"), name=name, arguments=None, raw_arguments=text, parse_error=err)
         return ModelResponse(text=None, tool_calls=[call], finish_reason="tool_calls")
+    if objects:
+        said = next((o["text"] for o in objects if isinstance(o.get("text"), str) and o["text"].strip()), "")
+        return ModelResponse(text=said, tool_calls=[], finish_reason="stop")
     return ModelResponse(text=text, tool_calls=[], finish_reason="stop")
 
 
@@ -384,7 +404,7 @@ class CliProvider:
         if s is None:
             return None, messages
         n = len(s.sent)
-        answer = messages[n] if len(messages) > n + 1 else None
+        answer = messages[n] if len(messages) > n else None
         calls = (answer.tool_calls or []) if answer else []
         if (
             answer is None

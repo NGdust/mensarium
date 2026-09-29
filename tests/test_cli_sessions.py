@@ -57,6 +57,15 @@ class CliSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resume, "s1")
         self.assertIn("next request", prompt)
 
+    async def test_asking_again_after_an_empty_answer_resumes(self):
+        self.call.side_effect = [answer("s1"), answer("s1")]
+        await self.chat()
+        self.messages.pop()
+        await self.chat()
+        prompt, resume, _ = self.last()
+        self.assertEqual(resume, "s1")
+        self.assertNotIn("first request", prompt)
+
     async def test_changed_system_prompt_or_model_starts_new_session(self):
         for change in ({"system": "other"}, {"model": "claude-opus-5"}):
             with self.subTest(change=change):
@@ -122,6 +131,16 @@ class CliUsageTests(unittest.IsolatedAsyncioTestCase):
         resp = cli_provider.parse_text_answer(broken)
         self.assertEqual(resp.tool_calls[0].name, "shell.bash")
         self.assertIsNotNone(resp.tool_calls[0].parse_error)
+
+    def test_text_answer_skips_a_stray_object_before_the_action(self):
+        stray = {"type": "files.edit", "tool": "files.edit", "arguments": "{}", "text": ""}
+        edit = {"type": "tool_call", "tool": "files.edit", "arguments": json.dumps({"path": "config.go"}), "text": "Adding alerts."}
+        resp = cli_provider.parse_text_answer(json.dumps(stray) + "\n\n" + json.dumps(edit))
+        self.assertEqual((resp.text, resp.tool_calls[0].arguments), ("Adding alerts.", {"path": "config.go"}))
+        resp = cli_provider.parse_text_answer(json.dumps(stray))
+        self.assertEqual((resp.tool_calls[0].name, resp.tool_calls[0].arguments), ("files.edit", {}))
+        resp = cli_provider.parse_text_answer('{"type": "answer", "text": ""}')
+        self.assertEqual((resp.text, resp.tool_calls), ("", []))
 
     async def test_codex_resume_and_usage(self):
         provider = cli_provider.CodexCliProvider("test", "codex", "")

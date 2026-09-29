@@ -562,6 +562,7 @@ class Orchestrator:
         task_id = task["id"]
         llm_steps = 0
         memory_notes: str | None = None
+        asked_again = False
 
         while True:
             self._check_control(task_id)
@@ -724,6 +725,13 @@ class Orchestrator:
                 },
             )
             self._check_control(task_id)
+
+            # An empty answer is a slip, not the end of the work: ask once more before closing the turn with it.
+            if action.is_final and not action.text.strip() and not asked_again:
+                asked_again = True
+                log.warning("empty model answer, asking again", extra={"task_id": task_id, "model": model})
+                continue
+            asked_again = False
 
             if action.is_final:
                 text = action.text or "(empty answer)"
