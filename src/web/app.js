@@ -39,6 +39,7 @@ async function api(path, opts = {}) {
 }
 const get = (path) => api(path);
 const post = (path, body) => api(path, { method: 'POST', body: JSON.stringify(body || {}) });
+const put = (path, body) => api(path, { method: 'PUT', body: JSON.stringify(body || {}) });
 const del = (path) => api(path, { method: 'DELETE' });
 
 function fail(err) {
@@ -855,16 +856,32 @@ function dictation(ta, onChange) {
   return { el: btn, stop, set disabled(v) { btn.disabled = v; if (v) stop(); } };
 }
 
+// A JS copy of the key-shaped patterns in shared/redaction.py, minus the KEY=value rule (too many false
+// positives in free text). Used to warn before a message with something that looks like a secret goes to the chat.
+const KEY_PATTERNS = [
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/, ''],
+  [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}/, 'OPENAI_API_KEY'],
+  [/\bgh[pousr]_[A-Za-z0-9]{20,}/, 'GITHUB_TOKEN'],
+  [/\bgithub_pat_[A-Za-z0-9_]{20,}/, 'GITHUB_TOKEN'],
+  [/\bxox[abprs]-[A-Za-z0-9-]{10,}/, 'SLACK_TOKEN'],
+  [/\bAKIA[0-9A-Z]{16}\b/, 'AWS_ACCESS_KEY_ID'],
+  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, ''],
+];
+const findKey = (text) => { for (const [re, name] of KEY_PATTERNS) { const m = text.match(re); if (m) return { value: m[0], name }; } return null; };
+
 // The round button sends a message; while the agent works it becomes a pulsing stop, on a pause it resumes.
 function composer({ placeholder, chips, tail, above, onSend, onStop, onResume }) {
   const ta = h('textarea', { rows: 1, placeholder, 'aria-label': placeholder });
   const send = h('button', { class: 'send', disabled: true });
   const notice = h('div', { class: 'composer-notice' }, limitBanner() || '');
+  const keyBar = h('div', { class: 'composer-keybar', hidden: true });
+  let allowKey = false;
   const picker = h('input', { type: 'file', multiple: true, hidden: true, 'aria-hidden': 'true' });
   const attach = h('button', { class: 'icon-btn attach', type: 'button', title: tr('Attach files'), 'aria-label': tr('Attach files'), onclick: () => picker.click() }, icon('paperclip'));
   const strip = h('div', { class: 'attach-strip' });
   const mic = dictation(ta, () => { grow(); sync(); });
   const box = h('div', { class: 'composer' },
+    keyBar,
     notice,
     strip,
     h('div', { class: 'composer-input' }, ta),
@@ -945,6 +962,17 @@ function composer({ placeholder, chips, tail, above, onSend, onStop, onResume })
   const submit = () => {
     const text = ta.value.trim();
     if ((!text && !files.length) || mode === 'running' || busy) return;
+    const key = allowKey ? null : findKey(text);
+    if (key) {
+      keyBar.replaceChildren(
+        h('span', {}, tr('This looks like a key. Save it as a secret instead of sending it to the chat?')),
+        h('button', { class: 'btn btn-sm btn-primary', onclick: () => secretEditor({ name: key.name, value: key.value, onSaved: (s) => {
+          ta.value = ta.value.replace(key.value, `{{secret:${s.name}}}`); keyBar.hidden = true; submit();
+        } }) }, tr('Save as secret')),
+        h('button', { class: 'btn btn-sm', onclick: () => { allowKey = true; keyBar.hidden = true; submit(); allowKey = false; } }, tr('Send as is')));
+      keyBar.hidden = false;
+      return;
+    }
     mic.stop();
     return run(async () => {
       const ids = [];
@@ -1556,6 +1584,7 @@ async function viewChat(taskId) {
 
   const tools = new Map();
   const approvals = new Map();
+  const secretCards = new Map();
 
   // One activity block per agent turn: a single rolling line while the agent works, a folded log afterwards.
   let work = null;
@@ -1717,6 +1746,7 @@ async function viewChat(taskId) {
         h('dt', {}, tr('Device')), h('dd', {}, tc.target_name || ''),
         args.cwd ? [h('dt', {}, tr('Folder')), h('dd', { title: args.cwd }, short(args.cwd))] : null,
         args.timeout_s ? [h('dt', {}, tr('Limit')), h('dd', {}, tr('{0} s', args.timeout_s))] : null,
+        tc.secrets?.length ? [h('dt', {}, tr('Secrets')), h('dd', {}, tc.secrets.join(', '))] : null,
       ),
       args.stdin ? [h('div', { class: 'approval-sub' }, tr('Input data')), h('pre', { class: 'approval-cmd approval-stdin' }, args.stdin)] : null,
       args.prompt ? [h('div', { class: 'approval-sub' }, tr('Prompt')), h('pre', { class: 'approval-cmd approval-stdin' }, args.prompt)] : null,
@@ -1757,6 +1787,53 @@ async function viewChat(taskId) {
     const note = p.note === 'full access enabled' ? tr('approved by turning on full access') : p.note;
     e.actions.replaceChildren(h('span', { class: 'approval-result' }, text, note ? `: ${note}` : ''));
     if (e.agent) { e.agent.log.append(e.card); e.wrap.remove(); } else if (work) { logAdd(e.card); e.wrap.remove(); }
+  }
+
+  function secretCard(p) {
+    const input = h('input', { type: 'password', autocomplete: 'off', 'aria-label': tr('Value') });
+    const timer = h('span', { class: 'approval-timer' });
+    const save = h('button', { class: 'btn btn-primary' }, icon('check'), tr('Save'));
+    const more = h('button', { class: 'btn' }, tr('Devices…'));
+    const decline = h('button', { class: 'btn' }, tr('Decline'));
+    const actions = h('div', { class: 'approval-actions' }, save, more, decline);
+    const card = h('div', { class: 'approval', role: 'group', 'aria-label': tr('Secret request') },
+      h('div', { class: 'approval-top' }, h('span', { class: 'approval-title' }, tr('The agent asks for a secret')), timer),
+      h('pre', { class: 'approval-cmd' }, p.name),
+      p.description ? h('p', { class: 'row-desc' }, p.description) : null,
+      field(tr('Value'), input, tr('Goes straight to Core: the agent and the chat never see it')),
+      actions);
+    const answer = async (body) => {
+      save.disabled = more.disabled = decline.disabled = true;
+      try { await post(`/v1/secrets/requests/${p.request_id}`, body); }
+      catch (err) { fail(err); save.disabled = more.disabled = decline.disabled = false; }
+    };
+    save.addEventListener('click', () => { if (input.value.trim()) answer({ value: input.value }); });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save.click(); });
+    decline.addEventListener('click', () => answer({ declined: true }));
+    more.addEventListener('click', () => secretEditor({
+      name: p.name, value: input.value, description: p.description, targets: [p.target_id],
+      onSaved: (s) => answer({ targets: s.targets }),
+    }));
+    lastAgent = false;
+    const wrap = add(h('div', { class: 'step' }, card));
+    const expires = new Date(p.expires_at).getTime();
+    const tick = () => { const left = Math.round((expires - Date.now()) / 1000); timer.textContent = left > 0 ? tr('{0} left', mmss(left)) : tr('time\'s up'); };
+    tick();
+    const iv = setInterval(tick, 1000);
+    viewCleanups.push(() => clearInterval(iv));
+    secretCards.set(p.request_id, { card, wrap, actions, iv, timer });
+  }
+
+  function secretAnswered(p) {
+    const e = secretCards.get(p.request_id);
+    if (!e) return;
+    clearInterval(e.iv);
+    e.timer.textContent = '';
+    e.card.classList.add('decided');
+    e.card.querySelector('.plugin-field')?.remove();
+    const text = { saved: tr('Secret saved'), declined: tr('You declined'), expired: tr('Time to decide ran out') }[p.status] || tr('Canceled');
+    e.actions.replaceChildren(h('span', { class: 'approval-result' }, text));
+    if (work) { logAdd(e.card); e.wrap.remove(); }
   }
 
   // Events of a sub-agent arrive mirrored into this chat's stream; they fill the agent's own log in the modal,
@@ -1911,6 +1988,14 @@ async function viewChat(taskId) {
       case 'approval.decided':
         approvalDecided(p);
         break;
+      case 'secret.requested':
+        stamp(ev);
+        say(tr('Waiting for your decision'), live);
+        secretCard(p);
+        break;
+      case 'secret.answered':
+        secretAnswered(p);
+        break;
       case 'tool_call.executing':
         stamp(ev);
         ensureWork().actions += 1;
@@ -2021,6 +2106,7 @@ const SETTINGS = [
   ['memory', 'graph', tr('Memory')],
   ['skills', 'book', tr('Skills')],
   ['plugins', 'package', tr('Plugins')],
+  ['secrets', 'shield', tr('Secrets')],
   ['profiles', 'layers', tr('Profiles')],
   ['audit', 'list', tr('Activity log')],
 ];
@@ -2080,7 +2166,7 @@ async function viewSettings(key) {
   if (key === 'instructions') { go('#/settings/memory'); return; }
   const shell = ensureSettingsShell();
   shell.setActive();
-  const views = { overview: settingsOverview, appearance: settingsAppearance, providers: settingsProviders, model: settingsProviders, devices: settingsDevices, channels: settingsChannels, notifications: settingsNotifications, memory: settingsMemory, skills: settingsSkills, plugins: settingsPlugins, marketplace: settingsPlugins, profiles: settingsProfiles, audit: settingsAudit };
+  const views = { overview: settingsOverview, appearance: settingsAppearance, providers: settingsProviders, model: settingsProviders, devices: settingsDevices, channels: settingsChannels, notifications: settingsNotifications, memory: settingsMemory, skills: settingsSkills, plugins: settingsPlugins, marketplace: settingsPlugins, secrets: settingsSecrets, profiles: settingsProfiles, audit: settingsAudit };
   await (views[key] || settingsOverview)(shell);
 }
 
@@ -3559,6 +3645,63 @@ async function settingsPlugins(shell) {
     grid,
   );
   viewCleanups.push(() => clearTimeout(poll));
+  await load();
+}
+
+async function secretEditor({ secret = null, name = '', value = '', description = '', targets = null, onSaved = null } = {}) {
+  const current = secret?.targets || targets || ['*'];
+  const nameInput = h('input', { type: 'text', value: secret?.name || name, placeholder: 'GITHUB_TOKEN', disabled: !!secret, maxlength: 64, 'aria-label': tr('Name'), spellcheck: 'false' });
+  const valueInput = h('input', { type: 'password', autocomplete: 'off', placeholder: secret ? tr('Saved. Type to replace') : '', 'aria-label': tr('Value') });
+  valueInput.value = value;
+  const descInput = h('input', { type: 'text', value: secret?.description || description, maxlength: 300, placeholder: tr('What it is for'), 'aria-label': tr('Description') });
+  const all = h('input', { type: 'checkbox', checked: current.includes('*') });
+  const boxes = devices().map((d) => [d, h('input', { type: 'checkbox', checked: current.includes(d.id) })]);
+  const list = h('div', { class: 'check-row' }, boxes.map(([d, cb]) => h('label', { class: 'check-label' }, cb, d.name)));
+  const sync = () => { list.hidden = all.checked; };
+  all.addEventListener('change', sync); sync();
+  const save = h('button', { class: 'btn btn-primary' }, tr('Save'));
+  save.addEventListener('click', async () => {
+    const targets = all.checked ? ['*'] : boxes.filter(([, cb]) => cb.checked).map(([d]) => d.id);
+    if (!targets.length) { toast(tr('Pick at least one device'), true); return; }
+    save.disabled = true;
+    try {
+      const saved = await put(`/v1/secrets/${nameInput.value.trim()}`, { value: valueInput.value || null, description: descInput.value, targets });
+      closeLayer();
+      toast(tr('Secret saved'));
+      onSaved?.(saved);
+    } catch (err) { fail(err); save.disabled = false; }
+  });
+  openModal(
+    h('div', { class: 'modal-head' }, h('h2', {}, secret ? secret.name : tr('New secret'))),
+    secret ? null : field(tr('Name'), nameInput, tr('Capital letters, digits and _; the agent uses it as $NAME')),
+    field(tr('Value'), valueInput),
+    field(tr('Description'), descInput, tr('The agent sees the name and this description, never the value')),
+    field(tr('Devices'), h('div', {}, h('label', { class: 'check-label' }, all, tr('All devices')), list)),
+    h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
+  );
+  (secret ? valueInput : nameInput).focus();
+}
+
+async function settingsSecrets(shell) {
+  const list = h('div', {}, h('div', { class: 'empty' }, tr('Loading...')));
+  const deviceNames = (s) => (s.targets.includes('*') ? tr('All devices') : s.targets.map((id) => devices().find((d) => d.id === id)?.name || id).join(', '));
+  const remove = async (s) => {
+    if (!await confirmDialog({ title: tr('Delete “{0}”?', s.name), text: tr('The agent will no longer be able to use this secret.'), action: tr('Delete'), danger: true })) return;
+    try { await del(`/v1/secrets/${s.name}`); toast(tr('Removed')); load(); } catch (err) { fail(err); }
+  };
+  const render = (items) => list.replaceChildren(...(items.length ? items.map((s) => h('div', { class: 'row' },
+    h('div', { class: 'row-text' },
+      h('div', { class: 'row-title' }, h('code', {}, s.name)),
+      h('div', { class: 'row-desc' }, [s.description, deviceNames(s)].filter(Boolean).join(' · '))),
+    h('div', { class: 'row-value' },
+      h('button', { class: 'btn btn-sm', onclick: () => secretEditor({ secret: s, onSaved: load }) }, tr('Edit')),
+      h('button', { class: 'btn btn-sm', onclick: () => remove(s) }, tr('Delete'))))) : [h('div', { class: 'empty' }, tr('No secrets yet'))]));
+  async function load() {
+    try { render((await get('/v1/secrets')).items); } catch (err) { fail(err); }
+  }
+  page(shell, tr('Secrets'), tr('API keys, tokens and passwords the agent can use without seeing them. Each action with a secret asks for your approval.'),
+    h('button', { class: 'btn btn-primary', onclick: () => secretEditor({ onSaved: load }) }, icon('plus'), tr('Add secret')),
+    section(tr('Your secrets'), null, list));
   await load();
 }
 

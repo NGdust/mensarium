@@ -509,6 +509,9 @@ a.crumb-device:hover { color: var(--text); text-decoration: none; }
 .limit-strip > .icon { flex: none; }
 .limit-strip > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .limit-strip .link-btn { background: none; border: 0; padding: 0; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
+.composer-keybar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; margin: -12px -10px 10px -14px; border-radius: 17px 17px 0 0; background: rgba(248, 113, 113, 0.12); border-bottom: 1px solid rgba(248, 113, 113, 0.4); color: var(--danger); font-size: 13px; }
+.composer-keybar[hidden] { display: none; }
+.composer-keybar > span { flex: 1; min-width: 0; }
 .composer-input { display: flex; align-items: flex-start; padding-left: 9px; }
 .composer textarea {
   display: block; flex: 1; resize: none; border: 0; background: transparent; padding: 2px 0 12px;
