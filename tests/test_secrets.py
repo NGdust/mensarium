@@ -93,3 +93,6 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ToolError) as e:
             await self.executor.run("shell.bash", {"script": "exit 0", "cwd": "/nope-fixture-value-123"}, secrets=values)
         self.assertNotIn("fixture-value-123", str(e.exception))
+        with self.assertRaises(ToolError) as e:
+            await self.executor.run("net.http", {"url": "https://x.test/?k=" + "Q" * 2100}, secrets={"K": "Q" * 2100})
+        self.assertNotIn("QQQQ", str(e.exception))

@@ -64,7 +64,7 @@ SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cach
 SECRET_ENV = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|PRIVATE|CREDENTIAL|_KEY$)", re.I)
 _FULL_ACCESS: ContextVar[bool] = ContextVar("mensarium_full_access", default=False)
 _WORKDIR: ContextVar[Path | None] = ContextVar("mensarium_workdir", default=None)
-_SECRETS: ContextVar[dict[str, str] | None] = ContextVar("secrets", default=None)
+_SECRETS: ContextVar[dict[str, str] | None] = ContextVar("mensarium_secrets", default=None)
 
 
 class ToolError(Exception):
@@ -161,10 +161,14 @@ class Executor:
                 raise ToolError(f"unsupported tool {tool!r}")
             try:
                 output = await handler(args)
-            except DesktopError as e:
-                raise ToolError(mask_secrets(str(e), secrets or {})) from e
-            except ToolError as e:
-                raise ToolError(mask_secrets(str(e), secrets or {})) from e
+            except (DesktopError, ToolError) as e:
+                raise ToolError(mask_secrets(str(e), secrets or {})) from None
+            except (ExecTimeout, asyncio.CancelledError):
+                raise
+            except Exception as e:
+                if not secrets:
+                    raise
+                raise ToolError(f"{type(e).__name__}: details hidden because the request carries secrets") from None
             if secrets:
                 output.stdout = mask_secrets(output.stdout, secrets)
                 output.stderr = mask_secrets(output.stderr, secrets)
@@ -176,6 +180,7 @@ class Executor:
 
     @staticmethod
     def _redact(text: str) -> str:
+        text = mask_secrets(text, _SECRETS.get() or {})
         return text if _FULL_ACCESS.get() else redact(text)
 
     @staticmethod
