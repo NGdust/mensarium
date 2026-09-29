@@ -6,17 +6,21 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from mensarium.shared.redaction import SECRET_FILE_PATTERNS
 
 ProjectKind = Literal["repo", "folder"]
-ProjectOpName = Literal["browse", "checkout", "commit", "status", "remove", "branches", "diff", "docs", "revert"]
+ProjectOpName = Literal["browse", "checkout", "commit", "status", "remove", "branches", "diff", "docs", "revert", "fetch"]
 # Ops a client lists in capabilities.project_ops; a client without them rejects the frame and never answers.
-EXTRA_OPS: tuple[ProjectOpName, ...] = ("branches", "diff", "docs", "revert")
+EXTRA_OPS: tuple[ProjectOpName, ...] = ("branches", "diff", "docs", "revert", "fetch")
 # Also listed in capabilities.project_ops: "inplace" means the client takes a workdir anywhere in its allowed roots,
-# so a repo chat without a workspace can work right in the project folder.
-PROJECT_FEATURES: tuple[str, ...] = (*EXTRA_OPS, "inplace")
+# so a repo chat without a workspace can work right in the project folder; "bundle" means it ships git bundles
+# with its snapshot and commit answers and takes them back with the fetch op (phase 2 mirror on the Core).
+PROJECT_FEATURES: tuple[str, ...] = (*EXTRA_OPS, "inplace", "bundle")
+ProjectRole = Literal["source", "executor"]
 OpState = Literal["ok", "conflict", "error"]
 SnapshotState = Literal["ok", "unchanged", "error"]
 
 SNAPSHOT_REF = "refs/mensarium/snapshot"
 BRANCH_PREFIX = "mensarium/"
+DEVICE_REFS = "refs/devices/"
+CHAT_REFS = "refs/heads/" + BRANCH_PREFIX
 SECRET_EXCLUDES: tuple[str, ...] = (*SECRET_FILE_PATTERNS, ".netrc", ".npmrc", ".pypirc", "*.kdbx", "credentials*", "secrets.*")
 FOLDER_EXCLUDES = (".DS_Store", "Thumbs.db", "~$*", "*.tmp", ".~lock.*")
 KIND_LABELS = {"repo": "git repository", "folder": "folder"}
@@ -36,6 +40,45 @@ class ProjectError(Exception):
 def branch_name(task_id: str, text: str) -> str:
     slug = "-".join(re.findall(r"[a-z0-9]+", text.lower()))[:40].rstrip("-") or "chat"
     return f"{BRANCH_PREFIX}{slug}-{task_id[-4:].lower()}"
+
+
+def mirror_ref(target_id: str, ref: str) -> str | None:
+    """A device's ref name as the mirror stores it; chat branches keep their name, anything else is not mirrored."""
+    if ref.startswith(CHAT_REFS):
+        return ref
+    if ref == SNAPSHOT_REF:
+        return f"{DEVICE_REFS}{target_id}/snapshot"
+    for prefix in ("refs/heads/", "refs/remotes/"):
+        if ref.startswith(prefix):
+            return f"{DEVICE_REFS}{target_id}/{ref.removeprefix('refs/')}"
+    return None
+
+
+def device_ref(target_id: str, ref: str) -> str | None:
+    if ref.startswith(CHAT_REFS):
+        return ref
+    own = f"{DEVICE_REFS}{target_id}/"
+    if not ref.startswith(own):
+        return None
+    rest = ref.removeprefix(own)
+    return SNAPSHOT_REF if rest == "snapshot" else f"refs/{rest}" if rest.startswith(("heads/", "remotes/")) else None
+
+
+class BundleInfo(BaseModel):
+    sha256: str
+    size: int = Field(ge=0)
+    refs: dict[str, str] = {}
+    prerequisites: list[str] = []
+
+
+class ProjectBundle(BaseModel):
+    """One chunk of a git bundle on its way up or down; unsigned, tied to a pending signed request by request_id."""
+
+    type: Literal["project.bundle"] = "project.bundle"
+    request_id: str
+    project_id: str
+    seq: int = Field(ge=0)
+    data: str
 
 
 class ProjectCreate(BaseModel):
@@ -86,6 +129,7 @@ class ProjectPatch(BaseModel):
     size_limit_mb: int | None = Field(None, ge=1, le=20480)
     file_limit_mb: int | None = Field(None, ge=1, le=2048)
     instructions: str | None = Field(None, max_length=INSTRUCTIONS_LIMIT)
+    default_executor_id: str | None = Field(None, max_length=100)
 
     @field_validator("default_base")
     @classmethod
@@ -132,6 +176,8 @@ class ProjectSnapshotStatus(BaseModel):
     refs: dict[str, str] = {}
     size_bytes: int = 0
     skipped: list[str] = []
+    main: str | None = None
+    bundle: BundleInfo | None = None
     detail: str = ""
     signature: str = ""
 
@@ -162,4 +208,5 @@ class ProjectOpStatus(BaseModel):
     detail: str = ""
     conflicts: list[str] = []
     data: dict[str, Any] = {}
+    bundle: BundleInfo | None = None
     signature: str = ""

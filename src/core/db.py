@@ -4,7 +4,7 @@ from typing import Any
 
 import aiosqlite
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 COLUMN_MIGRATIONS = [
     ("tasks", "mode", "TEXT NOT NULL DEFAULT 'ask'"),
@@ -27,6 +27,7 @@ COLUMN_MIGRATIONS = [
     ("automations", "provider", "TEXT"),
     ("projects", "instructions", "TEXT"),
     ("tasks", "diff_stat", "TEXT"),
+    ("projects", "main_branch", "TEXT"),
 ]
 
 SCHEMA = """
@@ -121,6 +122,16 @@ CREATE TABLE IF NOT EXISTS projects (
     skipped TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS projects_source ON projects(source_target_id, source_path);
+CREATE TABLE IF NOT EXISTS project_devices (
+    project_id TEXT NOT NULL, target_id TEXT NOT NULL, role TEXT NOT NULL,
+    known_refs TEXT NOT NULL DEFAULT '{}', device_refs TEXT NOT NULL DEFAULT '{}', last_sync_at TEXT, last_error TEXT,
+    PRIMARY KEY (project_id, target_id)
+);
+CREATE TABLE IF NOT EXISTS project_deliveries (
+    id TEXT PRIMARY KEY, project_id TEXT NOT NULL, target_id TEXT NOT NULL, task_id TEXT NOT NULL, kind TEXT NOT NULL,
+    status TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS project_deliveries_target ON project_deliveries(target_id, status);
 """
 
 JSON_COLUMNS = {

@@ -357,6 +357,55 @@ class Repo:
             (project_id,),
         )
 
+    def _device_row(self, row: dict[str, Any] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        return {**row, "known_refs": json.loads(row["known_refs"] or "{}"), "device_refs": json.loads(row["device_refs"] or "{}")}
+
+    async def get_project_device(self, project_id: str, target_id: str) -> dict[str, Any] | None:
+        return self._device_row(await self.db.fetchone("SELECT * FROM project_devices WHERE project_id = ? AND target_id = ?", (project_id, target_id)))
+
+    async def list_project_devices(self, project_id: str) -> list[dict[str, Any]]:
+        rows = await self.db.fetchall("SELECT * FROM project_devices WHERE project_id = ?", (project_id,))
+        return [r for r in (self._device_row(row) for row in rows) if r]
+
+    async def upsert_project_device(self, project_id: str, target_id: str, role: str, **values: Any) -> None:
+        stored = {k: json.dumps(v) if k in ("known_refs", "device_refs") else v for k, v in values.items()}
+        if await self.get_project_device(project_id, target_id) is None:
+            await self.db.insert("project_devices", {"project_id": project_id, "target_id": target_id, "role": role, **stored})
+            return
+        sets = ", ".join(f"{k} = ?" for k in ("role", *stored))
+        await self.db.execute(f"UPDATE project_devices SET {sets} WHERE project_id = ? AND target_id = ?", (role, *stored.values(), project_id, target_id))
+
+    async def delete_project_devices(self, project_id: str) -> None:
+        await self.db.execute("DELETE FROM project_devices WHERE project_id = ?", (project_id,))
+        await self.db.execute("DELETE FROM project_deliveries WHERE project_id = ?", (project_id,))
+
+    async def create_delivery(self, values: dict[str, Any]) -> None:
+        await self.db.insert("project_deliveries", values)
+
+    async def find_delivery(self, task_id: str, target_id: str, kind: str, statuses: tuple[str, ...]) -> dict[str, Any] | None:
+        marks = ", ".join("?" for _ in statuses)
+        return await self.db.fetchone(
+            f"SELECT * FROM project_deliveries WHERE task_id = ? AND target_id = ? AND kind = ? AND status IN ({marks})", (task_id, target_id, kind, *statuses)
+        )
+
+    async def list_deliveries(self, target_id: str | None = None, project_id: str | None = None, statuses: tuple[str, ...] = ("pending", "failed")) -> list[dict[str, Any]]:
+        where, params = [f"status IN ({', '.join('?' for _ in statuses)})"], [*statuses]
+        if target_id:
+            where.append("target_id = ?")
+            params.append(target_id)
+        if project_id:
+            where.append("project_id = ?")
+            params.append(project_id)
+        return await self.db.fetchall(f"SELECT * FROM project_deliveries WHERE {' AND '.join(where)} ORDER BY created_at", tuple(params))
+
+    async def update_delivery(self, delivery_id: str, values: dict[str, Any]) -> None:
+        await self.db.update("project_deliveries", delivery_id, {**values, "updated_at": now_iso()})
+
+    async def cancel_task_deliveries(self, task_id: str) -> None:
+        await self.db.execute("UPDATE project_deliveries SET status = 'canceled', updated_at = ? WHERE task_id = ? AND status IN ('pending', 'failed')", (now_iso(), task_id))
+
     # settings (kv)
     async def get_setting(self, key: str) -> Any:
         row = await self.db.fetchone("SELECT value FROM kv WHERE key = ?", (key,))

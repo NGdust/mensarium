@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-SessionKind = Literal["worker", "gateway"]
+SessionKind = Literal["worker", "gateway", "cli"]
 
 GATEWAY_SCOPE_KEY = "mensarium.gateway"
 MAX_REQUEST_BODY = 16 * 1024 * 1024

@@ -126,5 +126,31 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("your worktree", prompt)
 
 
+class ContractHelperTests(unittest.TestCase):
+    def test_refs_map_between_device_and_mirror_names(self) -> None:
+        from mensarium.contracts.projects import device_ref, mirror_ref
+        cases = {"refs/heads/main": "refs/devices/tgt_1/heads/main", "refs/remotes/origin/main": "refs/devices/tgt_1/remotes/origin/main",
+                 "refs/mensarium/snapshot": "refs/devices/tgt_1/snapshot", "refs/heads/mensarium/x-1": "refs/heads/mensarium/x-1"}
+        for dev, mir in cases.items():
+            self.assertEqual(mirror_ref("tgt_1", dev), mir)
+            self.assertEqual(device_ref("tgt_1", mir), dev)
+        self.assertIsNone(mirror_ref("tgt_1", "refs/tags/v1"))
+        self.assertIsNone(device_ref("tgt_1", "refs/devices/tgt_2/heads/main"))
+
+    def test_bundle_chunks_round_trip_and_limit(self) -> None:
+        from mensarium.shared import bundles
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dst = Path(tmp) / "a.bundle", Path(tmp) / "inbox" / "b.bundle"
+            src.write_bytes(os.urandom(bundles.CHUNK + 10))
+            for part in bundles.chunks(src):
+                bundles.append_chunk(dst, part)
+            self.assertEqual(dst.read_bytes(), src.read_bytes())
+            info = bundles.describe(src, {"refs/heads/x": "abc"}, ["def"])
+            self.assertEqual((info.size, info.refs, info.prerequisites), (bundles.CHUNK + 10, {"refs/heads/x": "abc"}, ["def"]))
+            bundles.check(dst, info)
+            with self.assertRaises(ValueError):
+                bundles.check(dst, info.model_copy(update={"size": 1}))
+
+
 if __name__ == "__main__":
     unittest.main()
