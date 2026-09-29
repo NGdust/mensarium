@@ -215,7 +215,9 @@ class ProjectSyncTests(unittest.IsolatedAsyncioTestCase):
             await orch.create_task("coding-agent-v1", "tgt_core", "", project_id="prj_1")
         self.assertIn("no snapshot", str(ctx.exception))
         self.assertEqual((await orch.create_task("coding-agent-v1", None, "", project_id="prj_1"))["target_id"], "tgt_src")
+        self.assertEqual((await self.manager.view(await self.manager.get("prj_1")))["executor_id"], "tgt_src")
         await self.seed_mirror()
+        self.assertEqual((await self.manager.view(await self.manager.get("prj_1")))["executor_id"], "tgt_core")
         task = await orch.create_task("coding-agent-v1", None, "", project_id="prj_1", branch="feature")
         self.assertEqual((task["target_id"], task["branch"]), ("tgt_core", "mensarium/feature"))
 

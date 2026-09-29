@@ -224,6 +224,14 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("you work right in the user's own checkout", prompt)
         self.assertNotIn("your worktree", prompt)
 
+    def test_prompt_names_the_executor_and_warns_about_a_remote_snapshot(self) -> None:
+        project = {"name": "demo", "kind": "repo", "source": "mac:/w/demo", "workdir": "/p/wt/t", "branch": "mensarium/x-1", "base": "snapshot@abc", "instructions": "",
+                   "inplace": False, "executor": "server", "remote": True, "snapshot_at": "2026-09-29T10:00:00Z"}
+        prompt = build_system_prompt(builtin_profiles()[0], "server", "linux", TargetPolicy(roots=["/p"], command_allowlist=[]), [], project=project)
+        self.assertIn("- runs on: server", prompt)
+        self.assertIn("snapshot taken 2026-09-29T10:00:00Z", prompt)
+        self.assertNotIn("snapshot taken", build_system_prompt(builtin_profiles()[0], "mac", "macos", TargetPolicy(roots=["/p"], command_allowlist=[]), [], project={**project, "remote": False}))
+
 
 class ContractHelperTests(unittest.TestCase):
     def test_refs_map_between_device_and_mirror_names(self) -> None:

@@ -198,7 +198,7 @@ class Orchestrator:
                 if target_id != source:
                     raise TaskError("a chat without a workspace runs only on the project's own device")
             elif not target_id:
-                target_id = project.get("default_executor_id") or await self._implicit_executor(project, base) or source
+                target_id = await self.projects.executor_of(project, self._base_ref(project, base))
         elif base or branch:
             raise TaskError("a branch is chosen only for a project chat")
         if not target_id:
@@ -278,18 +278,6 @@ class Orchestrator:
     @staticmethod
     def _base_ref(project: dict[str, Any], base: str | None) -> str:
         return "snapshot" if project["kind"] == "folder" else base or repo_base(project)
-
-    async def _implicit_executor(self, project: dict[str, Any], base: str | None) -> str | None:
-        # The Core's device runs the chat only when it can start it from the mirror; otherwise the source does, as before.
-        assert self.projects
-        core = self.projects.device_id
-        if not core or core == project["source_target_id"] or not self.hub.is_online(core) or not self.projects.can_execute(core):
-            return None
-        try:
-            await self.projects.project_sync.resolve_base(project, self._base_ref(project, base))
-        except ProjectError:
-            return None
-        return core
 
     def _prepare(self, task_id: str) -> None:
         job = asyncio.create_task(self._prepare_job(task_id))

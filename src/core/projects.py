@@ -70,8 +70,9 @@ class ProjectManager:
 
     # ---- views ------------------------------------------------------------------
 
-    def view(self, p: dict[str, Any]) -> dict[str, Any]:
-        executor = self.executor_of(p)
+    async def view(self, p: dict[str, Any]) -> dict[str, Any]:
+        executor = await self.executor_of(p)
+        target = await self.repo.get_target(executor)
         keys = (
             "id", "name", "kind", "source_target_id", "source_name", "source_path", "default_executor_id", "default_base",
             "git_url", "include_remotes", "fetch_origin", "size_limit_mb", "file_limit_mb", "head_sha", "snapshot_sha",
@@ -84,26 +85,31 @@ class ProjectManager:
             "syncing": str(p["id"]) in self.jobs,
             "mirror": self.project_sync.mirror(str(p["id"])).exists,
             "executor_id": executor,
-            "executor_name": p.get("executor_name"),
-            "executor_online": bool(executor and self.hub.is_online(executor)),
+            "executor_name": target["name"] if target else None,
+            "executor_online": self.hub.is_online(executor),
         }
 
     async def all(self) -> list[dict[str, Any]]:
-        return [self.view(await self._with_executor(p)) for p in await self.repo.list_projects()]
+        return [await self.view(p) for p in await self.repo.list_projects()]
 
     async def get(self, project_id: str) -> dict[str, Any]:
         p = await self.repo.get_project(project_id)
         if not p:
             raise ProjectError("project not found")
-        return await self._with_executor(p)
+        return p
 
-    async def _with_executor(self, p: dict[str, Any]) -> dict[str, Any]:
-        executor = self.executor_of(p)
-        target = await self.repo.get_target(executor) if executor else None
-        return {**p, "executor_name": target["name"] if target else None}
-
-    def executor_of(self, project: dict[str, Any]) -> str | None:
-        return project.get("default_executor_id") or self.device_id
+    async def executor_of(self, project: dict[str, Any], base_ref: str = "snapshot") -> str:
+        if project.get("default_executor_id"):
+            return str(project["default_executor_id"])
+        # The Core's device runs the chat only when it can start it from the mirror; otherwise the source does, as before.
+        core, source = self.device_id, str(project["source_target_id"])
+        if not core or core == source or not self.hub.is_online(core) or not self.can_execute(core):
+            return source
+        try:
+            await self.project_sync.resolve_base(project, base_ref)
+        except ProjectError:
+            return source
+        return core
 
     # ---- device calls -----------------------------------------------------------
 
@@ -306,7 +312,7 @@ class ProjectManager:
             self.workspace_id, "user", "project.created", {"project_id": project_id, "target_id": target["id"], "path": source_path, "git_url": body.git_url}
         )
         self._start_refresh(project_id)
-        return self.view(await self.get(project_id))
+        return await self.view(await self.get(project_id))
 
     async def sync(self, project_id: str) -> dict[str, Any]:
         p = await self.get(project_id)
@@ -314,7 +320,7 @@ class ProjectManager:
         if project_id in self.jobs:
             raise ProjectError("the project is already being read")
         self._start_refresh(project_id)
-        return self.view(p)
+        return await self.view(p)
 
     async def refresh(self, project_id: str) -> None:
         """Read the source again and wait for it, unless a read of this project is already running."""
@@ -394,7 +400,7 @@ class ProjectManager:
                 values["default_executor_id"] = None
         if values:
             await self.repo.update_project(project_id, values)
-        return self.view(await self.get(project_id))
+        return await self.view(await self.get(project_id))
 
     async def precheck_delete(self, project_id: str, remove_shadow: bool) -> dict[str, Any]:
         p = await self.get(project_id)

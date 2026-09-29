@@ -1277,7 +1277,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         except ProjectError as e:
             raise project_error(e) from e
         return {
-            **c.projects.view(p),
+            **(await c.projects.view(p)),
             "chats": [task_view(t) for t in await c.repo.list_project_tasks(project_id)],
             "devices": await device_choices(c),
             "deliveries": await c.repo.list_deliveries(project_id=project_id),

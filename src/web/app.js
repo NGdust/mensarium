@@ -1342,13 +1342,10 @@ async function viewNewChat(projectId = null) {
     return;
   }
   const online = devices().filter((t) => t.status === 'online');
-  // A project chat runs on the project's own device.
-  const source = () => devices().find((t) => t.id === project.source_target_id);
-  const offlineText = () => (project.source_name
-    ? tr('“{0}” is offline. Turn it on to start a chat in this project.', project.source_name)
-    : tr('The project\'s device is offline. Turn it on to start a chat in this project.'));
+  // A project chat runs where the Core picks for the project.
+  const executor = () => devices().find((t) => t.id === project.executor_id);
   let selected = project
-    ? source() || null
+    ? executor() || null
     : online.find((t) => t.id === localStorageGet('target')) || online.find(isThisDevice) || online[0] || null;
 
   const chipLabel = h('span', { class: 'chip-label' });
@@ -1372,7 +1369,7 @@ async function viewNewChat(projectId = null) {
   if (!state.system) { try { state.system = await get('/v1/system'); } catch { /* shown without version info */ } }
   const banner = h('div', { class: 'welcome-banner' }, outdatedBanner(selected) || '');
   const hintText = (mode = modeCtl.effective()) => {
-    if (project && source()?.status !== 'online') return offlineText();
+    if (project && projectChatProblem(project)) return projectChatProblem(project);
     if (!project && !online.length) return tr('All devices are currently offline. Run mensarium client run on the machine you need.');
     return mode === 'full'
       ? tr('Full access: the agent runs commands and changes files on its own, without asking.')
@@ -1384,8 +1381,8 @@ async function viewNewChat(projectId = null) {
   });
   hint.textContent = hintText();
   if (project) {
-    // The source can come online or drop while the page is open; the shell poll refreshes state.targets.
-    const iv = setInterval(() => { selected = source() || selected; hint.textContent = hintText(); }, 4000);
+    // The device can come online or drop while the page is open; the shell poll refreshes state.targets.
+    const iv = setInterval(() => { selected = executor() || selected; hint.textContent = hintText(); }, 4000);
     viewCleanups.push(() => clearInterval(iv));
   }
 
@@ -1403,9 +1400,9 @@ async function viewNewChat(projectId = null) {
     placeholder: tr('Describe the task for the agent'),
     chips: [project ? projectChip : targetChip, h('span', { class: 'divider' }), modeCtl.el, modelCtl.el],
     onSend: async (text, attachments) => {
-      if (project && source()?.status !== 'online') throw new Error(offlineText());
+      if (project && projectChatProblem(project)) throw new Error(projectChatProblem(project));
       if (!selected) throw new Error(tr('Select the device the agent will work on'));
-      const task = await post('/v1/tasks', { target_id: selected.id, input: text, attachments, mode: modeCtl.effective(), model: modelCtl.value().model || undefined, provider: modelCtl.value().provider || undefined, project_id: project?.id });
+      const task = await post('/v1/tasks', { target_id: project ? undefined : selected.id, input: text, attachments, mode: modeCtl.effective(), model: modelCtl.value().model || undefined, provider: modelCtl.value().provider || undefined, project_id: project?.id });
       state.tasks.unshift(task);
       go(`#/chat/${task.id}`);
     },
@@ -4048,12 +4045,22 @@ function branchField(data, { onEnter, onChange }) {
   };
 }
 
+// Why a chat with a workspace cannot start now; the Core runs it on project.executor_id.
+function projectChatProblem(project) {
+  const executor = devices().find((t) => t.id === project.executor_id);
+  if (project.executor_id !== project.source_target_id && !project.mirror) return tr('The Core has no copy of this project yet: turn on “{0}” and sync it.', project.source_name || '');
+  if (executor?.status !== 'online') return tr('“{0}”, where this project\'s chats run, is offline.', project.executor_name || executor?.name || '');
+  return '';
+}
+
 // A new chat in a repo project: whether it gets its own workspace and from which branch; the chat is created
 // empty and opened, the task is written there.
 function openProjectChat(project) {
   const source = devices().find((t) => t.id === project.source_target_id);
+  const executor = devices().find((t) => t.id === project.executor_id);
   let workspace = true;
   let field = null;
+  let note = '';
   const hint = h('p', { class: 'row-desc ws-hint' });
   const branchBox = h('div', { class: 'ws-field' }, h('div', { class: 'changes-empty' }, tr('Loading...')));
   const problem = h('p', { class: 'browser-error', role: 'alert' });
@@ -4061,18 +4068,22 @@ function openProjectChat(project) {
   const sync = () => {
     hint.textContent = workspace
       ? tr('The chat works in its own copy of the repository on a new branch, so your checkout stays as it is.')
-      : tr('The agent works right in the project folder {0}: its edits land in your files at once, with no branch of its own.', project.source_path);
+      : tr('The agent works right in the project folder {0} on “{1}”: its edits land in your files at once, with no branch of its own.', project.source_path, project.source_name || '');
     (field?.el || branchBox).classList.toggle('hidden', !workspace);
-    create.disabled = source?.status !== 'online' || (workspace && field && !field.valid());
+    // A chat without a workspace runs in the source folder; one with a workspace runs where the Core picked.
+    const blocked = workspace ? projectChatProblem(project)
+      : source?.status !== 'online' ? tr('“{0}” is offline. Turn it on to start a chat in this project.', project.source_name || '') : '';
+    problem.textContent = blocked || note;
+    create.disabled = Boolean(blocked) || (workspace && field && !field.valid());
   };
   const wsSwitch = toggleSwitch(true, { label: tr('Create a workspace'), onChange: async (v) => { workspace = v; sync(); } });
   const wsRow = h('label', { class: 'switch-label ws-toggle' }, wsSwitch, tr('Create a workspace'));
   create.addEventListener('click', async () => {
     create.disabled = true;
-    const full = localStorageGet('mode') === 'full' && fullAccessOf(source) === 'allowed';
+    const full = localStorageGet('mode') === 'full' && fullAccessOf(workspace ? executor : source) === 'allowed';
     try {
       const task = await post('/v1/tasks', {
-        target_id: project.source_target_id, input: '', project_id: project.id, mode: full ? 'full' : 'ask',
+        input: '', project_id: project.id, mode: full ? 'full' : 'ask',
         workspace, ...(workspace ? field?.value() : {}),
       });
       state.tasks.unshift(task);
@@ -4085,7 +4096,6 @@ function openProjectChat(project) {
     h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: clearLayer }, tr('Cancel')), create),
   );
   modal.classList.add('modal-wide');
-  if (source?.status !== 'online') problem.textContent = tr('“{0}” is offline. Turn it on to start a chat in this project.', project.source_name || project.source_target_id);
   sync();
   get(`/v1/projects/${project.id}/branches`).then((r) => {
     if (!modal.isConnected) return;
@@ -4095,10 +4105,13 @@ function openProjectChat(project) {
     field.input.focus();
   }, (err) => {
     if (!modal.isConnected) return;
-    // An older client can neither list branches nor work in the folder: the chat gets a workspace from the main branch.
+    // An offline source or an older client can neither list branches nor work in the folder: the chat gets a
+    // workspace from the default branch.
     branchBox.remove();
     wsRow.remove();
-    if (source?.status === 'online') problem.textContent = /outdated/.test(err.message) ? tr('Update the Mensarium client on “{0}” to pick a branch or work without a workspace; until then the chat starts from the main branch.', project.source_name || '') : err.message;
+    workspace = true;
+    if (source?.status === 'online') note = /outdated/.test(err.message) ? tr('Update the Mensarium client on “{0}” to pick a branch or work without a workspace; until then the chat starts from the main branch.', project.source_name || '') : err.message;
+    sync();
   });
 }
 
@@ -4396,40 +4409,63 @@ async function viewProject(id) {
       h('div', { class: 'row-value' }, diffStat(t.diff_stat), relTime(t.updated_at)));
   };
 
+  // The Core host comes first and is the default; a device without project support can still be the current choice.
+  const runsOn = () => {
+    const core = state.targets.find((t) => t.core_host)?.id;
+    const current = p.default_executor_id || core || p.executor_id;
+    const choices = (p.devices || []).filter((d) => d.projects || d.id === current).sort((a, b) => (b.id === core) - (a.id === core));
+    const select = h('select', { 'aria-label': tr('Runs on') }, choices.map((d) => h('option', { value: d.id, selected: d.id === current },
+      [d.id === core ? tr('{0} (default)', d.name) : d.name, d.online ? null : tr('offline')].filter(Boolean).join(' · '))));
+    select.addEventListener('change', async () => {
+      select.disabled = true;
+      try {
+        await api(`/v1/projects/${id}`, { method: 'PUT', body: JSON.stringify({ default_executor_id: select.value }) });
+        await load();
+        toast(tr('Saved'));
+      } catch (err) { fail(err); select.disabled = false; }
+    });
+    return select;
+  };
+
   const render = () => {
     const ready = p.status === 'ready';
     const busy = p.status === 'creating' || p.syncing;
     const chats = Array.isArray(p.chats) ? p.chats : [];
+    const deliveries = p.deliveries || [];
     const skipped = p.skipped || [];
     if (!editing) titleEl.textContent = p.name;
-    newChatBtn.classList.toggle('hidden', !ready);
-    const reread = busy || !p.source_online ? null
+    const canChat = ready && (p.mirror || p.source_online);
+    newChatBtn.classList.toggle('hidden', !canChat);
+    const reread = busy ? null : !p.source_online ? h('span', { class: 'market-meta' }, tr('device offline'))
       : h('button', { class: 'icon-btn', title: p.git_url ? tr('Pull from origin and read again') : tr('Read the folder again'), 'aria-label': p.git_url ? tr('Pull from origin and read again') : tr('Read the folder again'), onclick: (e) => sync(e.currentTarget) }, icon('refresh'));
     fillInfo(
       row(tr('Device'), null, [h('span', { class: `dot${p.source_online ? ' ok' : ''}`, title: p.source_online ? null : tr('offline') }), p.source_name || p.source_target_id,
         p.source_online ? null : h('span', { class: 'market-meta' }, tr('offline'))]),
+      row(tr('Runs on'), tr('Where chats of this project work; the Core host by default'), runsOn()),
       p.git_url ? row(tr('Repository'), null, p.git_url, true) : null,
       row(p.git_url ? tr('Clone') : tr('Folder'), null, p.source_path, true),
-      row(tr('Last read'), null, [relTime(p.last_sync_at), reread]),
+      row(tr('Snapshot on the Core'), null, [p.mirror ? relTime(p.last_sync_at) : tr('none yet'), reread]),
+      deliveries.length ? row(tr('Branches to deliver'), null, h('div', { class: 'skipped' }, deliveries.map((d) => `${d.kind} · ${d.status}${d.error ? ` · ${d.error}` : ''}`).join('\n')), true) : null,
       ready && p.kind === 'repo' ? row(tr('Branch on the device'), null, p.default_branch || '—', true) : null,
       skipped.length ? row(tr('Skipped large files'), `${tp('{0} file|{0} files', skipped.length)} · ${tr('over {0} MB each', p.file_limit_mb || DEFAULT_FILE_LIMIT_MB)}`, h('div', { class: 'skipped' }, [...skipped.slice(0, 20), skipped.length > 20 ? '…' : null].filter(Boolean).join('\n')), true) : null);
     body.replaceChildren(...[
       busy ? h('div', { class: 'note-banner busy', role: 'status' }, h('span', { class: 'spinner' }), h('span', {}, p.git_url && !p.snapshot_sha ? tr('Cloning the repository…') : tr('Reading the folder…'))) : null,
-      !busy && p.status === 'error'
-        ? h('div', { class: 'note-banner', role: 'alert' }, icon('alert'), h('span', {}, p.error || tr('Could not read the folder')),
+      !busy && (p.status === 'error' || (ready && p.error))
+        ? h('div', { class: 'note-banner', role: 'alert' }, icon('alert'), h('span', {}, ready ? `${tr('Last sync failed')}: ${p.error}` : p.error || tr('Could not read the folder')),
           p.source_online ? h('button', { class: 'btn btn-sm', onclick: (e) => sync(e.currentTarget) }, icon('refresh'), tr('Retry')) : null)
         : null,
       ready || chats.length
         ? section(tr('Chats'), null, chats.length
           ? h('div', { class: 'rows' }, chats.map(chatRow))
           : h('div', { class: 'empty rows' }, h('p', {}, tr('No chats yet. Start one and the agent will work in its own copy of the project.')),
-            h('a', { class: 'btn btn-primary', href: `#/projects/${id}/new`, onclick: startChat }, icon('plus'), tr('New chat'))))
+            canChat ? h('a', { class: 'btn btn-primary', href: `#/projects/${id}/new`, onclick: startChat }, icon('plus'), tr('New chat')) : null))
         : null,
     ].filter(Boolean));
   };
 
   const show = (next) => {
-    p = next;
+    // A PUT answers with the bare project view: the devices and deliveries stay until the next poll.
+    p = { devices: p.devices, deliveries: p.deliveries, ...next };
     rememberProject(next);
     const key = JSON.stringify(next) + Math.floor(Date.now() / 60000);
     if (key === shown) return;

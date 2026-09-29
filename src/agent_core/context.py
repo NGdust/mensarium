@@ -39,6 +39,7 @@ PROJECT_BLOCK = (
     "\n## Project (set by the harness)\n"
     "- name: {name}\n"
     "- source: {source}\n"
+    "- runs on: {executor}\n"
     "- your worktree (work only here; relative paths and shell cwd resolve to it): {workdir}\n"
     "- your branch: {branch}, started from {base}\n"
     "This worktree is your private copy of the project for this chat. Do not switch branches, do not touch other "
@@ -61,11 +62,16 @@ FOLDER_BLOCK = (
     "\n## Project (set by the harness)\n"
     "- name: {name}\n"
     "- source: {source}\n"
+    "- runs on: {executor}\n"
     "- your working copy (work only here; relative paths and shell cwd resolve to it): {workdir}\n"
     "- started from the folder state of {base}\n"
     "This is a folder of files, not a code repository: Mensarium versions it for you, so do not run git commands. "
     "Edit files in place inside the working copy. If the user later brings in a newer folder state and a binary "
     "file (documents, images) was changed on both sides, keep both versions (`<name> (device).<ext>`) and say so.\n"
+)
+REMOTE_NOTE = (
+    "The source device is not this machine: your copy comes from the device snapshot taken {snapshot_at}. Changes the "
+    "user made on the device since then are not here; your branch reaches the device when it is online.\n"
 )
 
 
@@ -171,12 +177,15 @@ def build_system_prompt(
     if unattended:
         prompt += UNATTENDED_BLOCK
     if project:
+        project = {"executor": "", "remote": False, "snapshot_at": "", **project}
         block = FOLDER_BLOCK if project["kind"] == "folder" else INPLACE_BLOCK if project.get("inplace") else PROJECT_BLOCK
         if unrestricted:
             block = block.replace("work only here;", "default directory;")
             block = block.replace("Do not switch branches, do not touch other ", "Keep project edits in this copy by default. Do not switch branches or touch other ")
             block = block.replace("say so plainly instead of installing toolchains.", "install dependencies or toolchains when needed to complete the user’s task.")
         prompt += block.format(**project)
+        if project["remote"]:
+            prompt += REMOTE_NOTE.format(**project)
         if project.get("instructions"):
             prompt += f"\n## Project instructions from the user\n{project['instructions']}\n"
     if "plugins.find" in tools:
