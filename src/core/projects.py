@@ -98,15 +98,15 @@ class ProjectManager:
             raise ProjectError("project not found")
         return p
 
-    async def executor_of(self, project: dict[str, Any], base_ref: str = "snapshot") -> str:
+    async def executor_of(self, project: dict[str, Any]) -> str:
         if project.get("default_executor_id"):
             return str(project["default_executor_id"])
-        # The Core's device runs the chat only when it can start it from the mirror; otherwise the source does, as before.
+        # The Core's device runs the chat only when the mirror has the source's snapshot; otherwise the source does, as before.
         core, source = self.device_id, str(project["source_target_id"])
         if not core or core == source or not self.hub.is_online(core) or not self.can_execute(core):
             return source
         try:
-            await self.project_sync.resolve_base(project, base_ref)
+            await self.project_sync.resolve_base(project, "snapshot")
         except ProjectError:
             return source
         return core

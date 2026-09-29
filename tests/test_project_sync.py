@@ -220,6 +220,10 @@ class ProjectSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.manager.view(await self.manager.get("prj_1")))["executor_id"], "tgt_core")
         task = await orch.create_task("coding-agent-v1", None, "", project_id="prj_1", branch="feature")
         self.assertEqual((task["target_id"], task["branch"]), ("tgt_core", "mensarium/feature"))
+        # A branch missing from the Core's copy is refused, never quietly moved to the source.
+        with self.assertRaises(TaskError) as ctx:
+            await orch.create_task("coding-agent-v1", None, "", project_id="prj_1", base="missing")
+        self.assertIn("not in the Core's copy", str(ctx.exception))
 
 class HubChunkTests(unittest.IsolatedAsyncioTestCase):
     async def test_hub_drops_chunks_without_a_waiter(self) -> None:

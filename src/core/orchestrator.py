@@ -198,7 +198,7 @@ class Orchestrator:
                 if target_id != source:
                     raise TaskError("a chat without a workspace runs only on the project's own device")
             elif not target_id:
-                target_id = await self.projects.executor_of(project, self._base_ref(project, base))
+                target_id = await self.projects.executor_of(project)
         elif base or branch:
             raise TaskError("a branch is chosen only for a project chat")
         if not target_id:

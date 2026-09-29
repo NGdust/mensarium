@@ -230,6 +230,9 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         prompt = build_system_prompt(builtin_profiles()[0], "server", "linux", TargetPolicy(roots=["/p"], command_allowlist=[]), [], project=project)
         self.assertIn("- runs on: server", prompt)
         self.assertIn("snapshot taken 2026-09-29T10:00:00Z", prompt)
+        folder = build_system_prompt(builtin_profiles()[0], "server", "linux", TargetPolicy(roots=["/p"], command_allowlist=[]), [], project={**project, "kind": "folder", "snapshot_at": ""})
+        self.assertIn("device snapshot. Changes", folder)
+        self.assertIn("your changes reach the device", folder)
         self.assertNotIn("snapshot taken", build_system_prompt(builtin_profiles()[0], "mac", "macos", TargetPolicy(roots=["/p"], command_allowlist=[]), [], project={**project, "remote": False}))
 
 

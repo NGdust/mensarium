@@ -70,8 +70,8 @@ FOLDER_BLOCK = (
     "file (documents, images) was changed on both sides, keep both versions (`<name> (device).<ext>`) and say so.\n"
 )
 REMOTE_NOTE = (
-    "The source device is not this machine: your copy comes from the device snapshot taken {snapshot_at}. Changes the "
-    "user made on the device since then are not here; your branch reaches the device when it is online.\n"
+    "The source device is not this machine: your copy comes from the device snapshot{taken}. Changes the "
+    "user made on the device since then are not here; your {work} the device when it is online.\n"
 )
 
 
@@ -185,7 +185,8 @@ def build_system_prompt(
             block = block.replace("say so plainly instead of installing toolchains.", "install dependencies or toolchains when needed to complete the user’s task.")
         prompt += block.format(**project)
         if project["remote"]:
-            prompt += REMOTE_NOTE.format(**project)
+            taken = f" taken {project['snapshot_at']}" if project["snapshot_at"] else ""
+            prompt += REMOTE_NOTE.format(taken=taken, work="changes reach" if project["kind"] == "folder" else "branch reaches")
         if project.get("instructions"):
             prompt += f"\n## Project instructions from the user\n{project['instructions']}\n"
     if "plugins.find" in tools:

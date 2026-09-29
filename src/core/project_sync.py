@@ -165,15 +165,14 @@ class ProjectSync:
 
     async def resolve_base(self, p: dict[str, Any], base_ref: str | None) -> tuple[str, str, str]:
         src, mirror = str(p["source_target_id"]), self.mirror(str(p["id"]))
-        name = base_ref or "snapshot"
-        if not mirror.exists or await mirror.rev(f"{DEVICE_REFS}{src}/snapshot") is None:
+        name, snapshot = base_ref or "snapshot", f"{DEVICE_REFS}{src}/snapshot"
+        sha = await mirror.rev(snapshot) if mirror.exists else None
+        if sha is None:
             raise ProjectError("the project has no snapshot on the Core yet; turn its device on and sync the project")
         if name == "snapshot":
-            refs = [f"{DEVICE_REFS}{src}/snapshot"]
-        else:
-            name = str(p.get("main_branch") or p.get("default_branch") or "main") if name == "default" else name
-            refs = [f"{DEVICE_REFS}{src}/heads/{name}", f"{DEVICE_REFS}{src}/remotes/{name}"]
-        for ref in refs:
+            return name, snapshot, sha
+        name = str(p.get("main_branch") or p.get("default_branch") or "main") if name == "default" else name
+        for ref in (f"{DEVICE_REFS}{src}/heads/{name}", f"{DEVICE_REFS}{src}/remotes/{name}"):
             if sha := await mirror.rev(ref):
                 return name, ref, sha
         raise ProjectError(f"branch {name} is not in the Core's copy of the project")
