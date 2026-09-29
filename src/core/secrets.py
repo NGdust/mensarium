@@ -63,7 +63,7 @@ class SecretStore:
             if meta.pop(name, None) is None:
                 raise SecretError(f"secret {name} not found")
             await self.repo.set_setting(KEY, meta)
-        (self.paths.secrets / (FILE_PREFIX + name)).unlink(missing_ok=True)
+            (self.paths.secrets / (FILE_PREFIX + name)).unlink(missing_ok=True)
 
     async def resolve(self, names: list[str], target_id: str) -> dict[str, str]:
         meta = await self._meta()
