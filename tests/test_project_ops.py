@@ -42,12 +42,67 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
                            name="test", core_public_key="", core_fingerprint="test", roots=[str(base / "work")], command_allowlist=[])
         self.host = ProjectHost(Executor(cfg))
         self.args = {"source_path": str(self.repo), "kind": "repo"}
+        self.sent: list[dict] = []
+
+    async def send(self, msg: dict) -> None:
+        self.sent.append(msg)
 
     async def op(self, name: str, task_id: str = "", **args: object) -> dict:
         req = ProjectOp(request_id="r", target_id="device", project_id="prj_1", task_id=task_id, op=name,
                         args={**self.args, **args}, issued_at="", expires_at="", nonce="")
-        status = await self.host.op(req)
+        status = await self.host.op(req, send=self.send)
         return status.model_dump()
+
+    async def snapshot(self, known: dict[str, str] | None = None) -> dict:
+        from mensarium.contracts.projects import ProjectSnapshot
+        req = ProjectSnapshot(request_id="s", target_id="device", project_id="prj_1", source_path=str(self.repo), kind="repo",
+                              known=known or {}, issued_at="", expires_at="", nonce="")
+        return (await self.host.snapshot(req, send=self.send)).model_dump()
+
+    def bundle_heads(self, request_id: str) -> str:
+        import base64
+        path = Path(self.tmp.name) / "up.bundle"
+        path.write_bytes(b"".join(base64.b64decode(m["data"]) for m in self.sent if m["request_id"] == request_id))
+        return git(self.repo, "bundle", "list-heads", str(path))
+
+    async def test_snapshot_ships_only_moved_refs_and_reports_main(self) -> None:
+        first = await self.snapshot()
+        self.assertEqual(first["state"], "ok", first["detail"])
+        self.assertEqual(first["main"], "main")
+        self.assertEqual(set(first["bundle"]["refs"]), {"refs/heads/main", "refs/heads/feature/login", "refs/mensarium/snapshot"})
+        self.assertIn("refs/mensarium/snapshot", self.bundle_heads("s"))
+        self.sent.clear()
+        (self.repo / "app.py").write_text("print('again')\n")
+        git(self.repo, "commit", "-qam", "again")
+        second = await self.snapshot(known=first["refs"])
+        self.assertEqual(second["state"], "ok", second["detail"])
+        self.assertEqual(set(second["bundle"]["refs"]), {"refs/heads/feature/login", "refs/mensarium/snapshot"})
+        self.assertEqual(second["bundle"]["prerequisites"], sorted({first["refs"]["refs/heads/feature/login"]}))
+        self.assertEqual((await self.snapshot(known=second["refs"]))["state"], "unchanged")
+
+    async def test_snapshot_bundle_falls_back_to_full_when_known_is_gone(self) -> None:
+        first = await self.snapshot()
+        gone = dict.fromkeys(first["refs"], "0" * 40)
+        self.sent.clear()
+        (self.repo / "app.py").write_text("print('rewritten')\n")
+        git(self.repo, "commit", "-qam", "rewritten")
+        status = await self.snapshot(known=gone)
+        self.assertEqual(status["state"], "ok", status["detail"])
+        self.assertEqual(status["bundle"]["prerequisites"], [])
+
+    async def test_commit_ships_the_branch_once_per_head(self) -> None:
+        status = await self.op("checkout", "task_c", branch="mensarium/c-1", start="default")
+        base = status["head_sha"]
+        self.assertIsNone((await self.op("commit", "task_c", message="turn", base_sha=base, branch="mensarium/c-1", known_head=None))["bundle"])
+        wt = Path(os.environ["MENSARIUM_HOME"]) / "projects" / "prj_1" / "wt" / "task_c"
+        (wt / "app.py").write_text("changed\n")
+        self.sent.clear()
+        status = await self.op("commit", "task_c", message="turn", base_sha=base, branch="mensarium/c-1", known_head=None)
+        self.assertEqual(status["state"], "ok", status["detail"])
+        self.assertEqual(status["bundle"]["refs"], {"refs/heads/mensarium/c-1": status["head_sha"]})
+        self.assertIn("refs/heads/mensarium/c-1", self.bundle_heads("r"))
+        again = await self.op("commit", "task_c", message="turn", base_sha=base, branch="mensarium/c-1", known_head=status["head_sha"])
+        self.assertIsNone(again["bundle"])
 
     async def test_branches_list_main_and_current(self) -> None:
         status = await self.op("branches")

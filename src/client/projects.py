@@ -1,11 +1,15 @@
 import asyncio
 import contextlib
+import logging
 import os
 import re
 import shutil
 import tempfile
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
+
+from pydantic import ValidationError
 
 from mensarium.client.tools import GIT_SAFE_FLAGS, SKIP_DIRS, ExecTimeout, Executor, ToolError, _run
 from mensarium.contracts.projects import (
@@ -16,12 +20,16 @@ from mensarium.contracts.projects import (
     INSTRUCTIONS_LIMIT,
     SECRET_EXCLUDES,
     SNAPSHOT_REF,
+    BundleInfo,
+    ProjectBundle,
     ProjectKind,
     ProjectOp,
     ProjectOpStatus,
     ProjectSnapshot,
     ProjectSnapshotStatus,
 )
+from mensarium.shared import bundles
+from mensarium.shared.bundles import BundleTooLarge
 from mensarium.shared.paths import ensure_private_dir, mensarium_home
 from mensarium.shared.redaction import SECRET_DIRS, is_secret_path
 
@@ -44,6 +52,9 @@ NO_ACCESS = (
     "(git@github.com:user/repo.git) with an ssh key set up on this machine, or a credential helper for https"
 )
 SAFE_ID = re.compile(r"[A-Za-z0-9_-]+")
+
+log = logging.getLogger(__name__)
+Send = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 def _safe_id(value: str) -> str:
@@ -71,6 +82,9 @@ class ProjectHost:
         self.git = shutil.which("git")
         self.argv = [self.git or "git", *GIT_SAFE_FLAGS]
         self.locks: dict[str, asyncio.Lock] = {}
+        self.inbox = self.root / "inbox"
+        shutil.rmtree(self.inbox, ignore_errors=True)
+        self.active: set[str] = set()
 
     @property
     def enabled(self) -> bool:
@@ -137,19 +151,26 @@ class ProjectHost:
 
     # ---- snapshot ---------------------------------------------------------------
 
-    async def snapshot(self, req: ProjectSnapshot) -> ProjectSnapshotStatus:
+    async def snapshot(self, req: ProjectSnapshot, send: Send | None = None) -> ProjectSnapshotStatus:
         status = ProjectSnapshotStatus(request_id=req.request_id, project_id=req.project_id, state="error")
         if not self.enabled:
             status.detail = NO_GIT
             return status
+        self.active.add(req.request_id)
         try:
             async with self._lock(req.project_id):
                 result = await self._snapshot(req.project_id, req.source_path, req.kind, req.include_remotes, req.fetch_origin, req.size_limit_mb, req.file_limit_mb, req.git_url)
+                status = status.model_copy(update=result)
+                status.state = "unchanged" if status.refs == req.known else "ok"
+                if status.state == "ok" and send is not None:
+                    src = self._source(req.source_path, req.project_id, req.git_url, exists=not req.git_url)
+                    moved = {ref: sha for ref, sha in status.refs.items() if req.known.get(ref) != sha}
+                    base = self._base(status.kind or "repo", req.project_id)
+                    status.bundle = await self._bundle_up(base, src, moved, req.known, req.project_id, req.request_id, send)
         except (ToolError, ExecTimeout, OSError) as e:
-            status.detail = str(e)
-            return status
-        status = status.model_copy(update=result)
-        status.state = "unchanged" if status.refs == req.known else "ok"
+            return ProjectSnapshotStatus(request_id=req.request_id, project_id=req.project_id, state="error", detail=str(e))
+        finally:
+            self.active.discard(req.request_id)
         return status
 
     async def _snapshot(
@@ -219,7 +240,48 @@ class ProjectHost:
         if kind == "repo":
             code, out, _ = await self._call("symbolic-ref", "--short", "--quiet", "HEAD", cwd=src, timeout=30)
             branch = out.strip() or None if code == 0 else None
-        return {"kind": kind, "head_sha": head, "snapshot_sha": snapshot, "branch": branch, "refs": refs, "size_bytes": total, "skipped": skipped}
+        main = await self._default_base(src) if kind == "repo" else None
+        return {"kind": kind, "head_sha": head, "snapshot_sha": snapshot, "branch": branch, "main": main, "refs": refs, "size_bytes": total, "skipped": skipped}
+
+    # Sends `refs` as a git bundle in project.bundle frames, cut at the commits the Core already has (`known`).
+    async def _bundle_up(self, base: list[str], cwd: Path, refs: dict[str, str], known: dict[str, str], project_id: str, request_id: str, send: Send) -> BundleInfo | None:
+        if not refs:
+            return None
+        ensure_private_dir(self.inbox)
+        path = self.inbox / f"{_safe_id(request_id)}.up.bundle"
+        try:
+            path.unlink(missing_ok=True)
+            have: list[str] = []
+            for sha in sorted({known[ref] for ref in refs if known.get(ref)}):
+                if SHA_RE.fullmatch(sha) and await self._rev(base, f"{sha}^{{commit}}", cwd):
+                    have.append(sha)
+            code, out, err = await self._call(*base, "bundle", "create", "--quiet", str(path), *refs, *(f"^{sha}" for sha in have), cwd=cwd)
+            if code != 0 and "empty bundle" in (err + out).lower():
+                return None
+            if code != 0 and have:
+                # A known commit may be cut off from the refs after a history rewrite: send everything instead.
+                have = []
+                code, out, err = await self._call(*base, "bundle", "create", "--quiet", str(path), *refs, cwd=cwd)
+            if code != 0:
+                raise ToolError((err or out).strip()[:2000] or "git bundle create failed")
+            for seq, data in enumerate(bundles.chunks(path)):
+                await send(ProjectBundle(request_id=request_id, project_id=project_id, seq=seq, data=data).model_dump())
+            return bundles.describe(path, refs, have)
+        finally:
+            path.unlink(missing_ok=True)
+
+    # A project.bundle frame for a request being handled right now; anything else is dropped.
+    def receive_chunk(self, msg: dict[str, Any]) -> None:
+        try:
+            chunk = ProjectBundle.model_validate(msg)
+        except ValidationError:
+            return
+        if chunk.request_id not in self.active:
+            return
+        try:
+            bundles.append_chunk(self.inbox / f"{_safe_id(chunk.request_id)}.bundle", chunk.data)
+        except (BundleTooLarge, ToolError, ValueError, OSError) as e:
+            log.warning("bundle chunk dropped", extra={"request_id": chunk.request_id, "error": str(e)})
 
     async def _clone_repo(self, git_url: str, dst: Path) -> None:
         ensure_private_dir(dst.parent)
@@ -234,7 +296,7 @@ class ProjectHost:
 
     # ---- ops --------------------------------------------------------------------
 
-    async def op(self, req: ProjectOp) -> ProjectOpStatus:
+    async def op(self, req: ProjectOp, send: Send | None = None) -> ProjectOpStatus:
         status = ProjectOpStatus(request_id=req.request_id, project_id=req.project_id, task_id=req.task_id, op=req.op, state="error")
         if not self.enabled:
             status.detail = NO_GIT
@@ -244,15 +306,18 @@ class ProjectHost:
             "branches": self._branches, "diff": self._diff, "docs": self._docs, "revert": self._revert,
         }[req.op]
         lock = contextlib.nullcontext() if req.op in ("browse", "branches", "diff", "docs") else self._lock(req.project_id)
+        self.active.add(req.request_id)
         try:
             async with lock:
-                result = await handler(req.project_id, req.task_id, req.args)
+                result = await handler(req.project_id, req.task_id, req.args, send, req.request_id)
         except (ToolError, ExecTimeout, OSError, KeyError, TypeError, ValueError) as e:
             status.detail = str(e) if not isinstance(e, KeyError) else f"missing argument {e}"
             return status
+        finally:
+            self.active.discard(req.request_id)
         return status.model_copy(update={"state": "ok", **result})
 
-    async def _browse(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
+    async def _browse(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
         path = self.executor._path(str(a.get("path") or "~"))
         if not path.is_dir():
             raise ToolError(f"{path} is not a directory")
@@ -286,7 +351,7 @@ class ProjectHost:
                 return name
         return await self._current(src) or "HEAD"
 
-    async def _branches(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
+    async def _branches(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
         src = self._source(str(a["source_path"]), project_id, a.get("git_url"))
         if a["kind"] != "repo":
             return {"data": {"branches": [], "default": None, "current": None}}
@@ -302,7 +367,7 @@ class ProjectHost:
             items.append({"name": name, "remote": remote, "updated": int(ts) if ts.isdigit() else None})
         return {"data": {"branches": items, "default": await self._default_base(src), "current": await self._current(src)}}
 
-    async def _checkout(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
+    async def _checkout(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
         src = self._source(str(a["source_path"]), project_id, a.get("git_url"))
         kind: ProjectKind = a["kind"]
         base = self._base(kind, project_id)
@@ -337,7 +402,7 @@ class ProjectHost:
         await self._git(*base, "worktree", "add", "--quiet", "--no-track", "-B", branch, str(wt), start, cwd=src)
         return {"head_sha": start, "data": {"base": base_name}}
 
-    async def _commit(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
+    async def _commit(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
         wt = self._worktree(project_id, task_id)
         if not wt.is_dir():
             raise ToolError("the worktree for this chat is missing on this device")
@@ -352,14 +417,20 @@ class ProjectHost:
         if head != before:
             names = await self._git("diff", "--name-only", before, head, cwd=wt)
             changed = len([n for n in names.splitlines() if n.strip()])
+        bundle = None
+        branch = str(a.get("branch") or "")
+        if send is not None and branch and head != a.get("known_head"):
+            ref = f"refs/heads/{_ref_name(branch)}"
+            known = str(a.get("known_head") or a.get("base_sha") or "")
+            bundle = await self._bundle_up([], wt, {ref: head}, {ref: known} if known else {}, project_id, request_id, send)
         base = str(a.get("base_sha") or "")
         if not SHA_RE.fullmatch(base):
-            return {"head_sha": head, "changed": changed}
+            return {"head_sha": head, "changed": changed, "bundle": bundle}
         rows = [r.split("\t", 2) for r in (await self._git("diff", "--numstat", "-z", "--no-renames", base, head, cwd=wt)).split("\0") if r]
         stat = {"files": len(rows), "added": sum(int(r[0]) for r in rows if r[0].isdigit()), "deleted": sum(int(r[1]) for r in rows if r[1].isdigit())}
-        return {"head_sha": head, "changed": changed, "data": {"stat": stat}}
+        return {"head_sha": head, "changed": changed, "data": {"stat": stat}, "bundle": bundle}
 
-    async def _status(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
+    async def _status(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
         wt = self._worktree(project_id, task_id)
         if not wt.is_dir():
             raise ToolError("the worktree for this chat is missing on this device")
@@ -367,7 +438,7 @@ class ProjectHost:
         head = (await self._git("rev-parse", "HEAD", cwd=wt)).strip()
         return {"head_sha": head, "detail": out[:8000]}
 
-    async def _docs(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
+    async def _docs(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
         src = self._source(str(a["source_path"]), project_id, a.get("git_url"))
         files = []
         for name in DOC_FILES:
@@ -379,7 +450,7 @@ class ProjectHost:
         return {"data": {"files": files}}
 
     # The chat's changes since its start, uncommitted ones included; a copy of the index keeps the worktree untouched.
-    async def _diff(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
+    async def _diff(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
         wt = self._worktree(project_id, task_id)
         if not wt.is_dir():
             raise ToolError("the worktree for this chat is missing on this device")
@@ -409,7 +480,7 @@ class ProjectHost:
         return {"changed": len(files), "data": {"files": files[:DIFF_FILES], "truncated": len(files) > DIFF_FILES}}
 
     # Puts one file back to the chat's start: an added file goes away, a changed or deleted one comes back.
-    async def _revert(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
+    async def _revert(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
         wt = self._worktree(project_id, task_id)
         if not wt.is_dir():
             raise ToolError("the worktree for this chat is missing on this device")
@@ -423,7 +494,7 @@ class ProjectHost:
         await self._git("restore", f"--source={base}", "--staged", "--worktree", "--", spec, cwd=wt)
         return {"head_sha": (await self._git("rev-parse", "HEAD", cwd=wt)).strip()}
 
-    async def _remove(self, project_id: str, task_id: str, a: dict[str, Any]) -> dict[str, Any]:
+    async def _remove(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
         kind: ProjectKind = a["kind"]
         base = self._base(kind, project_id)
         project_dir = self.root / _safe_id(project_id)

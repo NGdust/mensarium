@@ -224,6 +224,8 @@ class ClientAgent:
             task = asyncio.create_task(self._project(msg))
             self.syncing.add(task)
             task.add_done_callback(self.syncing.discard)
+        elif kind == "project.bundle":
+            self.projects.receive_chunk(msg)
         elif kind == "core.moved":
             if moved := moving.accept(self.cfg, msg):
                 moving.remember(self.paths, moved.url)
@@ -349,13 +351,13 @@ class ClientAgent:
             answer = (
                 ProjectSnapshotStatus(request_id=req.request_id, project_id=req.project_id, state="error", detail=reason)
                 if reason
-                else await self.projects.snapshot(req)
+                else await self.projects.snapshot(req, self._send)
             )
         else:
             answer = (
                 ProjectOpStatus(request_id=req.request_id, project_id=req.project_id, task_id=req.task_id, op=req.op, state="error", detail=reason)
                 if reason
-                else await self.projects.op(req)
+                else await self.projects.op(req, self._send)
             )
         answer.signature = sign(self.key, answer.model_dump())
         try:
