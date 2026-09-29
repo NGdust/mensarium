@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from mensarium.contracts.automations import Schedule
+from mensarium.contracts.secrets import SECRET_NAME
 
 
 class _Args(BaseModel):
@@ -298,7 +299,7 @@ class AutomationsDeleteArgs(_Args):
 
 
 class SecretsRequestArgs(_Args):
-    name: str = Field(pattern=r"^[A-Z][A-Z0-9_]{1,63}$", description="Environment-style name, e.g. GITHUB_TOKEN")
+    name: str = Field(pattern=SECRET_NAME, description="Environment-style name, e.g. GITHUB_TOKEN")
     description: str = Field(min_length=1, max_length=300, description="What it is for and where the user gets it")
 
 

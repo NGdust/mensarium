@@ -26,14 +26,19 @@ def secrets_list() -> None:
 @secrets_app.command("set")
 def secrets_set(
     name: str,
-    description: Annotated[str, typer.Option("--description", "-d")] = "",
+    description: Annotated[str | None, typer.Option("--description", "-d")] = None,
     target: Annotated[list[str] | None, typer.Option("--target", help="Device id; repeat for several; all devices by default")] = None,
 ) -> None:
     """Add or replace a secret; the value is read without echo."""
     value = questionary.password(f"Value of {name}:").ask()
     if not value:
         raise typer.Exit(1)
-    _run("PUT", f"/v1/secrets/{name}", {"value": value, "description": description, "targets": target or ["*"]})
+    existing = next((s for s in _run("GET", "/v1/secrets")["items"] if s["name"] == name), None)
+    if existing and target is None:
+        target = existing["targets"]
+    if existing and description is None:
+        description = existing["description"]
+    _run("PUT", f"/v1/secrets/{name}", {"value": value, "description": description or "", "targets": target or ["*"]})
     ok(f"Saved secret {name}")
 
 

@@ -55,7 +55,7 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
             await s.put("GITHUB_TOKEN", None, "GitHub PAT", ["*"])  # keeps the value
             self.assertEqual(await s.resolve(["GITHUB_TOKEN"], "tgt_b"), {"GITHUB_TOKEN": "ghp_fixture"})
             self.assertNotIn("ghp_fixture", str(await s.all()))
-            for bad in ("PATH", "lower", "MENSARIUM_X"):
+            for bad in ("PATH", "lower", "MENSARIUM_X", "LD_PRELOAD"):
                 with self.assertRaises(SecretError):
                     await s.put(bad, "v", "", ["*"])
             await s.delete("GITHUB_TOKEN")
@@ -136,6 +136,34 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(core._execute.call_args.kwargs["secrets"], {"API_TOKEN": "fixture-value-123"})
             stored = core.repo.create_tool_call.call_args.args[0]["arguments"]
             self.assertNotIn("fixture-value-123", str(stored))
+
+    async def test_old_client_denies_secret_use(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = store(Path(tmp))
+            await s.put("API_TOKEN", "fixture-value-123", "", ["tgt_a"])
+            core = self.core(s)
+            call = ToolCallAction(call_id="c", raw_arguments="{}", tool="shell.bash",
+                                  arguments={"script": 'echo "$API_TOKEN"', "cwd": "/workspace", "secrets": ["API_TOKEN"]})
+            await self.handle(core, call, capabilities=False)
+            core._execute.assert_not_awaited()
+            self.assertIn("too old", core._observe.call_args.args[2])
+
+    async def test_full_access_skips_secret_approvals(self):
+        core = Orchestrator.__new__(Orchestrator)
+        core.workspace_id, core.secret_approvals = "workspace", {"apr_secret"}
+        core._task = AsyncMock(return_value={"id": "task", "mode": "ask", "target_id": "tgt_a"})
+        core.repo = SimpleNamespace(
+            get_target=AsyncMock(return_value={"agent_version": "0.81.0", "policy": {"allow_full_access": True}}),
+            list_children=AsyncMock(return_value=[]),
+            update_task=AsyncMock(),
+            audit=AsyncMock(),
+            get_approval=AsyncMock(),
+        )
+        core.bus = SimpleNamespace(emit=AsyncMock())
+        core.decide = AsyncMock()
+        core.approval_waiters = {"apr_secret": asyncio.get_running_loop().create_future()}
+        await core.set_mode("task", "full")
+        core.decide.assert_not_awaited()
 
     async def test_unknown_or_foreign_secret_is_denied(self):
         with tempfile.TemporaryDirectory() as tmp:

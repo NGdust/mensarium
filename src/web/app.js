@@ -940,7 +940,7 @@ function composer({ placeholder, chips, tail, above, onSend, onStop, onResume })
   box.addEventListener('dragleave', () => { if (dragDepth > 0) dragDepth -= 1; if (!dragDepth) box.classList.remove('drop'); });
   box.addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
   box.addEventListener('drop', (e) => { e.preventDefault(); dragDepth = 0; box.classList.remove('drop'); if (mode !== 'running' && !busy) addFiles(e.dataTransfer.files); });
-  ta.addEventListener('input', () => { grow(); sync(); });
+  ta.addEventListener('input', () => { grow(); sync(); keyBar.hidden = true; });
   const run = async (fn) => {
     busy = true;
     sync();
@@ -964,6 +964,7 @@ function composer({ placeholder, chips, tail, above, onSend, onStop, onResume })
     if ((!text && !files.length) || mode === 'running' || busy) return;
     const key = allowKey ? null : findKey(text);
     if (key) {
+      mic.stop();
       keyBar.replaceChildren(
         h('span', {}, tr('This looks like a key. Save it as a secret instead of sending it to the chat?')),
         h('button', { class: 'btn btn-sm btn-primary', onclick: () => secretEditor({ name: key.name, value: key.value, onSaved: (s) => {
@@ -3663,9 +3664,11 @@ async function secretEditor({ secret = null, name = '', value = '', description 
   save.addEventListener('click', async () => {
     const targets = all.checked ? ['*'] : boxes.filter(([, cb]) => cb.checked).map(([d]) => d.id);
     if (!targets.length) { toast(tr('Pick at least one device'), true); return; }
+    const trimmedName = nameInput.value.trim();
+    if (!trimmedName) { toast(tr('Enter a name'), true); return; }
     save.disabled = true;
     try {
-      const saved = await put(`/v1/secrets/${nameInput.value.trim()}`, { value: valueInput.value || null, description: descInput.value, targets });
+      const saved = await put(`/v1/secrets/${trimmedName}`, { value: valueInput.value || null, description: descInput.value, targets });
       closeLayer();
       toast(tr('Secret saved'));
       onSaved?.(saved);

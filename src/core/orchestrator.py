@@ -171,6 +171,7 @@ class Orchestrator:
         self.preparing: dict[str, asyncio.Task[None]] = {}
         self.controls: dict[str, str] = {}
         self.approval_waiters: dict[str, asyncio.Future[str]] = {}
+        self.secret_approvals: set[str] = set()
         self.secret_waiters: dict[str, SecretWait] = {}
         self.running_requests: dict[str, tuple[str, str]] = {}
         self.interrupts: dict[str, asyncio.Event] = {}
@@ -348,6 +349,8 @@ class Orchestrator:
             await self.bus.emit(task_id, "task.mode", {"mode": mode})
         if mode == "full":
             for approval_id, waiter in list(self.approval_waiters.items()):
+                if approval_id in self.secret_approvals:
+                    continue
                 approval = await self.repo.get_approval(approval_id)
                 if approval and approval["task_id"] in family and not waiter.done():
                     await self.decide(approval_id, "approve", "full access enabled", confirm=True)
@@ -931,6 +934,17 @@ class Orchestrator:
             approval_ref = await self._await_approval(task, {"name": "Core"} if in_core else target, call, tc_id, decision)
             if approval_ref is None:
                 return
+            if decision.secrets:
+                try:
+                    values = await self._resolve_secrets(decision.secrets, target)
+                except SecretError as e:
+                    await self.repo.update_tool_call(tc_id, {"status": "not_executed"})
+                    await self._observe(task_id, call, f"DENIED by policy: {e}", f"{call.tool} denied")
+                    await self.bus.emit(task_id, "tool_call.denied", {"tool": call.tool, "arguments": call.arguments, "reason": str(e)})
+                    await self.repo.audit(
+                        self.workspace_id, "core", "tool.denied", {"task_id": task_id, "tool": call.tool, "reason": str(e)}
+                    )
+                    return
         if in_core:
             await self._run_core_tool(task_id, call, tc_id, decision, toolbox)
             return
@@ -989,6 +1003,8 @@ class Orchestrator:
         )
         waiter: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self.approval_waiters[approval_id] = waiter
+        if decision.secrets:
+            self.secret_approvals.add(approval_id)
         try:
             result = await asyncio.wait_for(waiter, ttl)
         except TimeoutError:
@@ -996,6 +1012,7 @@ class Orchestrator:
             result = "expired"
         finally:
             self.approval_waiters.pop(approval_id, None)
+            self.secret_approvals.discard(approval_id)
 
         if result in ("cancel", "pause"):
             await self.repo.decide_approval(approval_id, "expired", "core", None)

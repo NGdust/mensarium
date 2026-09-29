@@ -7,6 +7,7 @@ from typing import Any
 from mensarium.contracts.secrets import RESERVED_NAMES, RESERVED_PREFIXES, SECRET_NAME, SecretInfo
 from mensarium.core.config import CorePaths, read_secret, write_secret
 from mensarium.core.repo import Repo
+from mensarium.shared.secret_refs import MIN_MASKED
 from mensarium.shared.timeutil import now_iso
 
 KEY = "secrets.user"
@@ -45,6 +46,8 @@ class SecretStore:
             old = meta.get(name)
             if value is None and old is None:
                 raise SecretError("a new secret needs a value")
+            if value is not None and len(value) < MIN_MASKED:
+                raise SecretError("a secret value must be at least 4 characters")
             if value is not None:
                 write_secret(self.paths, FILE_PREFIX + name, value)
             now = now_iso()

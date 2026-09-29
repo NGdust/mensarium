@@ -1107,6 +1107,7 @@ const RU = {
   'The agent sees the name and this description, never the value': 'Агент видит имя и это описание, но никогда не значение',
   'All devices': 'Все устройства',
   'Pick at least one device': 'Выберите хотя бы одно устройство',
+  'Enter a name': 'Введите имя',
   'Secret saved': 'Секрет сохранён',
   'The agent will no longer be able to use this secret.': 'Агент больше не сможет пользоваться этим секретом.',
   'API keys, tokens and passwords the agent can use without seeing them. Each action with a secret asks for your approval.': 'Ключи API, токены и пароли, которыми агент может пользоваться, не видя их. Каждое действие с секретом спрашивает ваше подтверждение.',
