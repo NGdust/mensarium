@@ -84,7 +84,9 @@ def api_base_url() -> str:
     core = CorePaths()
     if core.config.exists():
         return load_config(core).server.public_url.rstrip("/")
-    return load_client_config(ClientPaths()).server.rstrip("/")
+    # The Core's own page wants a Core token; the gateway on this machine lets the user in.
+    cfg = load_client_config(ClientPaths())
+    return f"http://127.0.0.1:{cfg.gateway.port}" if cfg.gateway.enabled else cfg.server.rstrip("/")
 
 
 def api_target_id() -> str | None:

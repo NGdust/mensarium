@@ -410,7 +410,10 @@ def _follow_paths(paths: CorePaths, moves: list[tuple[str, str]], moved_to: str 
 
 def _repair_worktrees(projects: list[tuple[str, str, str]]) -> list[str]:
     git = shutil.which("git")
-    if projects and not git:
+    # Chats the Core's device runs for projects of other devices live on its own copy, repo.git.
+    own = {pid for pid, _, _ in projects}
+    copies = [bare for bare in sorted(projects_dir().glob("*/repo.git")) if bare.parent.name not in own]
+    if (projects or copies) and not git:
         return ["git is not installed: chat copies of projects were not re-linked (install git, then run `mensarium core restore` again)"]
     warnings = []
     for pid, kind, src in projects:
@@ -423,9 +426,15 @@ def _repair_worktrees(projects: list[tuple[str, str, str]]) -> list[str]:
             if not (home / "shadow.git").exists():
                 continue
             subprocess.run([str(git), *base, "config", "core.excludesFile", str(Path(src) / ".mensariumignore")], capture_output=True, timeout=60)
-        worktrees = sorted(str(p) for p in (home / "wt").glob("*") if p.is_dir())
-        if worktrees:
-            result = subprocess.run([str(git), *base, "worktree", "repair", *worktrees], capture_output=True, text=True, timeout=300)
-            if result.returncode != 0:
-                warnings.append(f"project {src}: git worktree repair failed: {result.stderr.strip()[:300]}")
+        warnings += _repair(str(git), base, home / "wt", src)
+    for bare in copies:
+        warnings += _repair(str(git), ["--git-dir", str(bare)], bare.parent / "wt", str(bare))
     return warnings
+
+
+def _repair(git: str, base: list[str], wt: Path, name: str) -> list[str]:
+    worktrees = sorted(str(p) for p in wt.glob("*") if p.is_dir())
+    if not worktrees:
+        return []
+    result = subprocess.run([git, *base, "worktree", "repair", *worktrees], capture_output=True, text=True, timeout=300)
+    return [f"project {name}: git worktree repair failed: {result.stderr.strip()[:300]}"] if result.returncode != 0 else []
