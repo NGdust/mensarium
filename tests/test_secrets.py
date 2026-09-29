@@ -202,6 +202,14 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await s.resolve(["API_TOKEN"], "tgt_a"), {"API_TOKEN": "fixture-value-123"})
             self.assertIn("already saved", await core._request_secret("task", {"name": "API_TOKEN", "description": ""}))
 
+            await s.put("OTHER_TOKEN", "other-fixture", "shared with tgt_other", ["tgt_other"])
+            job2 = asyncio.create_task(core._request_secret("task", {"name": "OTHER_TOKEN", "description": "x"}))
+            await asyncio.sleep(0)
+            await core.answer_secret(next(iter(core.secret_waiters)), SecretRequestAnswer())
+            await job2
+            self.assertEqual(await s.resolve(["OTHER_TOKEN"], "tgt_a"), {"OTHER_TOKEN": "other-fixture"})
+            self.assertEqual(await s.resolve(["OTHER_TOKEN"], "tgt_other"), {"OTHER_TOKEN": "other-fixture"})
+
     async def test_cancel_releases_the_card(self):
         with tempfile.TemporaryDirectory() as tmp:
             core = self.core(store(Path(tmp)))

@@ -430,6 +430,8 @@ class TelegramChannel:
             await self.ask_approval(p)
         elif name == "approval.decided":
             await self.settle_approval(p)
+        elif name == "secret.requested":
+            await self.say(f"The agent asks for secret {esc(str(p.get('name') or ''))}. Open this chat in the web interface to enter it.")
         elif name == "tool_call.executing":
             await self.progress(p.get("display") or p.get("tool") or "")
         elif name == "task.status":

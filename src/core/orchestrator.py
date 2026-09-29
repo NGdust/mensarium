@@ -42,7 +42,7 @@ from mensarium.core.instructions import InstructionStore
 from mensarium.core.memory import Memory, NoteError
 from mensarium.core.plugins import PluginError, PluginManager, Toolbox
 from mensarium.core.repo import TERMINAL_STATUSES, Repo
-from mensarium.core.secrets import SecretError, SecretStore
+from mensarium.core.secrets import SecretError, SecretStore, check_name
 from mensarium.core.skills import SkillStore
 from mensarium.llm_providers.base import LLMError
 from mensarium.llm_providers.router import ProviderRouter
@@ -1275,6 +1275,10 @@ class Orchestrator:
             raise TaskError("secrets are not available")
         task = await self._task(task_id)
         name = args["name"]
+        try:
+            check_name(name)
+        except SecretError as e:
+            raise TaskError(str(e)) from e
         if any(s.name == name for s in await self.secrets.available(task["target_id"])):
             return f"Secret {name} is already saved and available on this device; use it by name."
         request_id = new_id("sec")
@@ -1315,10 +1319,15 @@ class Orchestrator:
             return
         if self.secrets is None:
             raise TaskError("secrets are not available")
-        if answer.value is not None:
-            await self.secrets.put(wait.name, answer.value, answer.description if answer.description is not None else wait.description, answer.targets or [wait.target_id])
-        elif not any(s.name == wait.name for s in await self.secrets.all()):
-            raise TaskError("the secret has no value yet")
+        old = next((s for s in await self.secrets.all() if s.name == wait.name), None)
+        if answer.targets is not None:
+            targets = answer.targets
+        elif old is not None:
+            targets = ["*"] if "*" in old.targets else sorted({*old.targets, wait.target_id})
+        else:
+            targets = [wait.target_id]
+        description = answer.description if answer.description is not None else (old.description if old is not None else wait.description)
+        await self.secrets.put(wait.name, answer.value, description, targets)
         await self.repo.audit(self.workspace_id, "user", "secret.saved", {"name": wait.name, "task_id": wait.task_id})
         if not wait.future.done():
             wait.future.set_result("saved")

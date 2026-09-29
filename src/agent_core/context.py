@@ -239,10 +239,13 @@ def build_system_prompt(
             f"{listed}"
             "In shell.bash or shell.exec list them in `secrets` and refer to them as $NAME; in net.http write "
             "{{secret:NAME}} in the url, a header value or the body. Output shows [secret:NAME] where a value was "
-            "removed. Every action that uses a secret waits for the user's approval. Never ask for a key, token or "
-            "password in a message: call secrets.request instead; if the user pasted one into the chat anyway, offer "
-            "to save it with secrets.request and use the name from then on.\n"
+            "removed. Every action that uses a secret waits for the user's approval.\n"
         )
+        if "secrets.request" in tools:
+            prompt += (
+                "Never ask for a key, token or password in a message: call secrets.request instead; if the user "
+                "pasted one into the chat anyway, offer to save it with secrets.request and use the name from then on.\n"
+            )
     if instructions:
         prompt += instructions_block(instructions)
     if skills:
