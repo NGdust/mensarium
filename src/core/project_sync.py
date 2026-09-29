@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mensarium.contracts.projects import (
+    CHAT_REFS,
     DEVICE_REFS,
     ProjectError,
     ProjectOpStatus,
@@ -37,7 +38,8 @@ class ProjectSync:
         self.hub = hub
         self.manager = manager
         self.interval_s = interval_s
-        self.inbox = projects_dir() / "inbox"
+        # Not "inbox": the Core's own device runs a client in this process over the same projects folder.
+        self.inbox = projects_dir() / "core-inbox"
         shutil.rmtree(self.inbox, ignore_errors=True)
         hub.inbox = self.inbox
 
@@ -61,12 +63,16 @@ class ProjectSync:
         if bundling:
             try:
                 await mirror.init()
-                have = await mirror.refs()
+                have = await mirror.refs(f"{DEVICE_REFS}{src}/")
             except MirrorError as e:
                 raise ProjectError(f"cannot open the project mirror: {e}") from e
             device = await self.repo.get_project_device(project_id, src)
-            # Trust the mirror over the row: a ref the mirror lost must be sent again.
-            known = {ref: sha for ref, sha in ((device or {}).get("device_refs") or {}).items() if have.get(mirror_ref(src, ref) or "") == sha}
+            # Trust the mirror over the row for the device's own refs: one the mirror lost must be sent again.
+            # Chat branches reach the mirror only through publish, so the device's values stand for them,
+            # as long as the mirror has that commit (the device cuts its bundle there).
+            for ref, sha in ((device or {}).get("device_refs") or {}).items():
+                if have.get(mirror_ref(src, ref) or "") == sha or (ref.startswith(CHAT_REFS) and SHA_RE.fullmatch(sha) and await mirror.rev(sha)):
+                    known[ref] = sha
         msg = self.manager.snapshot_request(p, known, bundling)
         path = self.inbox_file(msg.request_id)
         try:
@@ -86,28 +92,30 @@ class ProjectSync:
     async def _store(self, mirror: Mirror, src: str, status: ProjectSnapshotStatus, path: Path) -> None:
         if status.bundle is not None:
             bundles.check(path, status.bundle)
-            refspecs = {ref: mref for ref in status.bundle.refs if (mref := mirror_ref(src, ref))}
+            refspecs = {ref: mref for ref in status.bundle.refs if not ref.startswith(CHAT_REFS) and (mref := mirror_ref(src, ref))}
             if refspecs:
                 await mirror.fetch_bundle(path, refspecs)
-        have = await mirror.refs()
+        have = await mirror.refs(f"{DEVICE_REFS}{src}/")
         for ref, sha in status.refs.items():
             # A ref moved to a commit the mirror already has (a branch reset back) comes without a bundle.
-            mref = mirror_ref(src, ref)
+            mref = None if ref.startswith(CHAT_REFS) else mirror_ref(src, ref)
             if mref and have.get(mref) != sha and SHA_RE.fullmatch(sha) and await mirror.rev(sha):
                 await mirror.update_ref(mref, sha)
         for mref in have:
-            if mref.startswith(f"{DEVICE_REFS}{src}/") and (dref := device_ref(src, mref)) and dref not in status.refs:
+            if (dref := device_ref(src, mref)) and dref not in status.refs:
                 await mirror.delete_ref(mref)
 
     async def on_connect(self, target_id: str) -> None:
         if not self.can_bundle(target_id):
             return
         for p in await self.repo.list_projects():
+            if self.manager.stopped:
+                return
             if p["source_target_id"] == target_id and p["status"] != "creating":
                 await self.manager.refresh(str(p["id"]))
 
     async def run_forever(self) -> None:
-        while True:
+        while not self.manager.stopped:
             await asyncio.sleep(TICK_S)
             try:
                 await self._tick()
@@ -126,7 +134,7 @@ class ProjectSync:
     async def publish(self, project: dict[str, Any], task: dict[str, Any], status: ProjectOpStatus) -> None:
         path = self.inbox_file(status.request_id)
         try:
-            if status.bundle is None or not task.get("branch") or not Mirror.enabled():
+            if status.bundle is None or not task.get("branch") or not Mirror.enabled() or project["id"] in self.manager.deleting:
                 return
             mirror = self.mirror(str(project["id"]))
             ref = f"refs/heads/{task['branch']}"

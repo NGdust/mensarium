@@ -535,17 +535,18 @@ class Orchestrator:
         last = next((s for s in reversed(steps) if s["kind"] == "user"), None)
         text = str(((last or {}).get("input") or {}).get("text") or "agent turn").strip().splitlines()[0][:72]
         try:
-            status = await self.projects.commit(project, task, message or f"mensarium: {text}")
+            status, unpublished = await self.projects.commit(project, task, message or f"mensarium: {text}")
         except (TargetUnavailable, ProjectError) as e:
             await self.bus.emit(task_id, "task.project", {"kind": "commit", "error": str(e)})
             return
         if status.state != "ok":
             await self.bus.emit(task_id, "task.project", {"kind": "commit", "error": status.detail})
             return
-        if status.head_sha == task.get("head_sha"):
-            return
-        await self.repo.update_task(task_id, {"head_sha": status.head_sha, **({"diff_stat": status.data["stat"]} if "stat" in status.data else {})})
-        await self.bus.emit(task_id, "task.project", {**(event or {"kind": "commit"}), "head_sha": status.head_sha, "changed": status.changed})
+        if status.head_sha != task.get("head_sha"):
+            await self.repo.update_task(task_id, {"head_sha": status.head_sha, **({"diff_stat": status.data["stat"]} if "stat" in status.data else {})})
+            await self.bus.emit(task_id, "task.project", {**(event or {"kind": "commit"}), "head_sha": status.head_sha, "changed": status.changed})
+        if unpublished:
+            await self.bus.emit(task_id, "task.project", {"kind": "commit", "error": unpublished})
 
     async def _interruptible(self, task_id: str, coro: Any) -> Any:
         main = asyncio.ensure_future(coro)

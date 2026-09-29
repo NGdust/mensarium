@@ -41,6 +41,8 @@ class ProjectManager:
         self.device_id: str | None = None
         self.project_sync = ProjectSync(repo, workspace_id, hub, self, interval_s)
         self.timer: asyncio.Task[None] | None = None
+        self.stopped = False
+        self.deleting: set[str] = set()
 
     # ---- lifecycle --------------------------------------------------------------
 
@@ -51,6 +53,7 @@ class ProjectManager:
         self.timer = asyncio.create_task(self.project_sync.run_forever())
 
     async def stop(self) -> None:
+        self.stopped = True
         jobs = [*self.jobs.values(), *([self.timer] if self.timer else [])]
         for job in jobs:
             job.cancel()
@@ -284,7 +287,7 @@ class ProjectManager:
 
     async def refresh(self, project_id: str) -> None:
         """Read the source again and wait for it, unless a read of this project is already running."""
-        if project_id in self.jobs:
+        if self.stopped or project_id in self.jobs or project_id in self.deleting:
             return
         self._start_refresh(project_id)
         await asyncio.wait({self.jobs[project_id]})
@@ -306,7 +309,18 @@ class ProjectManager:
                 log.exception("project snapshot failed", extra={"project_id": project_id})
             error = (str(e).strip() or type(e).__name__).splitlines()[0][:300]
             with contextlib.suppress(Exception):
-                await self.repo.update_project(project_id, {"status": "error", "error": error})
+                await self._failed(project_id, error)
+
+    async def _failed(self, project_id: str, error: str) -> None:
+        # A project that has a snapshot stays usable: a failed re-read only reports the error.
+        p = await self.get(project_id)
+        if not p.get("snapshot_sha"):
+            await self.repo.update_project(project_id, {"status": "error", "error": error})
+            return
+        await self.repo.update_project(project_id, {"status": "ready", "error": error})
+        src = str(p["source_target_id"])
+        if device := await self.repo.get_project_device(project_id, src):
+            await self.repo.upsert_project_device(project_id, src, str(device["role"]), last_error=error)
 
     async def _refresh(self, p: dict[str, Any]) -> None:
         self._supports(await self.repo.get_target(str(p["source_target_id"])))
@@ -352,11 +366,15 @@ class ProjectManager:
 
     async def delete_row(self, project_id: str, remove_shadow: bool) -> None:
         p = await self.precheck_delete(project_id, remove_shadow)
-        if remove_shadow or p["kind"] == "repo":
-            await self._cleanup(str(p["source_target_id"]), project_id, "", {**self._snapshot_args(p), "delete_shadow": remove_shadow, "delete_clone": bool(p.get("git_url"))})
-        self.project_sync.mirror(project_id).delete()
-        await self.repo.delete_project_devices(project_id)
-        await self.repo.delete_project(project_id)
+        self.deleting.add(project_id)
+        try:
+            if remove_shadow or p["kind"] == "repo":
+                await self._cleanup(str(p["source_target_id"]), project_id, "", {**self._snapshot_args(p), "delete_shadow": remove_shadow, "delete_clone": bool(p.get("git_url"))})
+            await asyncio.to_thread(self.project_sync.mirror(project_id).delete)
+            await self.repo.delete_project_devices(project_id)
+            await self.repo.delete_project(project_id)
+        finally:
+            self.deleting.discard(project_id)
         await self.repo.audit(self.workspace_id, "user", "project.deleted", {"project_id": project_id})
 
     # ---- per-task ---------------------------------------------------------------
@@ -380,15 +398,23 @@ class ProjectManager:
             status.data.setdefault("base", start)
         return status
 
-    async def commit(self, project: dict[str, Any], task: dict[str, Any], message: str) -> ProjectOpStatus:
+    async def commit(self, project: dict[str, Any], task: dict[str, Any], message: str) -> tuple[ProjectOpStatus, str | None]:
+        """The device's answer, and why its chat branch did not reach the mirror, if it did not."""
         target_id = str(task["target_id"])
         args = {**self._snapshot_args(project), "message": message, "base_sha": task.get("base_sha")}
         if Mirror.enabled() and self.project_sync.can_bundle(target_id):
-            args |= {"branch": task.get("branch"), "known_head": task.get("head_sha")}
+            # The device cuts the bundle at known_head, so it must be a commit the mirror has; else it falls back to base_sha.
+            mirror, head = self.project_sync.mirror(str(project["id"])), task.get("head_sha")
+            known = head if head and mirror.exists and await mirror.rev(str(head)) else None
+            args |= {"branch": task.get("branch"), "known_head": known}
         status = await self.op(target_id, str(project["id"]), str(task["id"]), "commit", args)
-        if status.state == "ok":
+        if status.state != "ok":
+            return status, None
+        try:
             await self.project_sync.publish(project, task, status)
-        return status
+        except ProjectError as e:
+            return status, str(e)
+        return status, None
 
     async def remove(self, project: dict[str, Any], task: dict[str, Any]) -> None:
         args = {**self._snapshot_args(project), "branch": task.get("branch"), "delete_branch": project["kind"] == "folder"}

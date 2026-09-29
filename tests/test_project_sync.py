@@ -28,6 +28,7 @@ class FakeHub:
     def __init__(self, repo_path: Path, inbox: Path) -> None:
         self.repo_path, self.inbox = repo_path, inbox
         self.online = {"tgt_src", "tgt_core"}
+        self.ops = ["branches", "diff", "docs", "revert", "fetch", "inplace", "bundle"]
         self.sent: list[Any] = []
         self.answers: list[dict[str, Any]] = []
 
@@ -37,7 +38,7 @@ class FakeHub:
     def hello(self, target_id: str) -> TargetHello | None:
         if target_id not in self.online:
             return None
-        caps = Capabilities(tools=[], projects=True, projects_root=f"/home/{target_id}/.mensarium/projects", project_ops=["branches", "diff", "docs", "revert", "fetch", "inplace", "bundle"])
+        caps = Capabilities(tools=[], projects=True, projects_root=f"/home/{target_id}/.mensarium/projects", project_ops=self.ops)
         return TargetHello(target=TargetInfo(id=target_id, name=target_id, platform="linux-x86_64", hostname="h", agent_version="0.77.0"), capabilities=caps, policy=TargetPolicy(roots=["/home"], command_allowlist=[]))
 
     async def project_request(self, msg: ProjectSnapshot | ProjectOp, timeout_s: float, bundle: Path | None = None) -> dict[str, Any]:
@@ -75,7 +76,7 @@ class ProjectSyncTests(unittest.IsolatedAsyncioTestCase):
         ws = await self.repo.get_or_create_workspace()
         for tid in ("tgt_src", "tgt_core"):
             await self.repo.create_target({"id": tid, "workspace_id": ws, "name": tid, "platform": "linux", "hostname": "h", "status": "online", "public_key": "", "created_at": "2026-01-01T00:00:00Z"})
-        self.hub = FakeHub(self.repo_path, base / "home" / "projects" / "inbox")
+        self.hub = FakeHub(self.repo_path, base / "home" / "projects" / "core-inbox")
         self.manager = ProjectManager(self.repo, ws, self.hub, 120)  # type: ignore[arg-type]
         self.manager.device_id = "tgt_core"
         self.sync = self.manager.project_sync
@@ -84,8 +85,10 @@ class ProjectSyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sync_source_fills_the_mirror_incrementally(self) -> None:
         head = git(self.repo_path, "rev-parse", "HEAD")
+        git(self.repo_path, "branch", "mensarium/x-1", head)
+        chat = "refs/heads/mensarium/x-1"
         self.hub.answers.append({"type": "project.snapshot.status", "state": "ok", "kind": "repo", "head_sha": head, "snapshot_sha": head, "branch": "main", "main": "main",
-                                 "refs": {"refs/heads/main": head, "refs/mensarium/snapshot": head}, "make_bundle": (["refs/heads/main", "refs/mensarium/snapshot"], [])})
+                                 "refs": {"refs/heads/main": head, "refs/mensarium/snapshot": head, chat: head}, "make_bundle": (["refs/heads/main", "refs/mensarium/snapshot", chat], [])})
         await self.manager.refresh("prj_1")
         self.assertTrue(self.hub.sent[-1][0].bundle)
         mirror = self.sync.mirror("prj_1")
@@ -94,19 +97,33 @@ class ProjectSyncTests(unittest.IsolatedAsyncioTestCase):
         assert device is not None
         self.assertEqual((device["role"], device["device_refs"]["refs/heads/main"]), ("source", head))
         self.assertEqual((await self.repo.get_project("prj_1") or {})["main_branch"], "main")
+        # Chat branches enter the mirror only through publish; a snapshot never moves them.
+        await mirror.update_ref(chat, head)
         (self.repo_path / "a.txt").write_text("two\n")
         git(self.repo_path, "commit", "-qam", "two")
         new = git(self.repo_path, "rev-parse", "HEAD")
+        git(self.repo_path, "branch", "-f", "mensarium/x-1", new)
         self.hub.answers.append({"type": "project.snapshot.status", "state": "ok", "kind": "repo", "head_sha": new, "snapshot_sha": head, "branch": "main", "main": "main",
-                                 "refs": {"refs/heads/main": new, "refs/mensarium/snapshot": head}, "make_bundle": (["refs/heads/main"], [head])})
+                                 "refs": {"refs/heads/main": new, "refs/mensarium/snapshot": head, chat: new}, "make_bundle": (["refs/heads/main", chat], [head])})
         await self.sync.sync_source(await self.repo.get_project("prj_1") or {})
-        self.assertEqual(self.hub.sent[-1][0].known, {"refs/heads/main": head, "refs/mensarium/snapshot": head})
+        self.assertEqual(self.hub.sent[-1][0].known, {"refs/heads/main": head, "refs/mensarium/snapshot": head, chat: head})
         self.assertEqual(await mirror.rev("refs/devices/tgt_src/heads/main"), new)
+        self.assertEqual(await mirror.rev(chat), head)
         # The user reset main back and dropped the snapshot ref: no bundle, the mirror follows the refs it already has.
         self.hub.answers.append({"type": "project.snapshot.status", "state": "ok", "kind": "repo", "head_sha": head, "snapshot_sha": head, "branch": "main", "refs": {"refs/heads/main": head}})
         await self.sync.sync_source(await self.repo.get_project("prj_1") or {})
-        self.assertEqual(await mirror.refs(), {"refs/devices/tgt_src/heads/main": head})
+        self.assertEqual(await mirror.refs(), {"refs/devices/tgt_src/heads/main": head, chat: head})
         self.assertEqual(list(self.hub.inbox.iterdir()), [])
+
+    async def test_old_client_stays_without_the_mirror(self) -> None:
+        self.hub.ops = ["branches", "diff", "docs", "revert", "fetch", "inplace"]
+        head = git(self.repo_path, "rev-parse", "HEAD")
+        self.hub.answers.append({"type": "project.snapshot.status", "state": "ok", "kind": "repo", "head_sha": head, "snapshot_sha": head, "refs": {"refs/heads/main": head}})
+        await self.sync.sync_source(await self.repo.get_project("prj_1") or {})
+        msg = self.hub.sent[-1][0]
+        self.assertEqual((msg.known, msg.bundle), ({}, False))
+        self.assertFalse(self.sync.mirror("prj_1").exists)
+        self.assertIsNone(await self.repo.get_project_device("prj_1", "tgt_src"))
 
     async def test_publish_stores_the_chat_branch(self) -> None:
         head = git(self.repo_path, "rev-parse", "HEAD")
