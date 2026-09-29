@@ -150,6 +150,7 @@ const ICONS = {
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.7 5.7 3.7 9s-1.2 6.3-3.7 9c-2.5-2.7-3.7-5.7-3.7-9S9.5 5.7 12 3z"/>',
   robot: '<rect x="4.5" y="8" width="15" height="11" rx="3"/><path d="M12 8V5.2M2.5 12.5v3M21.5 12.5v3M9.5 16h5"/><circle cx="12" cy="4.2" r="1"/><circle cx="9.3" cy="12.4" r=".9"/><circle cx="14.7" cy="12.4" r=".9"/>',
   send: '<path d="m21 3-7 18-4-8-8-4z"/><path d="M21 3 10 13"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   user: '<circle cx="12" cy="8" r="3.6"/><path d="M4.5 20c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/>',
   palette: '<path d="M12 3a9 9 0 1 0 0 18c1 0 1.7-.8 1.7-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.8-1.7 1.7-1.7H16a5 5 0 0 0 5-5c0-3.9-4-7.2-9-7.2z"/><circle cx="7.5" cy="11.5" r="1"/><circle cx="10" cy="7.5" r="1"/><circle cx="15" cy="7.5" r="1"/>',
@@ -2016,6 +2017,7 @@ const SETTINGS = [
   ['providers', 'robot', tr('Providers')],
   ['devices', 'laptop', tr('Devices')],
   ['channels', 'send', tr('Channels')],
+  ['notifications', 'bell', tr('Notifications')],
   ['memory', 'graph', tr('Memory')],
   ['skills', 'book', tr('Skills')],
   ['plugins', 'package', tr('Plugins')],
@@ -2078,7 +2080,7 @@ async function viewSettings(key) {
   if (key === 'instructions') { go('#/settings/memory'); return; }
   const shell = ensureSettingsShell();
   shell.setActive();
-  const views = { overview: settingsOverview, appearance: settingsAppearance, providers: settingsProviders, model: settingsProviders, devices: settingsDevices, channels: settingsChannels, memory: settingsMemory, skills: settingsSkills, plugins: settingsPlugins, marketplace: settingsPlugins, profiles: settingsProfiles, audit: settingsAudit };
+  const views = { overview: settingsOverview, appearance: settingsAppearance, providers: settingsProviders, model: settingsProviders, devices: settingsDevices, channels: settingsChannels, notifications: settingsNotifications, memory: settingsMemory, skills: settingsSkills, plugins: settingsPlugins, marketplace: settingsPlugins, profiles: settingsProfiles, audit: settingsAudit };
   await (views[key] || settingsOverview)(shell);
 }
 
@@ -2656,6 +2658,92 @@ async function settingsChannels(shell) {
   }
 
   page(shell, tr('Channels'), tr('Talk to the agent from a messenger. Replies and approval buttons come to the chat; the bot listens only to the account it is bound to.'), null, body);
+  await load();
+}
+
+function browserLabel() {
+  const ua = navigator.userAgent;
+  const browser = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : tr('Browser');
+  const os = /iPhone|iPad/.test(ua) ? 'iOS' : /Android/.test(ua) ? 'Android' : /Mac OS X/.test(ua) ? 'macOS' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : '';
+  return os ? `${browser} · ${os}` : browser;
+}
+
+const urlKey = (b64) => Uint8Array.from(atob(b64.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+
+async function settingsNotifications(shell) {
+  const body = h('div', {});
+  const supported = window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+
+  const current = async () => {
+    const reg = supported ? await navigator.serviceWorker.getRegistration('/') : null;
+    return reg ? reg.pushManager.getSubscription() : null;
+  };
+
+  async function enable(data) {
+    if (await Notification.requestPermission() !== 'granted') throw new Error(tr('The browser did not allow notifications for this site.'));
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    const key = urlKey(data.public_key);
+    let sub = await reg.pushManager.getSubscription();
+    const own = sub?.options.applicationServerKey;
+    if (sub && !(own && new Uint8Array(own).join() === key.join())) { await sub.unsubscribe(); sub = null; }
+    sub = sub || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    const { endpoint, keys } = sub.toJSON();
+    await post('/v1/push/subscriptions', { endpoint, keys, lang, agent: browserLabel() });
+  }
+
+  async function disable(mine, sub) {
+    if (mine) await del(`/v1/push/subscriptions/${mine.id}`);
+    if (sub) await sub.unsubscribe();
+  }
+
+  const setting = (patch) => api('/v1/push', { method: 'PUT', body: JSON.stringify(patch) });
+
+  function render(data, sub) {
+    const mine = sub && data.subscriptions.find((s) => s.endpoint === sub.endpoint);
+    const denied = supported && Notification.permission === 'denied';
+    const note = !supported
+      ? (window.isSecureContext
+        ? tr('This browser does not support push notifications.')
+        : tr('Browsers allow push notifications only over HTTPS or on localhost. Open the interface through the gateway on this computer (127.0.0.1) or put Core behind HTTPS.'))
+      : denied ? tr('Notifications are blocked for this site in the browser settings. Allow them there and reload the page.') : null;
+    const hero = h('div', { class: 'hero provider-hero' },
+      h('span', { class: 'market-icon' }, icon('bell')),
+      h('div', { class: 'hero-text' }, h('h2', {}, tr('Push notifications')),
+        h('p', {}, tr('The browser shows a notification when a chat waits for your approval or finishes, even with the tab closed.'))),
+      supported && !denied ? h('label', { class: 'switch-label' }, toggleSwitch(!!mine, {
+        label: tr('Notifications in this browser'),
+        onChange: async (v) => { if (v) await enable(data); else await disable(mine, sub); await load(); },
+      }), tr('In this browser')) : null);
+    const test = (id) => h('button', { class: 'btn btn-sm', onclick: async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try { await post('/v1/push/test', { id }); toast(tr('Sent')); } catch (err) { fail(err); } finally { btn.disabled = false; }
+    } }, tr('Send a test'));
+    const remove = (s) => h('button', { class: 'btn btn-sm', onclick: async () => {
+      try { await disable(s, s === mine ? sub : null); await load(); } catch (err) { fail(err); }
+    } }, tr('Remove'));
+    body.replaceChildren(...[
+      hero,
+      note ? h('p', { class: 'market-note' }, note) : null,
+      section(tr('What to notify about'), null, h('div', { class: 'rows' },
+        row(tr('Approval needed'), tr('The agent waits for you to allow an action, including in sub-agents and automation runs.'),
+          toggleSwitch(data.approvals, { label: tr('Approval needed'), onChange: (v) => setting({ approvals: v }) })),
+        row(tr('Chat finished'), tr('The agent answered or the chat failed. Automation runs report through their own notifications.'),
+          toggleSwitch(data.finished, { label: tr('Chat finished'), onChange: (v) => setting({ finished: v }) })))),
+      section(tr('Browsers'), tr('Each browser turns notifications on by itself; Core sends them to every browser in this list.'), h('div', { class: 'rows' },
+        data.subscriptions.length
+          ? data.subscriptions.map((s) => row(s.agent || tr('Browser'), [s === mine ? tr('this browser') : null, relTime(s.created_at)].filter(Boolean).join(' · '),
+            [s === mine ? test(s.id) : null, remove(s)]))
+          : row(tr('No browsers yet'), tr('Turn notifications on above to add this one.')))),
+    ].filter(Boolean));
+  }
+
+  async function load() {
+    const [data, sub] = await Promise.all([get('/v1/push'), current()]);
+    render(data, sub);
+  }
+
+  page(shell, tr('Notifications'), tr('How Mensarium lets you know it needs you when you are not looking at the chat.'), null, body);
   await load();
 }
 

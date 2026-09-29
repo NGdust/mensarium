@@ -59,6 +59,7 @@ from mensarium.core.orchestrator import Orchestrator, TaskError, full_access, mi
 from mensarium.core.plugins import PluginError, PluginManager
 from mensarium.core.projects import ProjectManager
 from mensarium.core.providers import ProviderError, Providers
+from mensarium.core.push import PushError, PushManager
 from mensarium.core.releases import ReleaseError, fetch_latest, spawn_update, updater
 from mensarium.core.repo import USAGE_FIELDS, Repo
 from mensarium.core.skills import SkillStore
@@ -95,6 +96,7 @@ class Core:
     memory: Memory
     dreamer: Dreamer
     channels: ChannelManager
+    push: PushManager
     automations: AutomationManager
     projects: ProjectManager
     limits: LimitsStore
@@ -115,6 +117,27 @@ class ChannelBody(BaseModel):
     enabled: bool | None = None
     target_id: str | None = Field(None, max_length=100)
     mode: AccessMode | None = None
+
+
+class PushKeys(BaseModel):
+    p256dh: str = Field(max_length=200)
+    auth: str = Field(max_length=100)
+
+
+class PushSubscribeBody(BaseModel):
+    endpoint: str = Field(pattern=r"^https://", max_length=2000)
+    keys: PushKeys
+    lang: str = Field("en", max_length=10)
+    agent: str = Field("", max_length=100)
+
+
+class PushSettingsBody(BaseModel):
+    approvals: bool | None = None
+    finished: bool | None = None
+
+
+class PushTestBody(BaseModel):
+    id: str = Field(max_length=64)
 
 
 class TaskCreate(BaseModel):
@@ -338,6 +361,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         await repo.audit(workspace_id, "core", "core.started", {"version": __version__})
         await _retire_local_target(repo, paths)
         channels = ChannelManager(repo, paths, workspace_id, orchestrator, bus)
+        push = PushManager(repo, paths, bus)
         await channels.start()
         automations = AutomationManager(repo, workspace_id, orchestrator, channels, cfg.server.public_url)
         orchestrator.automations = automations
@@ -371,6 +395,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             memory=memory,
             dreamer=dreamer,
             channels=channels,
+            push=push,
             automations=automations,
             projects=projects,
             limits=limits,
@@ -385,6 +410,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             await automations.stop()
             await projects.stop()
             await channels.stop()
+            await push.stop()
             for runner in list(orchestrator.runners.values()):
                 runner.cancel()
             await plugins.stop()
@@ -441,6 +467,10 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     @app.get("/", include_in_schema=False)
     async def index() -> FileResponse:
         return FileResponse(web_dir / "index.html")
+
+    @app.get("/sw.js", include_in_schema=False)
+    async def service_worker() -> FileResponse:
+        return FileResponse(web_dir / "sw.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
 
     @app.get("/login", include_in_schema=False)
     async def login_link(request: Request, link: str = "") -> RedirectResponse:
@@ -1018,6 +1048,34 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     @app.delete("/v1/channels/telegram")
     async def remove_telegram(c: Core = Depends(auth)) -> dict[str, bool]:
         await c.channels.remove()
+        return {"ok": True}
+
+    @app.get("/v1/push")
+    async def get_push(c: Core = Depends(auth)) -> dict[str, Any]:
+        return await c.push.view()
+
+    @app.put("/v1/push")
+    async def configure_push(body: PushSettingsBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        return await c.push.configure(body.approvals, body.finished)
+
+    @app.post("/v1/push/subscriptions")
+    async def push_subscribe(body: PushSubscribeBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return await c.push.subscribe(body.endpoint, body.keys.p256dh, body.keys.auth, body.lang, body.agent)
+        except PushError as e:
+            raise HTTPException(422, str(e)) from e
+
+    @app.delete("/v1/push/subscriptions/{subscription_id}")
+    async def push_unsubscribe(subscription_id: str, c: Core = Depends(auth)) -> dict[str, bool]:
+        await c.push.unsubscribe(subscription_id)
+        return {"ok": True}
+
+    @app.post("/v1/push/test")
+    async def push_test(body: PushTestBody, c: Core = Depends(auth)) -> dict[str, bool]:
+        try:
+            await c.push.test(body.id)
+        except PushError as e:
+            raise HTTPException(502, str(e)) from e
         return {"ok": True}
 
     def automation_error(e: AutomationError) -> HTTPException:

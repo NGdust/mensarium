@@ -1,5 +1,6 @@
 import asyncio
 from collections import defaultdict
+from collections.abc import Callable
 from typing import Any
 
 from mensarium.core.repo import Repo
@@ -20,6 +21,8 @@ class EventBus:
         # sub-agent task id -> parent task id: a child's events are mirrored into the parent's stream as agent.event
         self.parents: dict[str, str] = {}
         self.drafts: dict[str, Draft] = {}
+        # called for every stored event, before it is mirrored to a parent
+        self.listeners: list[Callable[[str, str, dict[str, Any]], None]] = []
 
     def subscribe(self, task_id: str) -> asyncio.Queue[dict[str, Any]]:
         q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1000)
@@ -34,6 +37,8 @@ class EventBus:
     async def emit(self, task_id: str, event: str, payload: dict[str, Any]) -> dict[str, Any]:
         record = await self.repo.add_event(task_id, event, payload)
         self._deliver(task_id, record)
+        for listener in self.listeners:
+            listener(task_id, event, payload)
         if parent := self.parents.get(task_id):
             await self.emit(parent, "agent.event", {"agent_id": task_id, "event": event, "payload": payload})
         return record

@@ -59,6 +59,10 @@ def create_gateway_app(cfg: ClientConfig, paths: ClientPaths, tunnel: Tunnel) ->
     async def index() -> FileResponse:
         return FileResponse(web_dir / "index.html")
 
+    @app.get("/sw.js", include_in_schema=False)
+    async def service_worker() -> FileResponse:
+        return FileResponse(web_dir / "sw.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
+
     @app.get("/login", include_in_schema=False)
     async def login_link(link: str = "") -> RedirectResponse:
         response = RedirectResponse("/", status_code=303)
