@@ -32,6 +32,7 @@ from mensarium.tool_runtime.registry import (
     PLAN_TOOLS,
     PLUGIN_TOOLS,
     REGISTRY,
+    SECRET_TOOLS,
     Risk,
     ToolSpec,
 )
@@ -302,7 +303,7 @@ class PluginManager:
     async def check_conflicts(self, plugin: Plugin) -> None:
         taken = (
             set(REGISTRY) | set(CORE_TOOLS) | set(MEMORY_TOOLS) | set(PLUGIN_TOOLS)
-            | set(PLAN_TOOLS) | set(AGENT_TOOLS) | set(AUTOMATION_TOOLS)
+            | set(PLAN_TOOLS) | set(AGENT_TOOLS) | set(AUTOMATION_TOOLS) | set(SECRET_TOOLS)
         )
         servers: set[str] = set()
         for other in await self.installed():

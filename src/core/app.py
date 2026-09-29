@@ -38,7 +38,7 @@ from mensarium.contracts.gateway import GATEWAY_SCOPE_KEY
 from mensarium.contracts.plugins import Plugin
 from mensarium.contracts.projects import BrowseBody, ProjectCreate, ProjectError, ProjectPatch
 from mensarium.contracts.protocol import AccessMode, CoreIdentity, PairRequest, PairResponse
-from mensarium.contracts.secrets import SecretPut
+from mensarium.contracts.secrets import SecretPut, SecretRequestAnswer
 from mensarium.contracts.skills import OS, SkillError, SkillMeta, SkillRequires
 from mensarium.core import distribution, pairing
 from mensarium.core.api_tunnel import ApiTunnel
@@ -1254,6 +1254,16 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         except SecretError as e:
             raise secret_error(e) from e
         await c.repo.audit(c.workspace_id, "user", "secret.deleted", {"name": name})
+        return {"ok": True}
+
+    @app.post("/v1/secrets/requests/{request_id}")
+    async def answer_secret_request(request_id: str, body: SecretRequestAnswer, c: Core = Depends(auth)) -> dict[str, bool]:
+        try:
+            await c.orchestrator.answer_secret(request_id, body)
+        except TaskError as e:
+            raise task_error(e) from e
+        except SecretError as e:
+            raise secret_error(e) from e
         return {"ok": True}
 
     def note_error(e: NoteError) -> HTTPException:

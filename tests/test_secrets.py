@@ -1,3 +1,4 @@
+import asyncio
 import os
 import tempfile
 import unittest
@@ -8,12 +9,14 @@ from unittest.mock import AsyncMock, patch
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from mensarium.agent_core.actions import ToolCallAction
+from mensarium.agent_core.context import build_system_prompt
 from mensarium.agent_core.profile import builtin_profiles
 from mensarium.client.config import ClientConfig
 from mensarium.client.tools import Executor, ToolError
 from mensarium.contracts.protocol import ExecutionResult, TargetPolicy, ToolOutput
+from mensarium.contracts.secrets import SecretRequestAnswer
 from mensarium.core.config import CorePaths
-from mensarium.core.orchestrator import Orchestrator
+from mensarium.core.orchestrator import Orchestrator, Stop
 from mensarium.core.plugins import Toolbox
 from mensarium.core.secrets import SecretError, SecretStore
 from mensarium.policy_engine.engine import evaluate
@@ -172,3 +175,46 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent["request"].secrets, {"API_TOKEN": "fixture-value-123"})
         self.assertIn("[secret:API_TOKEN]", core._observe.call_args.args[2])
         self.assertNotIn("fixture-value-123", core._observe.call_args.args[2])
+
+
+class RequestTests(unittest.IsolatedAsyncioTestCase):
+    def core(self, s):
+        core = Orchestrator.__new__(Orchestrator)
+        core.secrets, core.workspace_id, core.controls, core.secret_waiters = s, "workspace", {}, {}
+        core.cfg = SimpleNamespace(execution=SimpleNamespace(approval_ttl_s=60))
+        core._task = AsyncMock(return_value={"id": "task", "target_id": "tgt_a"})
+        core.repo = SimpleNamespace(audit=AsyncMock())
+        core.bus = SimpleNamespace(emit=AsyncMock())
+        core._set_status = AsyncMock()
+        return core
+
+    async def test_answer_saves_and_model_sees_only_the_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = store(Path(tmp))
+            core = self.core(s)
+            job = asyncio.create_task(core._request_secret("task", {"name": "API_TOKEN", "description": "for the API"}))
+            await asyncio.sleep(0)
+            request_id = next(iter(core.secret_waiters))
+            await core.answer_secret(request_id, SecretRequestAnswer(value="fixture-value-123"))
+            text = await job
+            self.assertIn("API_TOKEN", text)
+            self.assertNotIn("fixture-value-123", text)
+            self.assertEqual(await s.resolve(["API_TOKEN"], "tgt_a"), {"API_TOKEN": "fixture-value-123"})
+            self.assertIn("already saved", await core._request_secret("task", {"name": "API_TOKEN", "description": ""}))
+
+    async def test_cancel_releases_the_card(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            core = self.core(store(Path(tmp)))
+            job = asyncio.create_task(core._request_secret("task", {"name": "API_TOKEN", "description": ""}))
+            await asyncio.sleep(0)
+            core.controls["task"] = "cancel"
+            core._release_secret_waits("task", "cancel")
+            with self.assertRaises(Stop):
+                await job
+
+    def test_prompt_lists_names_only(self):
+        policy = TargetPolicy(roots=["/workspace"], command_allowlist=[])
+        prompt = build_system_prompt(builtin_profiles()[0], "device", "linux", policy, ["shell.bash", "secrets.request"],
+                                     secrets=[("API_TOKEN", "for the API")])
+        self.assertIn("## Secrets", prompt)
+        self.assertIn("API_TOKEN", prompt)

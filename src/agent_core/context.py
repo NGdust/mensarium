@@ -137,6 +137,7 @@ def build_system_prompt(
     project: dict[str, Any] | None = None,
     mode: AccessMode = "ask",
     instructions: list[tuple[str, str, str]] | None = None,
+    secrets: list[tuple[str, str]] | None = None,
 ) -> str:
     unrestricted = mode == "full" and policy.allow_full_access
     allow = ", ".join(policy.command_allowlist) if policy.command_allowlist else "(none)"
@@ -229,6 +230,18 @@ def build_system_prompt(
             "not duplicate one. If the user's IANA timezone is not known from the conversation or memory, ask for "
             "it before creating, and name the timezone when you confirm the schedule in plain words. Each run "
             "starts from the prompt alone, so put everything it needs into the prompt.\n"
+        )
+    if secrets or "secrets.request" in tools:
+        listed = "".join(f"- {name}" + (f" — {desc}" if desc else "") + "\n" for name, desc in secrets or []) or "(none yet)\n"
+        prompt += (
+            "\n## Secrets\n"
+            "The user's secrets available on this device (names only, you never see the values):\n"
+            f"{listed}"
+            "In shell.bash or shell.exec list them in `secrets` and refer to them as $NAME; in net.http write "
+            "{{secret:NAME}} in the url, a header value or the body. Output shows [secret:NAME] where a value was "
+            "removed. Every action that uses a secret waits for the user's approval. Never ask for a key, token or "
+            "password in a message: call secrets.request instead; if the user pasted one into the chat anyway, offer "
+            "to save it with secrets.request and use the name from then on.\n"
         )
     if instructions:
         prompt += instructions_block(instructions)

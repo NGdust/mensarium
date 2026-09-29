@@ -175,6 +175,8 @@ class PushManager:
             kind, payload = "approval", dict(payload.get("payload") or {})
         elif event == "tool_call.pending_approval":
             kind = "approval"
+        elif event == "secret.requested":
+            kind, payload = "approval", {"tool_call": {"display": f"secret {payload.get('name')}"}}
         elif event == "task.final":
             kind = "finished"
         elif event == "task.status" and payload.get("status") in ("FAILED", "FAILED_RECOVERABLE"):

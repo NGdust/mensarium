@@ -297,6 +297,11 @@ class AutomationsDeleteArgs(_Args):
     id: str = Field(pattern=r"^auto_[0-9A-Za-z]+$")
 
 
+class SecretsRequestArgs(_Args):
+    name: str = Field(pattern=r"^[A-Z][A-Z0-9_]{1,63}$", description="Environment-style name, e.g. GITHUB_TOKEN")
+    description: str = Field(min_length=1, max_length=300, description="What it is for and where the user gets it")
+
+
 class McpArgs(BaseModel):
     """MCP tools bring their own JSON schema; the harness checks it separately."""
 
@@ -324,6 +329,7 @@ CORE_TOOL_ARGS: dict[str, type[BaseModel]] = {
     "automations.create": AutomationsCreateArgs,
     "automations.delete": AutomationsDeleteArgs,
     "device.update": NoArgs,
+    "secrets.request": SecretsRequestArgs,
 }
 
 PATH_FIELDS: dict[str, tuple[str, ...]] = {

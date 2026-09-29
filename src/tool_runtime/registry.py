@@ -353,6 +353,19 @@ AUTOMATION_TOOLS: dict[str, ToolSpec] = {
     ),
 }
 
+SECRET_TOOLS: dict[str, ToolSpec] = {
+    "secrets.request": ToolSpec(
+        "secrets.request",
+        "Ask the user to save an API key, token or password as a secret through a form in the chat. The value goes "
+        "straight to the Core and you never see it; afterwards use the secret by name. Use it instead of asking for "
+        "a key in a message.",
+        "read",
+        CORE_TOOL_ARGS["secrets.request"],
+        lambda a: f"request secret {a['name']}",
+        runs_on="core",
+    ),
+}
+
 DEVICE_TOOLS: dict[str, ToolSpec] = {
     "device.update": ToolSpec(
         "device.update",

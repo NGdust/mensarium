@@ -5,6 +5,7 @@ import hashlib
 import logging
 import secrets as token_secrets
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -30,6 +31,7 @@ from mensarium.contracts.protocol import (
     TargetPolicy,
     policy_snapshot_hash,
 )
+from mensarium.contracts.secrets import SecretRequestAnswer
 from mensarium.contracts.skills import SkillError
 from mensarium.core.attachments import Attachment, AttachmentError, AttachmentStore
 from mensarium.core.catalog import Catalog
@@ -49,7 +51,14 @@ from mensarium.shared.ids import new_id
 from mensarium.shared.secret_refs import fill_secrets, mask_secrets
 from mensarium.shared.timeutil import iso_in, now_iso, parse_iso, utcnow
 from mensarium.shared.versions import parse_version
-from mensarium.tool_runtime.registry import AGENT_TOOLS, AUTOMATION_TOOLS, DEVICE_TOOLS, PLAN_TOOLS, REGISTRY
+from mensarium.tool_runtime.registry import (
+    AGENT_TOOLS,
+    AUTOMATION_TOOLS,
+    DEVICE_TOOLS,
+    PLAN_TOOLS,
+    REGISTRY,
+    SECRET_TOOLS,
+)
 
 if TYPE_CHECKING:
     from mensarium.core.automations import AutomationManager
@@ -120,6 +129,15 @@ class Stop(Exception):
         self.reason = reason
 
 
+@dataclass
+class SecretWait:
+    task_id: str
+    target_id: str
+    name: str
+    description: str
+    future: asyncio.Future[str]
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -153,6 +171,7 @@ class Orchestrator:
         self.preparing: dict[str, asyncio.Task[None]] = {}
         self.controls: dict[str, str] = {}
         self.approval_waiters: dict[str, asyncio.Future[str]] = {}
+        self.secret_waiters: dict[str, SecretWait] = {}
         self.running_requests: dict[str, tuple[str, str]] = {}
         self.interrupts: dict[str, asyncio.Event] = {}
         self.automations: AutomationManager | None = None
@@ -451,6 +470,7 @@ class Orchestrator:
             approval = await self.repo.get_approval(approval_id)
             if approval and approval["task_id"] == task_id and not waiter.done():
                 waiter.set_result(action)
+        self._release_secret_waits(task_id, action)
         if task_id in self.running_requests:
             target_id, request_id = self.running_requests[task_id]
             await self.hub.cancel(target_id, request_id)
@@ -636,7 +656,7 @@ class Orchestrator:
             toolbox = await self.plugins.toolbox(profile, target)
             if not task.get("parent_id"):
                 toolbox.add_tools({**PLAN_TOOLS, **AGENT_TOOLS})
-                toolbox.add_tools(DEVICE_TOOLS if task.get("automation_id") else AUTOMATION_TOOLS)
+                toolbox.add_tools(DEVICE_TOOLS if task.get("automation_id") else {**AUTOMATION_TOOLS, **SECRET_TOOLS})
             available = toolbox.available(target)
             if project and project["kind"] == "folder":
                 available = [t for t in available if not t.startswith("git.")]
@@ -661,6 +681,7 @@ class Orchestrator:
             steps = await self.repo.list_steps(task_id)
             images = await self._recent_images(steps)
             instructions = self.instructions.prompt_files()
+            secrets = [(s.name, s.description) for s in await self.secrets.available(target["id"])] if self.secrets else None
             tool_defs = [toolbox.registry[t].definition() for t in available]
             system = build_system_prompt(
                 profile,
@@ -676,6 +697,7 @@ class Orchestrator:
                 project=project_block,
                 mode=current["mode"] if full_access(target) == "allowed" else "ask",
                 instructions=instructions,
+                secrets=secrets,
             )
             messages = build_messages(steps, profile.llm.max_context_tokens, images)
             if has_images(messages) and client.vision_model:
@@ -1188,6 +1210,8 @@ class Orchestrator:
             return await self._automations_tool(task_id, tool, args)
         if tool == "device.update":
             return await self._update_device(task_id)
+        if tool == "secrets.request":
+            return await self._request_secret(task_id, args)
         return await self.plugins.call_core(toolbox, toolbox.registry[tool], args)
 
     async def _update_device(self, task_id: str) -> str:
@@ -1245,6 +1269,59 @@ class Orchestrator:
             return f"Deleted automation {v_id}."
         except AutomationError as e:
             raise TaskError(str(e)) from e
+
+    async def _request_secret(self, task_id: str, args: dict[str, Any]) -> str:
+        if self.secrets is None:
+            raise TaskError("secrets are not available")
+        task = await self._task(task_id)
+        name = args["name"]
+        if any(s.name == name for s in await self.secrets.available(task["target_id"])):
+            return f"Secret {name} is already saved and available on this device; use it by name."
+        request_id = new_id("sec")
+        ttl = self.cfg.execution.approval_ttl_s
+        wait = SecretWait(task_id, task["target_id"], name, args["description"], asyncio.get_running_loop().create_future())
+        self.secret_waiters[request_id] = wait
+        await self._set_status(task_id, "WAITING_APPROVAL")
+        await self.bus.emit(
+            task_id,
+            "secret.requested",
+            {"request_id": request_id, "name": name, "description": args["description"], "target_id": task["target_id"], "expires_at": iso_in(ttl)},
+        )
+        try:
+            status = await asyncio.wait_for(wait.future, ttl)
+        except TimeoutError:
+            status = "expired"
+        finally:
+            self.secret_waiters.pop(request_id, None)
+        await self.bus.emit(task_id, "secret.answered", {"request_id": request_id, "status": status})
+        self._check_control(task_id)
+        await self._set_status(task_id, "EXECUTING")
+        return {
+            "saved": f"The user saved secret {name}. Use it by name; you will not see its value.",
+            "declined": f"The user declined to save secret {name}.",
+        }.get(status, f"Secret {name} was not saved: the request expired.")
+
+    def _release_secret_waits(self, task_id: str, action: str) -> None:
+        for wait in self.secret_waiters.values():
+            if wait.task_id == task_id and not wait.future.done():
+                wait.future.set_result(action)
+
+    async def answer_secret(self, request_id: str, answer: SecretRequestAnswer) -> None:
+        wait = self.secret_waiters.get(request_id)
+        if wait is None or wait.future.done():
+            raise TaskError("secret request not found or already answered")
+        if answer.declined:
+            wait.future.set_result("declined")
+            return
+        if self.secrets is None:
+            raise TaskError("secrets are not available")
+        if answer.value is not None:
+            await self.secrets.put(wait.name, answer.value, answer.description if answer.description is not None else wait.description, answer.targets or [wait.target_id])
+        elif not any(s.name == wait.name for s in await self.secrets.all()):
+            raise TaskError("the secret has no value yet")
+        await self.repo.audit(self.workspace_id, "user", "secret.saved", {"name": wait.name, "task_id": wait.task_id})
+        if not wait.future.done():
+            wait.future.set_result("saved")
 
     # ---- sub-agents -------------------------------------------------------
 
