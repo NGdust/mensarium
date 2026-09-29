@@ -1290,7 +1290,7 @@ input.mono { font-family: var(--mono); font-size: 13px; }
 .row-desc.over { color: var(--danger); }
 .skill-advanced summary { cursor: pointer; font-size: 12.5px; color: var(--text-2); }
 .skill-advanced .plugin-form { margin: 12px 0 0; }
-.check-row { display: flex; gap: 14px; min-height: 34px; align-items: center; }
+.check-row { display: flex; flex-wrap: wrap; gap: 14px; min-height: 34px; align-items: center; }
 .check-label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); }
 .check-label input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
 .empty.rows { padding: 28px 20px; }

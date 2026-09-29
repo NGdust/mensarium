@@ -1811,7 +1811,7 @@ async function viewChat(taskId) {
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save.click(); });
     decline.addEventListener('click', () => answer({ declined: true }));
     more.addEventListener('click', () => secretEditor({
-      name: p.name, value: input.value, description: p.description, targets: [p.target_id],
+      name: p.name, value: input.value, description: p.description, targets: [p.target_id], lockName: true,
       onSaved: (s) => answer({ targets: s.targets }),
     }));
     lastAgent = false;
@@ -3648,9 +3648,9 @@ async function settingsPlugins(shell) {
   await load();
 }
 
-async function secretEditor({ secret = null, name = '', value = '', description = '', targets = null, onSaved = null } = {}) {
+async function secretEditor({ secret = null, name = '', value = '', description = '', targets = null, lockName = false, onSaved = null } = {}) {
   const current = secret?.targets || targets || ['*'];
-  const nameInput = h('input', { type: 'text', value: secret?.name || name, placeholder: 'GITHUB_TOKEN', disabled: !!secret, maxlength: 64, 'aria-label': tr('Name'), spellcheck: 'false' });
+  const nameInput = h('input', { type: 'text', value: secret?.name || name, placeholder: 'GITHUB_TOKEN', disabled: !!secret || lockName, maxlength: 64, 'aria-label': tr('Name'), spellcheck: 'false' });
   const valueInput = h('input', { type: 'password', autocomplete: 'off', placeholder: secret ? tr('Saved. Type to replace') : '', 'aria-label': tr('Value') });
   valueInput.value = value;
   const descInput = h('input', { type: 'text', value: secret?.description || description, maxlength: 300, placeholder: tr('What it is for'), 'aria-label': tr('Description') });
@@ -3679,7 +3679,7 @@ async function secretEditor({ secret = null, name = '', value = '', description 
     field(tr('Devices'), h('div', {}, h('label', { class: 'check-label' }, all, tr('All devices')), list)),
     h('div', { class: 'modal-actions' }, h('button', { class: 'btn', onclick: closeLayer }, tr('Cancel')), save),
   );
-  (secret ? valueInput : nameInput).focus();
+  (secret || lockName ? valueInput : nameInput).focus();
 }
 
 async function settingsSecrets(shell) {
