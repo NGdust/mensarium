@@ -37,7 +37,7 @@ class Mirror:
         if git is None:
             raise MirrorError("git is not installed on the Core host")
         proc = await asyncio.create_subprocess_exec(
-            git, *GIT_SAFE_FLAGS, *args, cwd=self.root, env={**os.environ, **GIT_ENV, "GIT_DIR": str(self.path)},
+            git, *GIT_SAFE_FLAGS, *args, cwd=self.root, env={**os.environ, **GIT_ENV, "GIT_DIR": str(self.path), "LC_ALL": "C"},
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         try:
@@ -73,7 +73,10 @@ class Mirror:
     async def bundle(self, path: Path, refs: dict[str, str], prerequisites: list[str]) -> BundleInfo | None:
         path.unlink(missing_ok=True)
         have = [sha for sha in prerequisites if await self.rev(sha)]
-        out = await self._git("bundle", "create", "--quiet", str(path), *refs, *(f"^{sha}" for sha in have), check=False)
+        revs = [*refs, *(f"^{sha}" for sha in have)]
+        if int((await self._git("rev-list", "--count", *revs)).strip() or 0) == 0:
+            return None
+        out = await self._git("bundle", "create", "--quiet", str(path), *revs, check=False)
         if not path.is_file():
             if "refusing to create empty bundle" in out.lower():
                 return None

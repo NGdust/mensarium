@@ -323,16 +323,16 @@ class ProjectManager:
         return await self.view(p)
 
     async def refresh(self, project_id: str) -> None:
-        """Read the source again and wait for it, unless a read of this project is already running."""
-        if self.stopped or project_id in self.jobs or project_id in self.deleting:
+        """Read the source again and wait for it; a read already running is waited for instead."""
+        if self.stopped or project_id in self.deleting:
             return
-        self._start_refresh(project_id)
-        await asyncio.wait({self.jobs[project_id]})
+        await asyncio.wait({self.jobs.get(project_id) or self._start_refresh(project_id)})
 
-    def _start_refresh(self, project_id: str) -> None:
+    def _start_refresh(self, project_id: str) -> asyncio.Task[None]:
         job = asyncio.create_task(self._refresh_job(project_id))
         self.jobs[project_id] = job
         job.add_done_callback(lambda t: self._forget(project_id, t))
+        return job
 
     def _forget(self, project_id: str, job: asyncio.Task[None]) -> None:
         if self.jobs.get(project_id) is job:
@@ -458,7 +458,7 @@ class ProjectManager:
         if self.hub.is_online(str(project["source_target_id"])):
             await self.refresh(project_id)
         name, ref, sha = await self.project_sync.resolve_base(project, task.get("base_ref"))
-        args = {"role": "executor", "branch": task["branch"], "start": sha, "base_name": name}
+        args = {"role": "executor", "kind": project["kind"], "branch": task["branch"], "start": sha, "base_name": name}
         for attempt in range(2):
             await self.project_sync.ensure_objects(project, target_id, {ref: sha})
             status = await self.op(target_id, project_id, str(task["id"]), "checkout", args, timeout_s=OP_TIMEOUT_S)

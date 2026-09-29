@@ -75,6 +75,21 @@ def _branch(value: str) -> str:
     return value
 
 
+def _plain(refs: dict[str, str]) -> dict[str, str]:
+    return {ref: sha for ref, sha in refs.items() if not ref.startswith(CHAT_REFS)}
+
+
+# What a chat never commits; a folder project also leaves out caches, dependencies and what its .mensariumignore lists.
+def _write_excludes(git_dir: Path, kind: ProjectKind, ignores: list[Path] | None = None) -> None:
+    lines = [*sorted(SKIP_DIRS), *FOLDER_EXCLUDES] if kind == "folder" else []
+    lines += [*SECRET_EXCLUDES, *(f"{d}/" for d in SECRET_DIRS)]
+    for ignore in ignores or []:
+        if ignore.is_file() and not ignore.is_symlink():
+            lines += ignore.read_text(errors="replace").splitlines()
+    (git_dir / "info").mkdir(exist_ok=True)
+    (git_dir / "info" / "exclude").write_text("\n".join(dict.fromkeys(lines)) + "\n")
+
+
 def _ref_name(value: str) -> str:
     if not BRANCH_RE.fullmatch(value):
         raise ToolError(f"{value!r} is not a valid branch name")
@@ -157,16 +172,17 @@ class ProjectHost:
         await self._git("--git-dir", str(shadow), "config", "core.bare", "false", cwd=src)
         await self._git("--git-dir", str(shadow), "config", "core.bigFileThreshold", "1m", cwd=src)
         await self._git("--git-dir", str(shadow), "config", "core.excludesFile", str(src / ".mensariumignore"), cwd=src)
-        lines = [*sorted(SKIP_DIRS), *FOLDER_EXCLUDES, *SECRET_EXCLUDES, *(f"{d}/" for d in SECRET_DIRS)]
-        (shadow / "info").mkdir(exist_ok=True)
-        (shadow / "info" / "exclude").write_text("\n".join(lines) + "\n")
+        _write_excludes(shadow, "folder")
 
     # A device that runs chats of a project it is not the source of keeps the Core's history in a bare repo.git.
-    async def _ensure_repo(self, project_id: str) -> Path:
+    # Its worktrees share one info/exclude, so it takes the .mensariumignore of every chat's copy.
+    async def _ensure_repo(self, project_id: str, kind: ProjectKind | None = None) -> Path:
         bare = self._repo(project_id)
         if not (bare / "HEAD").is_file():
             ensure_private_dir(bare.parent)
             await self._git("init", "--bare", "--quiet", str(bare), cwd=self.root)
+        ignores = sorted((bare.parent / "wt").glob("*/.mensariumignore")) if kind == "folder" else []
+        _write_excludes(bare, kind or "repo", ignores)
         return bare
 
     # ---- snapshot ---------------------------------------------------------------
@@ -181,10 +197,12 @@ class ProjectHost:
             async with self._lock(req.project_id):
                 result = await self._snapshot(req.project_id, req.source_path, req.kind, req.include_remotes, req.fetch_origin, req.size_limit_mb, req.file_limit_mb, req.git_url)
                 status = status.model_copy(update=result)
-                status.state = "unchanged" if status.refs == req.known else "ok"
+                # Chat branches never go up with a snapshot (the Core has them from publish), so they do not make one new either.
+                refs, known = _plain(status.refs), _plain(req.known)
+                status.state = "unchanged" if refs == known else "ok"
                 if status.state == "ok" and req.bundle and send is not None:
                     src = self._source(req.source_path, req.project_id, req.git_url, exists=not req.git_url)
-                    moved = {ref: sha for ref, sha in status.refs.items() if req.known.get(ref) != sha}
+                    moved = {ref: sha for ref, sha in refs.items() if known.get(ref) != sha}
                     base = self._base(status.kind or "repo", req.project_id)
                     status.bundle = await self._bundle_up(base, src, moved, req.known, req.project_id, req.request_id, send)
         except (ToolError, ExecTimeout, OSError) as e:
@@ -272,7 +290,7 @@ class ProjectHost:
         try:
             path.unlink(missing_ok=True)
             have: list[str] = []
-            for sha in sorted({known[ref] for ref in refs if known.get(ref)}):
+            for sha in sorted(set(known.values())):
                 if SHA_RE.fullmatch(sha) and await self._rev(base, f"{sha}^{{commit}}", cwd):
                     have.append(sha)
             revs = [*refs, *(f"^{sha}" for sha in have)]
@@ -405,7 +423,7 @@ class ProjectHost:
         executor = str(a.get("role") or "source") == "executor"
         kind: ProjectKind = "repo" if executor else a["kind"]
         if executor:
-            await self._ensure_repo(project_id)
+            await self._ensure_repo(project_id, a.get("kind"))
             cwd = self.root
         else:
             cwd = self._source(str(a["source_path"]), project_id, a.get("git_url"))
@@ -443,6 +461,8 @@ class ProjectHost:
         if await self._rev(base, f"refs/heads/{branch}", cwd):
             raise ToolError(f"branch {branch} already exists on this device")
         await self._git(*base, "worktree", "add", "--quiet", "--no-track", "-B", branch, str(wt), start, cwd=cwd)
+        if executor and a.get("kind") == "folder":
+            await self._ensure_repo(project_id, "folder")
         return {"head_sha": start, "data": {"base": base_name}}
 
     # Takes refs from a Core bundle: into repo.git on an executor, into the user's repository (or shadow.git) on the source.
@@ -452,8 +472,9 @@ class ProjectHost:
         for dst in refs.values():
             if not dst.startswith((CHAT_REFS, DEVICE_REFS)) or not BRANCH_RE.fullmatch(dst.removeprefix("refs/")):
                 raise ToolError(f"{dst} is not a ref this device takes from the Core")
-        if str(a.get("role") or "source") == "executor":
-            cwd, base = self.root, ["--git-dir", str(await self._ensure_repo(project_id))]
+        executor = str(a.get("role") or "source") == "executor"
+        if executor:
+            cwd, base = self.root, ["--git-dir", str(await self._ensure_repo(project_id, a.get("kind")))]
         else:
             kind: ProjectKind = a["kind"]
             cwd = self._source(str(a["source_path"]), project_id, a.get("git_url"))
@@ -470,7 +491,9 @@ class ProjectHost:
         except ValueError as e:
             raise ToolError(str(e)) from e
         await self._git(*base, "bundle", "verify", "--quiet", str(path), cwd=cwd)
-        await self._git(*base, "fetch", "--quiet", "--no-tags", str(path), *(f"+{src}:{dst}" for src, dst in refs.items()), cwd=cwd)
+        # The source's branches may hold the user's commits: only a fast-forward reaches them (no --quiet: it hides why not).
+        force = "+" if executor else ""
+        await self._git(*base, "fetch", "--no-tags", str(path), *(f"{force}{src}:{dst}" for src, dst in refs.items()), cwd=cwd, env={"LC_ALL": "C"})
         return {"data": {"refs": {dst: info.refs[src] for src, dst in refs.items()}}}
 
     async def _commit(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:

@@ -66,11 +66,13 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         return git(self.repo, "bundle", "list-heads", str(path))
 
     async def test_snapshot_ships_only_moved_refs_and_reports_main(self) -> None:
+        git(self.repo, "branch", "mensarium/d-1", "main")
         self.assertIsNone((await self.snapshot(bundle=False))["bundle"])
         self.assertEqual(self.sent, [])
         first = await self.snapshot()
         self.assertEqual(first["state"], "ok", first["detail"])
         self.assertEqual(first["main"], "main")
+        self.assertIn("refs/heads/mensarium/d-1", first["refs"])
         self.assertEqual(set(first["bundle"]["refs"]), {"refs/heads/main", "refs/heads/feature/login", "refs/mensarium/snapshot"})
         self.assertIn("refs/mensarium/snapshot", self.bundle_heads("s"))
         self.sent.clear()
@@ -79,7 +81,9 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         second = await self.snapshot(known=first["refs"])
         self.assertEqual(second["state"], "ok", second["detail"])
         self.assertEqual(set(second["bundle"]["refs"]), {"refs/heads/feature/login", "refs/mensarium/snapshot"})
-        self.assertEqual(second["bundle"]["prerequisites"], sorted({first["refs"]["refs/heads/feature/login"]}))
+        self.assertEqual(second["bundle"]["prerequisites"], sorted(set(first["refs"].values())))
+        # The user's own commit on a delivered chat branch stays on the device and does not make the snapshot new.
+        git(self.repo, "update-ref", "refs/heads/mensarium/d-1", git(self.repo, "commit-tree", "main^{tree}", "-p", "main", "-m", "user"))
         self.assertEqual((await self.snapshot(known=second["refs"]))["state"], "unchanged")
 
     async def test_snapshot_bundle_falls_back_to_full_when_known_is_gone(self) -> None:
@@ -193,6 +197,14 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         wt = Path(os.environ["MENSARIUM_HOME"]) / "projects" / "prj_1" / "wt" / "task_e"
         self.assertEqual((wt / "app.py").read_text(), "print('hi')\n")
         self.assertEqual((await self.op("checkout", "task_x", role="executor", branch="mensarium/x-1", start="0" * 40))["state"], "error")
+        # A folder project's chat leaves caches and dependencies out of its commits.
+        await self.op("checkout", "task_f", role="executor", kind="folder", branch="mensarium/f-1", start=main)
+        folder = wt.parent / "task_f"
+        for rel in ("node_modules/x.js", "__pycache__/a.pyc", "app.py"):
+            (folder / rel).parent.mkdir(exist_ok=True)
+            (folder / rel).write_text("x\n")
+        self.assertEqual((await self.op("commit", "task_f", message="turn"))["state"], "ok")
+        self.assertEqual(git(folder, "show", "--name-only", "--format=", "HEAD"), "app.py")
         status = await self.op("remove", "task_e", role="executor", branch="mensarium/e-1", delete_branch=True)
         self.assertEqual(status["state"], "ok", status["detail"])
         self.assertFalse(wt.exists())
@@ -205,6 +217,11 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["state"], "ok", status["detail"])
         self.assertEqual(git(self.repo, "rev-parse", "refs/heads/mensarium/d-1"), main)
         self.assertEqual(git(self.repo, "symbolic-ref", "--short", "HEAD"), "feature/login")
+        user = git(self.repo, "commit-tree", "main^{tree}", "-p", "main", "-m", "user")
+        git(self.repo, "update-ref", "refs/heads/mensarium/d-1", user)
+        status = await self.fetch_into("source", {"refs/heads/main": "refs/heads/mensarium/d-1"}, ["refs/heads/main"], request_id="f1")
+        self.assertIn("non-fast-forward", status["detail"])
+        self.assertEqual(git(self.repo, "rev-parse", "refs/heads/mensarium/d-1"), user)
         await self.op("checkout", "task_s", branch="mensarium/s-1", start="default")
         status = await self.fetch_into("source", {"refs/heads/mensarium/s-1": "refs/heads/mensarium/s-1"}, ["refs/heads/main"], request_id="f2")
         self.assertEqual(status["state"], "error")

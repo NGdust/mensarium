@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 import shutil
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -32,6 +33,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 TICK_S = 60
 SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+DIVERGED = "the branch on the device has commits the chat does not have"
+OUTDATED = "update the Mensarium client on this device to receive branches"
 
 
 class ProjectSync:
@@ -47,6 +50,8 @@ class ProjectSync:
         hub.inbox = self.inbox
         self.locks: dict[str, asyncio.Lock] = {}
         self.jobs: set[asyncio.Task[None]] = set()
+        # When each project was last read, failed reads included: the timer waits a full interval after either.
+        self.attempts: dict[str, float] = {}
 
     def mirror(self, project_id: str) -> Mirror:
         return Mirror(project_id)
@@ -66,6 +71,7 @@ class ProjectSync:
 
     async def sync_source(self, p: dict[str, Any]) -> ProjectSnapshotStatus:
         project_id, src = str(p["id"]), str(p["source_target_id"])
+        self.attempts[project_id] = time.monotonic()
         mirror = self.mirror(project_id)
         bundling = Mirror.enabled() and self.can_bundle(src)
         known: dict[str, str] = {}
@@ -81,6 +87,10 @@ class ProjectSync:
             # as long as the mirror has that commit (the device cuts its bundle there).
             for ref, sha in ((device or {}).get("device_refs") or {}).items():
                 if have.get(mirror_ref(src, ref) or "") == sha or (ref.startswith(CHAT_REFS) and SHA_RE.fullmatch(sha) and await mirror.rev(sha)):
+                    known[ref] = sha
+            # A chat branch the Core delivered, not reported yet or moved on by the user: an older client cuts it there.
+            for ref, sha in ((device or {}).get("known_refs") or {}).items():
+                if ref.startswith(CHAT_REFS) and ref not in known and SHA_RE.fullmatch(sha) and await mirror.rev(sha):
                     known[ref] = sha
         msg = self.manager.snapshot_request(p, known, bundling)
         path = self.inbox_file(msg.request_id)
@@ -134,8 +144,9 @@ class ProjectSync:
 
     async def _tick(self) -> None:
         for p in await self.repo.list_projects():
-            last = p.get("last_sync_at")
+            last, tried = p.get("last_sync_at"), self.attempts.get(str(p["id"]))
             due = last is None or (utcnow() - parse_iso(str(last))).total_seconds() >= self.interval_s
+            due = due and (tried is None or time.monotonic() - tried >= self.interval_s)
             if due and p["status"] == "ready" and self.can_bundle(str(p["source_target_id"])):
                 await self.manager.refresh(str(p["id"]))
 
@@ -192,18 +203,23 @@ class ProjectSync:
             # The user may drop a branch, so a source bundle falls back to one without prerequisites.
             have = list({*((device or {}).get("device_refs") or {}).values(), *known.values()})
         detail = None
+        mirror = self.mirror(project_id)
         for prerequisites in ([have, []] if have else [[]]):
             request_id = new_id("pop")
             path = self.inbox_file(request_id)
+            # The bundle carries the resolved commits under temporary names: a ref may move while the request is on its way.
+            temp = {f"refs/mensarium/tmp/{request_id}/{n}": (ref, sha) for n, (ref, sha) in enumerate(missing.items())}
             try:
                 ensure_private_dir(self.inbox)
-                info = await self.mirror(project_id).bundle(path, missing, prerequisites)
+                for name, (_, sha) in temp.items():
+                    await mirror.update_ref(name, sha)
+                info = await mirror.bundle(path, {name: sha for name, (_, sha) in temp.items()}, prerequisites)
                 if info is None:
                     # The executor needs only the commits; the source needs the ref too, even to a commit it has.
                     if role == "executor" or not prerequisites:
                         return
                     continue
-                args: dict[str, Any] = {"role": role, "bundle": info.model_dump(), "refs": {ref: ref for ref in missing}}
+                args: dict[str, Any] = {"role": role, "kind": p["kind"], "bundle": info.model_dump(), "refs": {name: ref for name, (ref, _) in temp.items()}}
                 if role == "source":
                     args |= self.manager.snapshot_args(p)
                 status = await self.manager.op(target_id, project_id, "", "fetch", args, request_id=request_id, bundle=path)
@@ -211,10 +227,14 @@ class ProjectSync:
                     await self.repo.upsert_project_device(project_id, target_id, role, known_refs={**known, **missing})
                     return
                 detail = status.detail
+                if role == "source" and ("non-fast-forward" in (detail or "") or "rejected" in (detail or "")):
+                    raise ProjectError(DIVERGED)
             except MirrorError as e:
                 raise ProjectError(str(e)) from e
             finally:
                 path.unlink(missing_ok=True)
+                for name in temp:
+                    await mirror.delete_ref(name)
         raise ProjectError(detail or "the device could not take the bundle")
 
     async def queue(self, project_id: str, target_id: str, task_id: str, kind: str, branch: str | None = None) -> None:
@@ -239,8 +259,9 @@ class ProjectSync:
             log.exception("project delivery failed", extra={"target_id": target_id})
 
     async def deliver(self, target_id: str) -> None:
-        if not self.can_fetch(target_id):
+        if self.hub.hello(target_id) is None:
             return
+        outdated = not self.can_fetch(target_id)
         async with self.locks.setdefault(target_id, asyncio.Lock()):
             for d in await self.repo.list_deliveries(target_id=target_id):
                 if self.manager.stopped:
@@ -251,6 +272,8 @@ class ProjectSync:
                     await self.repo.update_delivery(str(d["id"]), {"status": "canceled"})
                     continue
                 try:
+                    if outdated and d["kind"] == "branch":
+                        raise ProjectError(OUTDATED)
                     if d["kind"] == "branch":
                         assert task is not None
                         ref = f"refs/heads/{task['branch']}"

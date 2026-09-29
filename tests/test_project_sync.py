@@ -101,6 +101,7 @@ class ProjectSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.repo.get_project("prj_1") or {})["main_branch"], "main")
         # Chat branches enter the mirror only through publish; a snapshot never moves them.
         await mirror.update_ref(chat, head)
+        await self.repo.upsert_project_device("prj_1", "tgt_src", "source", known_refs={"refs/heads/mensarium/d-1": head})
         (self.repo_path / "a.txt").write_text("two\n")
         git(self.repo_path, "commit", "-qam", "two")
         new = git(self.repo_path, "rev-parse", "HEAD")
@@ -108,7 +109,7 @@ class ProjectSyncTests(unittest.IsolatedAsyncioTestCase):
         self.hub.answers.append({"type": "project.snapshot.status", "state": "ok", "kind": "repo", "head_sha": new, "snapshot_sha": head, "branch": "main", "main": "main",
                                  "refs": {"refs/heads/main": new, "refs/mensarium/snapshot": head, chat: new}, "make_bundle": (["refs/heads/main", chat], [head])})
         await self.sync.sync_source(await self.repo.get_project("prj_1") or {})
-        self.assertEqual(self.hub.sent[-1][0].known, {"refs/heads/main": head, "refs/mensarium/snapshot": head, chat: head})
+        self.assertEqual(self.hub.sent[-1][0].known, {"refs/heads/main": head, "refs/mensarium/snapshot": head, chat: head, "refs/heads/mensarium/d-1": head})
         self.assertEqual(await mirror.rev("refs/devices/tgt_src/heads/main"), new)
         self.assertEqual(await mirror.rev(chat), head)
         # The user reset main back and dropped the snapshot ref: no bundle, the mirror follows the refs it already has.
@@ -116,6 +117,14 @@ class ProjectSyncTests(unittest.IsolatedAsyncioTestCase):
         await self.sync.sync_source(await self.repo.get_project("prj_1") or {})
         self.assertEqual(await mirror.refs(), {"refs/devices/tgt_src/heads/main": head, chat: head})
         self.assertEqual(list(self.hub.inbox.iterdir()), [])
+
+    async def test_timer_waits_an_interval_after_a_failed_read(self) -> None:
+        await self.repo.update_project("prj_1", {"snapshot_sha": "0" * 40})
+        self.hub.answers.append({"type": "project.snapshot.status", "state": "error", "detail": "boom"})
+        await self.sync._tick()
+        await self.sync._tick()
+        self.assertEqual(len(self.hub.sent), 1)
+        self.assertEqual((await self.repo.get_project("prj_1") or {})["error"], "boom")
 
     async def test_old_client_stays_without_the_mirror(self) -> None:
         self.hub.ops = ["branches", "diff", "docs", "revert", "fetch", "inplace"]
@@ -163,8 +172,11 @@ class ProjectSyncTests(unittest.IsolatedAsyncioTestCase):
         status = await self.manager.checkout(p, task)
         self.assertEqual(status.head_sha, head)
         fetch, bundle = self.hub.sent[-2]
-        self.assertEqual((fetch.op, fetch.args["role"], list(fetch.args["refs"])), ("fetch", "executor", ["refs/devices/tgt_src/heads/main"]))
+        self.assertEqual((fetch.op, fetch.args["role"], list(fetch.args["refs"].values())), ("fetch", "executor", ["refs/devices/tgt_src/heads/main"]))
         self.assertIsNotNone(bundle)
+        # The bundle carried the resolved commit under a temporary name, gone from the mirror afterwards.
+        self.assertEqual(fetch.args["bundle"]["refs"], {next(iter(fetch.args["refs"])): head})
+        self.assertEqual(await self.sync.mirror("prj_1").refs("refs/mensarium/"), {})
         self.assertEqual(self.hub.sent[-1][0].args["start"], head)
         self.assertEqual((await self.repo.get_project_device("prj_1", "tgt_core") or {})["known_refs"], {"refs/devices/tgt_src/heads/main": head})
         # The source is back: its snapshot is read first, and the objects are already on the executor.
@@ -194,12 +206,17 @@ class ProjectSyncTests(unittest.IsolatedAsyncioTestCase):
             await self.sync.publish(await self.repo.get_project("prj_1") or {}, task, status)
         self.assertEqual(len(await self.repo.list_deliveries(target_id="tgt_src")), 1)
         self.hub.online.add("tgt_src")
+        # A client that cannot take bundles is told to update, and gets the branch on a later hello.
+        self.hub.ops = ["bundle"]
+        await self.sync.deliver("tgt_src")
+        self.assertIn("update the Mensarium client", (await self.repo.list_deliveries(target_id="tgt_src"))[0]["error"])
+        self.hub.ops = FakeHub(self.repo_path, self.hub.inbox).ops
         self.hub.answers += [{"type": "project.snapshot.status", "state": "unchanged", "kind": "repo", "refs": {"refs/heads/main": head, "refs/mensarium/snapshot": head}},
                              {"type": "project.op.status", "task_id": "task_1", "op": "fetch", "state": "ok", "data": {}}]
         await self.sync.on_connect("tgt_src")
         self.assertEqual([d["status"] for d in await self.repo.list_deliveries(target_id="tgt_src", statuses=("delivered",))], ["delivered"])
         fetch, bundle = self.hub.sent[-1]
-        self.assertEqual((fetch.args["role"], fetch.args["refs"], fetch.args["source_path"]), ("source", {"refs/heads/mensarium/t-1": "refs/heads/mensarium/t-1"}, "/home/tgt_src/demo"))
+        self.assertEqual((fetch.args["role"], list(fetch.args["refs"].values()), fetch.args["source_path"]), ("source", ["refs/heads/mensarium/t-1"], "/home/tgt_src/demo"))
         # The source already has its own main, so only the chat's commit travels.
         self.assertEqual(fetch.args["bundle"]["prerequisites"], [head])
         self.assertIsNotNone(bundle)

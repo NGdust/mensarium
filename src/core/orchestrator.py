@@ -570,6 +570,8 @@ class Orchestrator:
         if status.head_sha != task.get("head_sha"):
             await self.repo.update_task(task_id, {"head_sha": status.head_sha, **({"diff_stat": status.data["stat"]} if "stat" in status.data else {})})
             await self.bus.emit(task_id, "task.project", {**(event or {"kind": "commit"}), "head_sha": status.head_sha, "changed": status.changed})
+        if (status.detail or "").startswith("bundle not sent"):
+            unpublished = unpublished or status.detail
         if unpublished:
             await self.bus.emit(task_id, "task.project", {"kind": "commit", "error": unpublished})
 
