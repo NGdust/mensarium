@@ -99,6 +99,7 @@ def projects_init(
     if not target_id:
         fail("this machine is not a device of the Core: pair it with `mensarium client`, or turn on the Core's own device")
         raise typer.Exit(1)
+    _run("GET", "/v1/projects")
     _ensure_root(folder, target_id)
     p = _run("POST", "/v1/projects", {"name": name or folder.name, "source_target_id": target_id, "source_path": str(folder)})
     console.print(f"Reading {escape(str(folder))}...")
