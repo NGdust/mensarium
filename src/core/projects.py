@@ -10,15 +10,15 @@ from mensarium.contracts.projects import (
     KIND_LABELS,
     ProjectCreate,
     ProjectError,
-    ProjectKind,
     ProjectOp,
     ProjectOpName,
     ProjectOpStatus,
     ProjectPatch,
     ProjectSnapshot,
-    ProjectSnapshotStatus,
 )
 from mensarium.core.client_hub import ClientHub, TargetUnavailable
+from mensarium.core.mirror import Mirror
+from mensarium.core.project_sync import ProjectSync
 from mensarium.core.repo import Repo
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import iso_in, now_iso
@@ -31,7 +31,7 @@ DIFF_TIMEOUT_S = 60
 
 
 class ProjectManager:
-    def __init__(self, repo: Repo, workspace_id: str, hub: ClientHub, ttl_s: int) -> None:
+    def __init__(self, repo: Repo, workspace_id: str, hub: ClientHub, ttl_s: int, interval_s: int = 600) -> None:
         self.repo = repo
         self.workspace_id = workspace_id
         self.hub = hub
@@ -39,6 +39,8 @@ class ProjectManager:
         self.jobs: dict[str, asyncio.Task[None]] = {}
         # The Core's own device: repositories given by URL are cloned there.
         self.device_id: str | None = None
+        self.project_sync = ProjectSync(repo, workspace_id, hub, self, interval_s)
+        self.timer: asyncio.Task[None] | None = None
 
     # ---- lifecycle --------------------------------------------------------------
 
@@ -46,13 +48,15 @@ class ProjectManager:
         for p in await self.repo.list_projects():
             if p["status"] == "creating":
                 await self.repo.update_project(str(p["id"]), {"status": "error", "error": "interrupted by Core restart"})
+        self.timer = asyncio.create_task(self.project_sync.run_forever())
 
     async def stop(self) -> None:
-        jobs = list(self.jobs.values())
+        jobs = [*self.jobs.values(), *([self.timer] if self.timer else [])]
         for job in jobs:
             job.cancel()
         await asyncio.gather(*jobs, return_exceptions=True)
         self.jobs.clear()
+        self.timer = None
 
     # ---- views ------------------------------------------------------------------
 
@@ -60,13 +64,14 @@ class ProjectManager:
         keys = (
             "id", "name", "kind", "source_target_id", "source_name", "source_path", "default_executor_id", "default_base",
             "git_url", "include_remotes", "fetch_origin", "size_limit_mb", "file_limit_mb", "head_sha", "snapshot_sha",
-            "default_branch", "last_sync_at", "size_bytes", "status", "error", "created_at", "updated_at", "chats", "instructions",
+            "default_branch", "main_branch", "last_sync_at", "size_bytes", "status", "error", "created_at", "updated_at", "chats", "instructions",
         )
         return {k: p.get(k) for k in keys} | {
             "skipped": p.get("skipped") or [],
             "kind_label": KIND_LABELS.get(str(p.get("kind")), str(p.get("kind"))),
             "source_online": self.hub.is_online(str(p["source_target_id"])),
             "syncing": str(p["id"]) in self.jobs,
+            "mirror": self.project_sync.mirror(str(p["id"])).exists,
         }
 
     async def all(self) -> list[dict[str, Any]]:
@@ -94,7 +99,7 @@ class ProjectManager:
             raise ProjectError("this device's client does not support projects; update it and make sure git is installed")
         return target
 
-    async def _op(
+    async def op(
         self, target_id: str, project_id: str, task_id: str, op: ProjectOpName, args: dict[str, Any], timeout_s: float | None = None
     ) -> ProjectOpStatus:
         msg = ProjectOp(
@@ -109,26 +114,34 @@ class ProjectManager:
             nonce=secrets.token_hex(32),
         )
         raw = await self.hub.project_request(msg, timeout_s or self.ttl_s)
-        return ProjectOpStatus.model_validate(raw)
+        status: ProjectOpStatus | None = None
+        try:
+            status = ProjectOpStatus.model_validate(raw)
+            return status
+        finally:
+            # Only a finished commit hands its bundle on to publish, which removes it.
+            if status is None or status.op != "commit" or status.state != "ok":
+                self.project_sync.inbox_file(msg.request_id).unlink(missing_ok=True)
 
-    async def _snapshot(self, p: dict[str, Any], kind: ProjectKind | None) -> ProjectSnapshotStatus:
-        msg = ProjectSnapshot(
+    def snapshot_request(self, p: dict[str, Any], known: dict[str, str], bundle: bool) -> ProjectSnapshot:
+        # Until the first snapshot the device tells the kind itself.
+        return ProjectSnapshot(
             request_id=new_id("psn"),
             target_id=str(p["source_target_id"]),
             project_id=str(p["id"]),
             source_path=str(p["source_path"]),
-            kind=kind,
+            kind=p["kind"] if p.get("snapshot_sha") else None,
             git_url=p.get("git_url"),
             include_remotes=bool(p.get("include_remotes", True)),
             fetch_origin=bool(p.get("fetch_origin", False)),
             size_limit_mb=int(p.get("size_limit_mb") or 1024),
             file_limit_mb=int(p.get("file_limit_mb") or 100),
+            known=known,
+            bundle=bundle,
             issued_at=now_iso(),
             expires_at=iso_in(self.ttl_s),
             nonce=secrets.token_hex(32),
         )
-        raw = await self.hub.project_request(msg, self.ttl_s)
-        return ProjectSnapshotStatus.model_validate(raw)
 
     def _snapshot_args(self, p: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -143,7 +156,7 @@ class ProjectManager:
 
     async def _cleanup(self, target_id: str, project_id: str, task_id: str, args: dict[str, Any]) -> None:
         try:
-            status = await self._op(target_id, project_id, task_id, "remove", args)
+            status = await self.op(target_id, project_id, task_id, "remove", args)
         except (TargetUnavailable, ValidationError) as e:
             log.warning("project cleanup failed", extra={"project_id": project_id, "task_id": task_id, "error": str(e)})
             return
@@ -155,7 +168,7 @@ class ProjectManager:
     async def browse(self, target_id: str, path: str) -> dict[str, Any]:
         self._supports(await self.repo.get_target(target_id))
         try:
-            status = await self._op(target_id, "", "", "browse", {"path": path}, BROWSE_TIMEOUT_S)
+            status = await self.op(target_id, "", "", "browse", {"path": path}, BROWSE_TIMEOUT_S)
         except TargetUnavailable as e:
             raise ProjectError(str(e)) from e
         if status.state != "ok":
@@ -170,7 +183,7 @@ class ProjectManager:
         if not self.can(str(target["id"]), "branches"):
             raise ProjectError("this device's client is outdated; update it to pick a branch")
         try:
-            status = await self._op(str(target["id"]), project_id, "", "branches", self._snapshot_args(p), BROWSE_TIMEOUT_S)
+            status = await self.op(str(target["id"]), project_id, "", "branches", self._snapshot_args(p), BROWSE_TIMEOUT_S)
         except TargetUnavailable as e:
             raise ProjectError(str(e)) from e
         if status.state != "ok":
@@ -191,7 +204,7 @@ class ProjectManager:
             raise ProjectError("this device's client is outdated; update it to see the changes")
         args = {"base_sha": task["base_sha"], **({"path": path} if path else {})}
         try:
-            status = await self._op(target_id, str(task["project_id"]), str(task["id"]), "diff", args, DIFF_TIMEOUT_S)
+            status = await self.op(target_id, str(task["project_id"]), str(task["id"]), "diff", args, DIFF_TIMEOUT_S)
         except TargetUnavailable as e:
             raise ProjectError(str(e)) from e
         if status.state != "ok":
@@ -206,7 +219,7 @@ class ProjectManager:
         if not self.can(target_id, "revert"):
             raise ProjectError("this device's client is outdated; update it to revert files")
         try:
-            status = await self._op(target_id, str(task["project_id"]), str(task["id"]), "revert", {"base_sha": task["base_sha"], "path": path}, DIFF_TIMEOUT_S)
+            status = await self.op(target_id, str(task["project_id"]), str(task["id"]), "revert", {"base_sha": task["base_sha"], "path": path}, DIFF_TIMEOUT_S)
         except TargetUnavailable as e:
             raise ProjectError(str(e)) from e
         if status.state != "ok":
@@ -218,7 +231,7 @@ class ProjectManager:
         if not self.can(str(target["id"]), "docs"):
             raise ProjectError("this device's client is outdated; update it to see the project's files")
         try:
-            status = await self._op(str(target["id"]), project_id, "", "docs", self._snapshot_args(p), BROWSE_TIMEOUT_S)
+            status = await self.op(str(target["id"]), project_id, "", "docs", self._snapshot_args(p), BROWSE_TIMEOUT_S)
         except TargetUnavailable as e:
             raise ProjectError(str(e)) from e
         if status.state != "ok":
@@ -258,7 +271,7 @@ class ProjectManager:
         await self.repo.audit(
             self.workspace_id, "user", "project.created", {"project_id": project_id, "target_id": target["id"], "path": source_path, "git_url": body.git_url}
         )
-        self._start_refresh(project_id, detect=not body.git_url)
+        self._start_refresh(project_id)
         return self.view(await self.get(project_id))
 
     async def sync(self, project_id: str) -> dict[str, Any]:
@@ -266,11 +279,18 @@ class ProjectManager:
         self._supports(await self.repo.get_target(str(p["source_target_id"])))
         if project_id in self.jobs:
             raise ProjectError("the project is already being read")
-        self._start_refresh(project_id, detect=p["snapshot_sha"] is None)
+        self._start_refresh(project_id)
         return self.view(p)
 
-    def _start_refresh(self, project_id: str, detect: bool) -> None:
-        job = asyncio.create_task(self._refresh_job(project_id, detect))
+    async def refresh(self, project_id: str) -> None:
+        """Read the source again and wait for it, unless a read of this project is already running."""
+        if project_id in self.jobs:
+            return
+        self._start_refresh(project_id)
+        await asyncio.wait({self.jobs[project_id]})
+
+    def _start_refresh(self, project_id: str) -> None:
+        job = asyncio.create_task(self._refresh_job(project_id))
         self.jobs[project_id] = job
         job.add_done_callback(lambda t: self._forget(project_id, t))
 
@@ -278,9 +298,9 @@ class ProjectManager:
         if self.jobs.get(project_id) is job:
             del self.jobs[project_id]
 
-    async def _refresh_job(self, project_id: str, detect: bool) -> None:
+    async def _refresh_job(self, project_id: str) -> None:
         try:
-            await self._refresh(await self.get(project_id), detect)
+            await self._refresh(await self.get(project_id))
         except Exception as e:
             if not isinstance(e, ProjectError | TargetUnavailable):
                 log.exception("project snapshot failed", extra={"project_id": project_id})
@@ -288,11 +308,12 @@ class ProjectManager:
             with contextlib.suppress(Exception):
                 await self.repo.update_project(project_id, {"status": "error", "error": error})
 
-    async def _refresh(self, p: dict[str, Any], detect: bool) -> None:
+    async def _refresh(self, p: dict[str, Any]) -> None:
         self._supports(await self.repo.get_target(str(p["source_target_id"])))
-        status = await self._snapshot(p, None if detect else p["kind"])
-        if status.state == "error":
-            raise ProjectError(status.detail or "the device could not snapshot the folder")
+        status = await self.project_sync.sync_source(p)
+        if status.state == "unchanged":
+            await self.repo.update_project(str(p["id"]), {"last_sync_at": now_iso(), "status": "ready", "error": None})
+            return
         await self.repo.update_project(
             str(p["id"]),
             {
@@ -300,6 +321,7 @@ class ProjectManager:
                 "head_sha": status.head_sha,
                 "snapshot_sha": status.snapshot_sha,
                 "default_branch": status.branch,
+                "main_branch": status.main or p.get("main_branch"),
                 "size_bytes": status.size_bytes,
                 "skipped": status.skipped,
                 "last_sync_at": now_iso(),
@@ -307,7 +329,9 @@ class ProjectManager:
                 "error": None,
             },
         )
-        await self.repo.audit(self.workspace_id, "core", "project.synced", {"project_id": p["id"], "snapshot_sha": status.snapshot_sha, "size_bytes": status.size_bytes})
+        await self.repo.audit(
+            self.workspace_id, "core", "project.synced", {"project_id": p["id"], "snapshot_sha": status.snapshot_sha, "size_bytes": status.size_bytes, "refs": len(status.refs)}
+        )
 
     async def update(self, project_id: str, body: ProjectPatch) -> dict[str, Any]:
         await self.get(project_id)
@@ -330,6 +354,8 @@ class ProjectManager:
         p = await self.precheck_delete(project_id, remove_shadow)
         if remove_shadow or p["kind"] == "repo":
             await self._cleanup(str(p["source_target_id"]), project_id, "", {**self._snapshot_args(p), "delete_shadow": remove_shadow, "delete_clone": bool(p.get("git_url"))})
+        self.project_sync.mirror(project_id).delete()
+        await self.repo.delete_project_devices(project_id)
         await self.repo.delete_project(project_id)
         await self.repo.audit(self.workspace_id, "user", "project.deleted", {"project_id": project_id})
 
@@ -349,14 +375,20 @@ class ProjectManager:
         if project["kind"] == "repo" and self.can(str(task["target_id"]), "branches"):
             start = str(task.get("base_ref") or "default")
         args = {**self._snapshot_args(project), "branch": task["branch"], "start": start}
-        status = await self._op(str(task["target_id"]), str(project["id"]), str(task["id"]), "checkout", args, timeout_s=OP_TIMEOUT_S)
+        status = await self.op(str(task["target_id"]), str(project["id"]), str(task["id"]), "checkout", args, timeout_s=OP_TIMEOUT_S)
         if status.state == "ok":
             status.data.setdefault("base", start)
         return status
 
     async def commit(self, project: dict[str, Any], task: dict[str, Any], message: str) -> ProjectOpStatus:
+        target_id = str(task["target_id"])
         args = {**self._snapshot_args(project), "message": message, "base_sha": task.get("base_sha")}
-        return await self._op(str(task["target_id"]), str(project["id"]), str(task["id"]), "commit", args)
+        if Mirror.enabled() and self.project_sync.can_bundle(target_id):
+            args |= {"branch": task.get("branch"), "known_head": task.get("head_sha")}
+        status = await self.op(target_id, str(project["id"]), str(task["id"]), "commit", args)
+        if status.state == "ok":
+            await self.project_sync.publish(project, task, status)
+        return status
 
     async def remove(self, project: dict[str, Any], task: dict[str, Any]) -> None:
         args = {**self._snapshot_args(project), "branch": task.get("branch"), "delete_branch": project["kind"] == "folder"}

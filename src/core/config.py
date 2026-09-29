@@ -33,6 +33,10 @@ class ExecutionConfig(BaseModel):
     request_ttl_s: int = 120
 
 
+class ProjectsConfig(BaseModel):
+    sync_interval_s: int = 600
+
+
 class PluginsConfig(BaseModel):
     catalog_url: str | None = "https://mensarium.com/dist/plugins.json"
 
@@ -56,6 +60,7 @@ class CoreConfig(BaseModel):
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+    projects: ProjectsConfig = Field(default_factory=ProjectsConfig)
     log_level: str = "INFO"
 
 

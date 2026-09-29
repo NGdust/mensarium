@@ -1,9 +1,11 @@
 import asyncio
 import json
 import logging
+import re
 import secrets
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -11,7 +13,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from mensarium.contracts.gateway import SessionKind
-from mensarium.contracts.projects import ProjectOp, ProjectSnapshot
+from mensarium.contracts.projects import ProjectBundle, ProjectOp, ProjectSnapshot
 from mensarium.contracts.protocol import (
     AuthChallenge,
     AuthResponse,
@@ -27,11 +29,13 @@ from mensarium.contracts.protocol import (
     TargetUpdateStatus,
 )
 from mensarium.core.repo import Repo
+from mensarium.shared import bundles
 from mensarium.shared.crypto import sign, verify
 from mensarium.shared.ids import new_id
 from mensarium.shared.timeutil import iso_in, now_iso
 
 log = logging.getLogger(__name__)
+SAFE_REQUEST_ID = re.compile(r"[A-Za-z0-9_-]+")
 
 
 class TargetUnavailable(Exception):
@@ -66,6 +70,8 @@ class ClientHub:
         self.api: ApiHandler | None = None
         self.on_connect: Callable[[str], Coroutine[Any, Any, None]] | None = None
         self.tasks: set[asyncio.Task[None]] = set()
+        # Where bundle chunks of pending project requests land, as <request_id>.bundle; set by ProjectManager.
+        self.inbox: Path | None = None
 
     def is_online(self, target_id: str) -> bool:
         return target_id in self.connections
@@ -214,6 +220,14 @@ class ClientHub:
             plugin_waiter = conn.plugins.pop(answer.request_id, None)
             if plugin_waiter and not plugin_waiter.done() and verify(conn.public_key, msg):
                 plugin_waiter.set_result(answer)
+        elif kind == "project.bundle":
+            request_id = str(msg.get("request_id") or "")
+            if self.inbox is None or request_id not in conn.projects or not SAFE_REQUEST_ID.fullmatch(request_id):
+                return
+            try:
+                bundles.append_chunk(self.inbox / f"{request_id}.bundle", str(msg.get("data") or ""))
+            except (bundles.BundleTooLarge, ValueError, OSError) as e:
+                log.warning("bundle chunk dropped", extra={"target_id": conn.target_id, "error": str(e)})
         elif kind in ("project.snapshot.status", "project.op.status"):
             project_waiter = conn.projects.pop(str(msg.get("request_id") or ""), None)
             if project_waiter is None or project_waiter.done():
@@ -251,7 +265,8 @@ class ClientHub:
         finally:
             conn.plugins.pop(msg.request_id, None)
 
-    async def project_request(self, msg: ProjectSnapshot | ProjectOp, timeout_s: float) -> dict[str, Any]:
+    async def project_request(self, msg: ProjectSnapshot | ProjectOp, timeout_s: float, bundle: Path | None = None) -> dict[str, Any]:
+        """Send a signed project request, preceded by the chunks of `bundle`; the device's own chunks land in the inbox."""
         conn = self.connections.get(msg.target_id)
         if conn is None:
             raise TargetUnavailable("target is offline")
@@ -259,12 +274,18 @@ class ClientHub:
         fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         conn.projects[msg.request_id] = fut
         try:
+            if bundle is not None:
+                for seq, data in enumerate(bundles.chunks(bundle)):
+                    await conn.ws.send_json(ProjectBundle(request_id=msg.request_id, project_id=msg.project_id, seq=seq, data=data).model_dump())
             await conn.ws.send_json(msg.model_dump())
             return await asyncio.wait_for(fut, timeout_s)
         except TimeoutError as e:
             raise TargetUnavailable("the device did not answer the project request in time") from e
         finally:
             conn.projects.pop(msg.request_id, None)
+            # Without an answer nobody takes the chunks that did arrive.
+            if self.inbox is not None and not (fut.done() and not fut.cancelled() and fut.exception() is None):
+                (self.inbox / f"{msg.request_id}.bundle").unlink(missing_ok=True)
 
     async def update_device(self, target: dict[str, Any], version: str, ttl_s: int) -> TargetUpdateStatus:
         """Ask a device that allows remote updates to update its agent from this Core."""

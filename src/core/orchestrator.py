@@ -536,7 +536,7 @@ class Orchestrator:
         text = str(((last or {}).get("input") or {}).get("text") or "agent turn").strip().splitlines()[0][:72]
         try:
             status = await self.projects.commit(project, task, message or f"mensarium: {text}")
-        except TargetUnavailable as e:
+        except (TargetUnavailable, ProjectError) as e:
             await self.bus.emit(task_id, "task.project", {"kind": "commit", "error": str(e)})
             return
         if status.state != "ok":

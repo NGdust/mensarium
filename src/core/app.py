@@ -316,12 +316,17 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         plugins.device_tools_supported = lambda target_id: hub.supports(target_id, "mcp.call")
         plugins.gateway_loopback = hub.gateway_loopback
         plugins.core_port = cfg.server.port
-        hub.on_connect = plugins.sync_device
+        projects = ProjectManager(repo, workspace_id, hub, cfg.execution.request_ttl_s, cfg.projects.sync_interval_s)
+
+        async def on_connect(target_id: str) -> None:
+            await plugins.sync_device(target_id)
+            await projects.project_sync.on_connect(target_id)
+
+        hub.on_connect = on_connect
         await plugins.start()
         catalog = Catalog(cfg.plugins.catalog_url)
         orchestrator = Orchestrator(repo, hub, bus, provider, cfg, workspace_id, paths.artifacts, memory, plugins, skills, catalog, instructions)
         device = await ensure_device(repo, paths, cfg, public_key_b64(key), workspace_id)
-        projects = ProjectManager(repo, workspace_id, hub, cfg.execution.request_ttl_s)
         projects.device_id = device[0].target_id if device else None
         await projects.start()
         orchestrator.projects = projects

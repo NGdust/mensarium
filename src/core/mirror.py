@@ -80,6 +80,9 @@ class Mirror:
             raise MirrorError(out.strip()[:2000] or "git bundle create failed")
         return bundles.describe(path, refs, have)
 
+    async def update_ref(self, ref: str, sha: str) -> None:
+        await self._git("update-ref", ref, sha)
+
     async def delete_ref(self, ref: str) -> None:
         await self._git("update-ref", "-d", ref, check=False)
 
