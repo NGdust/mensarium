@@ -1,0 +1,19 @@
+id: mcp-linear
+name: Linear
+version: 1.0.0
+author: Linear
+summary:
+  en: Issues, projects and cycles through Linear's MCP server.
+  ru: Задачи, проекты и циклы через MCP-сервер Linear.
+description:
+  en: Connects to Linear's hosted MCP server. Sign in with the Connect button. The Core registers itself with Linear and keeps the tokens, nothing to copy by hand. Writes to Linear go through approval unless you lower the risk.
+  ru: Подключается к облачному MCP-серверу Linear. Войдите кнопкой Connect. Core сам регистрируется в Linear и хранит токены, копировать вручную ничего не нужно. Запись в Linear идёт через подтверждение, если не понизить риск.
+tags: [mcp, linear, issues]
+category: development
+homepage: https://linear.app/docs/mcp
+mcp:
+  transport: http
+  url: https://mcp.linear.app/mcp
+  risk: write
+oauth:
+  discover: true

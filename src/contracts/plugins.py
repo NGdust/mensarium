@@ -58,7 +58,8 @@ class CommandTool(BaseModel):
 
 
 Risk = Literal["read", "write", "execute", "network", "destructive"]
-BUILTINS = ("web_search", "web_fetch")
+BUILTINS = ("web_search", "web_fetch", "google_gmail", "google_drive")
+Builtin = Literal["web_search", "web_fetch", "google_gmail", "google_drive"]
 Category = Literal[
     "development", "browser", "web", "databases", "cloud", "observability",
     "productivity", "communication", "automation", "system", "other",
@@ -110,6 +111,31 @@ class McpTemplate(BaseModel):
         return {m for part in parts for m in PLACEHOLDER.findall(part)}
 
 
+class OAuthSpec(BaseModel):
+    """How the plugin signs the user in: discovery + dynamic registration on the MCP server, or fixed endpoints
+    with a client the user registered (`{key}` placeholders from the plugin config)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    discover: bool = False
+    authorize_url: str | None = None
+    token_url: str | None = None
+    client_id: str | None = None
+    client_secret: str | None = None
+    scopes: list[str] = []
+    optional_scopes: dict[str, str] = Field({}, description="Boolean config key -> scope added when it is on")
+    params: dict[str, str] = {}
+
+    @model_validator(mode="after")
+    def _check(self) -> "OAuthSpec":
+        if not self.discover and not (self.authorize_url and self.token_url and self.client_id):
+            raise ValueError("oauth needs `discover: true` or `authorize_url`, `token_url` and `client_id`")
+        return self
+
+    def placeholders(self) -> set[str]:
+        return {m for part in (self.client_id or "", self.client_secret or "") for m in PLACEHOLDER.findall(part)}
+
+
 class Plugin(BaseModel):
     """A plugin: command tools for devices, a built-in Core tool, an MCP server, or a mix."""
 
@@ -126,8 +152,9 @@ class Plugin(BaseModel):
     homepage: str | None = None
     config: dict[str, ConfigField] = {}
     tools: list[CommandTool] = []
-    builtin: Literal["web_search", "web_fetch"] | None = Field(None, description="Core tools shipped with Mensarium")
+    builtin: Builtin | None = Field(None, description="Core tools shipped with Mensarium")
     mcp: McpTemplate | None = None
+    oauth: OAuthSpec | None = None
 
     @model_validator(mode="after")
     def _check(self) -> "Plugin":
@@ -138,6 +165,15 @@ class Plugin(BaseModel):
             raise ValueError("tool names must be unique")
         if self.mcp and (missing := self.mcp.placeholders() - set(self.config)):
             raise ValueError(f"mcp uses undeclared config keys {sorted(missing)}")
+        if self.oauth:
+            if self.oauth.discover and not (self.mcp and self.mcp.transport == "http"):
+                raise ValueError("oauth discovery needs an http MCP server")
+            if self.mcp and self.mcp.placement != "core":
+                raise ValueError("a plugin that signs in with OAuth runs only in the Core")
+            if missing := self.oauth.placeholders() - set(self.config):
+                raise ValueError(f"oauth uses undeclared config keys {sorted(missing)}")
+            if bad := [k for k in self.oauth.optional_scopes if self.config.get(k) is None or self.config[k].type != "boolean"]:
+                raise ValueError(f"optional_scopes keys must be boolean settings: {bad}")
         return self
 
     def secret_keys(self) -> set[str]:

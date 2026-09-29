@@ -1,43 +1,19 @@
 id: mcp-atlassian
 name: Atlassian
-version: 1.0.0
-author: Community
+version: 2.0.0
+author: Atlassian
 summary:
-  en: Search and read Jira issues and Confluence pages through the community mcp-atlassian server.
-  ru: Поиск и чтение задач Jira и страниц Confluence через community-сервер mcp-atlassian.
+  en: Search and read Jira issues and Confluence pages through Atlassian's hosted MCP server.
+  ru: Поиск и чтение задач Jira и страниц Confluence через облачный MCP-сервер Atlassian.
 description:
-  en: Runs mcp-atlassian with uvx. Jira and Confluence are configured independently, fill in only the fields for the product you use and leave the other blank. All fields are optional, but at least one product needs to be configured for any tools to appear. Tokens stay in the Core.
-  ru: Запускает mcp-atlassian через uvx. Jira и Confluence настраиваются независимо, заполните только поля нужного продукта, остальные оставьте пустыми. Все поля необязательны, но хотя бы один продукт должен быть настроен, чтобы появились инструменты. Токены хранятся в Core.
+  en: Connects to Atlassian's hosted MCP server for Jira and Confluence Cloud. Sign in with the Connect button. The Core registers itself with Atlassian and keeps the tokens, nothing to copy by hand. Self-hosted Jira and Confluence are not covered. Writes go through approval unless you lower the risk.
+  ru: Подключается к облачному MCP-серверу Atlassian для Jira и Confluence Cloud. Войдите кнопкой Connect. Core сам регистрируется в Atlassian и хранит токены, копировать вручную ничего не нужно. Self-hosted Jira и Confluence не поддерживаются. Запись идёт через подтверждение, если не понизить риск.
 tags: [mcp, jira, confluence, atlassian]
 category: productivity
-homepage: https://github.com/sooperset/mcp-atlassian
-config:
-  jira_url:
-    title: {en: Jira URL, ru: URL Jira}
-    placeholder: "https://your-domain.atlassian.net"
-  jira_username:
-    title: {en: Jira username (email), ru: Имя пользователя Jira (email)}
-  jira_api_token:
-    secret: true
-    title: {en: Jira API token, ru: API-токен Jira}
-    help: {en: "https://id.atlassian.com/manage-profile/security/api-tokens", ru: "https://id.atlassian.com/manage-profile/security/api-tokens"}
-  confluence_url:
-    title: {en: Confluence URL, ru: URL Confluence}
-    placeholder: "https://your-domain.atlassian.net/wiki"
-  confluence_username:
-    title: {en: Confluence username (email), ru: Имя пользователя Confluence (email)}
-  confluence_api_token:
-    secret: true
-    title: {en: Confluence API token, ru: API-токен Confluence}
-    help: {en: "https://id.atlassian.com/manage-profile/security/api-tokens", ru: "https://id.atlassian.com/manage-profile/security/api-tokens"}
+homepage: https://www.atlassian.com/platform/remote-mcp-server
 mcp:
-  command: uvx
-  args: [mcp-atlassian]
-  env:
-    JIRA_URL: "{jira_url}"
-    JIRA_USERNAME: "{jira_username}"
-    JIRA_API_TOKEN: "{jira_api_token}"
-    CONFLUENCE_URL: "{confluence_url}"
-    CONFLUENCE_USERNAME: "{confluence_username}"
-    CONFLUENCE_API_TOKEN: "{confluence_api_token}"
+  transport: http
+  url: https://mcp.atlassian.com/v1/mcp
   risk: write
+oauth:
+  discover: true

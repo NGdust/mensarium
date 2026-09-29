@@ -784,6 +784,7 @@ a.chip:hover { text-decoration: none; }
 .row-title { display: flex; align-items: center; gap: 10px; font-weight: 550; }
 .row-desc { margin-top: 2px; color: var(--muted); font-size: 13px; word-wrap: break-word; }
 .row-desc code { font-size: 12px; color: var(--text-2); }
+.row-desc.warn { color: var(--warn); }
 .row-value { flex: none; max-width: 55%; display: flex; align-items: center; gap: 10px; color: var(--text-2); font-size: 13.5px; text-align: right; }
 .row-value.mono { font-size: 12.5px; word-break: break-all; }
 .row-extra { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 20px 16px; margin-top: -4px; }

@@ -1,25 +1,19 @@
 id: mcp-notion
 name: Notion
-version: 1.0.0
+version: 2.0.0
 author: Notion
 summary:
   en: Search, read and edit Notion pages and databases through Notion's official MCP server.
   ru: Поиск, чтение и правка страниц и баз данных Notion через официальный MCP-сервер Notion.
 description:
-  en: Runs @notionhq/notion-mcp-server with npx and your internal integration secret. The secret stays in the Core. Share only the pages and databases you connect to the integration; writes to Notion go through approval unless you lower the risk.
-  ru: Запускает @notionhq/notion-mcp-server через npx с вашим секретом внутренней интеграции. Секрет хранится в Core. Открывайте интеграции доступ только к нужным страницам и базам; запись в Notion идёт через подтверждение, если не понизить риск.
+  en: Connects to Notion's hosted MCP server. Sign in with the Connect button. The Core registers itself with Notion and keeps the tokens, nothing to copy by hand. Writes to Notion go through approval unless you lower the risk.
+  ru: Подключается к облачному MCP-серверу Notion. Войдите кнопкой Connect. Core сам регистрируется в Notion и хранит токены, копировать вручную ничего не нужно. Запись в Notion идёт через подтверждение, если не понизить риск.
 tags: [mcp, notion, productivity]
 category: productivity
 homepage: https://github.com/makenotion/notion-mcp-server
-config:
-  token:
-    secret: true
-    required: true
-    title: {en: Internal integration secret, ru: Секрет внутренней интеграции}
-    help: {en: "https://www.notion.so/profile/integrations", ru: "https://www.notion.so/profile/integrations"}
 mcp:
-  command: npx
-  args: ["-y", "@notionhq/notion-mcp-server"]
-  env:
-    NOTION_TOKEN: "{token}"
+  transport: http
+  url: https://mcp.notion.com/mcp
   risk: write
+oauth:
+  discover: true

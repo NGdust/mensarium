@@ -224,6 +224,31 @@ class WebFetchArgs(_Args):
     max_chars: int = Field(20000, ge=500, le=100000, description="Longest text to return")
 
 
+class GmailSearchArgs(_Args):
+    query: str = Field(min_length=1, max_length=500, description="Gmail search query, e.g. 'from:alice newer_than:7d'")
+    max_results: int = Field(10, ge=1, le=25, description="How many messages to list")
+
+
+class GmailReadArgs(_Args):
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$", description="Message id from gmail.search")
+
+
+class GmailSendArgs(_Args):
+    to: str = Field(min_length=3, max_length=500, description="Recipient addresses, comma separated")
+    subject: str = Field(max_length=500, description="Subject line")
+    body: str = Field(min_length=1, max_length=50000, description="Plain-text body")
+    reply_to_id: str | None = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$", description="Message id to reply to, keeps the thread")
+
+
+class DriveSearchArgs(_Args):
+    query: str = Field(min_length=1, max_length=500, description="Words to find, or a Drive query like \"name contains 'report'\"")
+    max_results: int = Field(10, ge=1, le=25, description="How many files to list")
+
+
+class DriveReadArgs(_Args):
+    id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$", description="File id from drive.search")
+
+
 class PluginsFindArgs(_Args):
     query: str = Field(min_length=1, max_length=200, description="What the plugin should do: 'web search', 'github', 'postgres', 'browser'")
 
@@ -275,6 +300,11 @@ CORE_TOOL_ARGS: dict[str, type[BaseModel]] = {
     "memory.save": MemorySaveArgs,
     "web.search": WebSearchArgs,
     "web.fetch": WebFetchArgs,
+    "gmail.search": GmailSearchArgs,
+    "gmail.read": GmailReadArgs,
+    "gmail.send": GmailSendArgs,
+    "drive.search": DriveSearchArgs,
+    "drive.read": DriveReadArgs,
     "plugins.find": PluginsFindArgs,
     "plugins.install": PluginsInstallArgs,
     "plan.update": PlanUpdateArgs,

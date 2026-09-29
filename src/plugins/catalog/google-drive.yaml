@@ -1,0 +1,30 @@
+id: google-drive
+name: {en: Google Drive, ru: Google Drive}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Find and read files in your Google Drive (Docs, Sheets, Slides, text files, PDFs), read-only.
+  ru: Поиск и чтение файлов в вашем Google Drive (Docs, Sheets, Slides, текстовые файлы, PDF), только чтение.
+description:
+  en: Runs in the Core, read-only. Uses the same Google Cloud OAuth client as the Gmail plugin. If you already set one up there, reuse its client id and client secret here. Otherwise create your own once. In Google Cloud Console create a project, enable the Google Drive API, configure the OAuth consent screen (External, add yourself as a test user), create an OAuth client of type "Web application" and add the redirect URI shown in this plugin's settings. Paste the client id and client secret here and press Connect. While the app stays in "Testing" Google drops the sign-in after 7 days, so publish the app ("In production") for permanent access; the "unverified app" warning is expected.
+  ru: Работает в Core, только чтение. Использует тот же OAuth-клиент Google Cloud, что и плагин Gmail. Если он уже настроен, переиспользуйте его client id и client secret здесь. Иначе создайте свой. В Google Cloud Console создайте проект, включите Google Drive API, настройте OAuth consent screen (External, добавьте себя в test users), создайте OAuth-клиент типа "Web application" и добавьте redirect URI, показанный в настройках этого плагина. Вставьте client id и client secret сюда и нажмите Connect. Пока приложение в статусе "Testing", Google сбрасывает вход через 7 дней. Опубликуйте приложение ("In production") для постоянного доступа; предупреждение "unverified app". Это ожидаемо.
+tags: [google, drive, documents]
+category: productivity
+homepage: https://console.cloud.google.com/apis/credentials
+builtin: google_drive
+config:
+  client_id:
+    required: true
+    title: {en: OAuth client id, ru: Client ID OAuth-клиента}
+    placeholder: "1234-abc.apps.googleusercontent.com"
+  client_secret:
+    secret: true
+    required: true
+    title: {en: OAuth client secret, ru: Секрет OAuth-клиента}
+oauth:
+  authorize_url: https://accounts.google.com/o/oauth2/v2/auth
+  token_url: https://oauth2.googleapis.com/token
+  client_id: "{client_id}"
+  client_secret: "{client_secret}"
+  scopes: ["https://www.googleapis.com/auth/drive.readonly"]
+  params: {access_type: offline, prompt: consent}

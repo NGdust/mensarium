@@ -92,7 +92,9 @@ def create_gateway_app(cfg: ClientConfig, paths: ClientPaths, tunnel: Tunnel) ->
 
     @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False)
     async def relay(path: str, request: Request) -> Response:
-        require_login(request)
+        # the OAuth provider redirects the browser here without the UI cookie; the Core checks the one-time state
+        if not (request.method == "GET" and path == "oauth/callback"):
+            require_login(request)
         body = await request.body()
         if len(body) > MAX_REQUEST_BODY:
             raise HTTPException(413, "request body too large")

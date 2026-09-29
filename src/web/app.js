@@ -347,7 +347,7 @@ const TEMPLATES = [
   ['terminal', tr('Why tests are failing'), tr('Run the project\'s tests, find why they\'re failing, and explain it. Don\'t change files yet.')],
   ['git', tr('What changed'), tr('Show what changed in the repository since the last commit, and briefly describe the changes.')],
 ];
-const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'files.stat': 'file', 'files.find': 'search', 'files.write': 'file', 'files.edit': 'file', 'files.mkdir': 'folder', 'files.move': 'folder', 'files.copy': 'folder', 'files.delete': 'trash', 'git.status': 'git', 'git.diff': 'git', 'system.info': 'cpu', 'process.list': 'cpu', 'process.kill': 'ban', 'net.ports': 'link', 'net.http': 'globe', 'shell.exec': 'terminal', 'shell.bash': 'terminal', 'screen.capture': 'laptop', 'screen.windows': 'sidebar', 'input.mouse': 'cpu', 'input.type': 'cpu', 'input.key': 'cpu', 'app.open': 'bolt', 'system.volume': 'pulse', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph', 'web.search': 'globe', 'web.fetch': 'globe', 'plan.update': 'list', 'agent.spawn': 'agents', 'agent.wait': 'agents' };
+const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'files.stat': 'file', 'files.find': 'search', 'files.write': 'file', 'files.edit': 'file', 'files.mkdir': 'folder', 'files.move': 'folder', 'files.copy': 'folder', 'files.delete': 'trash', 'git.status': 'git', 'git.diff': 'git', 'system.info': 'cpu', 'process.list': 'cpu', 'process.kill': 'ban', 'net.ports': 'link', 'net.http': 'globe', 'shell.exec': 'terminal', 'shell.bash': 'terminal', 'screen.capture': 'laptop', 'screen.windows': 'sidebar', 'input.mouse': 'cpu', 'input.type': 'cpu', 'input.key': 'cpu', 'app.open': 'bolt', 'system.volume': 'pulse', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph', 'web.search': 'globe', 'web.fetch': 'globe', 'gmail.search': 'send', 'gmail.read': 'send', 'gmail.send': 'send', 'drive.search': 'folder', 'drive.read': 'file', 'plan.update': 'list', 'agent.spawn': 'agents', 'agent.wait': 'agents' };
 // Plugin texts are either plain strings or {en, ru} maps.
 const txt = (v) => (typeof v === 'string' ? v : (v?.[lang] || v?.en || ''));
 // Plain text with bare https links turned into anchors; everything else stays text.
@@ -3003,7 +3003,9 @@ function openInstructionEditor(f, limit, onSaved) {
 function pluginState(p, devices) {
   if (!p.installed) return null;
   if (!p.installed.enabled) return [tr('Off'), ''];
+  if (p.missing.includes('_oauth') && p.missing.length === 1) return [tr('Not connected'), 'warn'];
   if (p.missing.length) return [tr('Needs setup'), 'warn'];
+  if (p.oauth?.rescope) return [tr('Reconnect to grant access'), 'warn'];
   if (!p.provides.mcp) return null;
   const where = p.placement === 'core' ? 'Core' : devices[p.placement]?.name || tr('device');
   const st = p.status || {};
@@ -3100,6 +3102,57 @@ async function settingsPlugins(shell) {
     return { rows, collect };
   }
 
+  function toolRows(p, tools) {
+    const disabled = new Set(p.disabled_tools || []);
+    const granted = new Set(p.oauth?.scope || []);
+    return h('div', { class: 'tool-rows' }, tools.map((t) => {
+      const noScope = t.scope && p.oauth?.connected && !granted.has(t.scope);
+      return h('div', { class: 'tool-row' },
+        icon('plug'),
+        h('div', { class: 'row-text' },
+          h('div', { class: 'tool-row-title' }, t.name, t.risk ? h('span', { class: 'pill' }, RISK_SHORT[t.risk] || t.risk) : null),
+          t.description ? h('div', { class: 'row-desc' }, t.description.slice(0, 220)) : null,
+          noScope ? h('div', { class: 'row-desc warn' }, tr('Access not granted: turn it on in the settings and reconnect.')) : null),
+        p.installed ? toggleSwitch(!disabled.has(t.name), { label: t.name, onChange: async (v) => {
+          if (v) disabled.delete(t.name); else disabled.add(t.name);
+          Object.assign(p, await api(`/v1/plugins/${p.id}/config`, { method: 'PUT', body: JSON.stringify({ disabled_tools: [...disabled] }) }));
+        } }) : null);
+    }));
+  }
+
+  function accountBlock(p, reopen) {
+    if (!p.oauth) return null;
+    const o = p.oauth;
+    const needs = p.missing.filter((k) => k in (p.settings || {}));
+    const redirect = location.origin + o.redirect_path;
+    const connect = h('button', { class: `btn btn-sm${o.connected ? '' : ' btn-primary'}`, disabled: !p.installed || needs.length > 0 }, icon('link'), o.connected ? tr('Reconnect') : tr('Connect'));
+    connect.addEventListener('click', async () => {
+      connect.disabled = true;
+      try {
+        const { url } = await post(`/v1/plugins/${p.id}/oauth/start`, { origin: location.origin });
+        const tab = window.open(url, '_blank', 'noopener');
+        const onMessage = async (ev) => {
+          if (ev.data?.mensarium !== 'oauth') return;
+          window.removeEventListener('message', onMessage);
+          if (ev.data.ok) toast(tr('Connected'));
+          await reopen();
+        };
+        window.addEventListener('message', onMessage);
+        if (!tab) toast(tr('Allow pop-ups for this page to sign in'));
+      } catch (err) { fail(err); } finally { connect.disabled = false; }
+    });
+    const disconnect = o.connected ? h('button', { class: 'btn btn-sm', onclick: async () => {
+      try { await api(`/v1/plugins/${p.id}/oauth`, { method: 'DELETE' }); toast(tr('Disconnected')); await reopen(); } catch (err) { fail(err); }
+    } }, tr('Disconnect')) : null;
+    const state = o.connected
+      ? [h('span', { class: 'dot ok' }), h('span', {}, o.rescope ? tr('Connected, but not for everything that is turned on: reconnect') : tr('Connected {0}', fmtDate(o.connected_at)))]
+      : [h('span', { class: 'dot' }), h('span', {}, needs.length ? tr('Save the settings above, then connect') : tr('Not connected'))];
+    return h('div', { class: 'plugin-mcp' },
+      h('div', { class: 'field-label' }, tr('Account')),
+      h('div', { class: `plugin-status ${o.connected ? 'ok' : ''}` }, ...state, h('span', { class: 'spacer' }), disconnect, ' ', connect),
+      o.own_client ? h('div', { class: 'row-desc' }, tr('Redirect URI for the OAuth client: '), h('code', {}, redirect), ' ', copyBtn(redirect)) : null);
+  }
+
   function mcpBlock(p, onChange) {
     if (!p.provides.mcp) return null;
     const m = p.mcp || {};
@@ -3109,14 +3162,7 @@ async function settingsPlugins(shell) {
       Object.values(devices).map((d) => h('option', { value: d.id, selected: p.placement === d.id, disabled: !d.plugins && p.placement !== d.id }, d.plugins ? d.name : tr('{0} (agent too old or offline)', d.name))),
       p.placement ? null : h('option', { value: '', selected: true, disabled: true }, tr('Choose a device')));
     const risk = h('select', { 'aria-label': tr('Risk') }, RISK_CHOICES.map(([k, label]) => h('option', { value: k, selected: k === p.risk }, label)));
-    const disabled = new Set(p.disabled_tools || []);
-    const toolsList = (st.tools || []).length ? h('div', { class: 'tool-rows' }, st.tools.map((t) => h('div', { class: 'tool-row' },
-      icon('plug'),
-      h('div', { class: 'row-text' }, h('div', { class: 'tool-row-title' }, t.name), t.description ? h('div', { class: 'row-desc' }, t.description.slice(0, 220)) : null),
-      toggleSwitch(!disabled.has(t.name), { label: t.name, onChange: async (v) => {
-        if (v) disabled.delete(t.name); else disabled.add(t.name);
-        Object.assign(p, await api(`/v1/plugins/${p.id}/config`, { method: 'PUT', body: JSON.stringify({ disabled_tools: [...disabled] }) }));
-      } })))) : null;
+    const toolsList = (st.tools || []).length ? toolRows(p, st.tools) : null;
     const probe = h('button', { class: 'btn btn-sm', onclick: async () => {
       probe.disabled = true;
       probe.replaceChildren(h('span', { class: 'spinner' }), tr('Connecting...'));
@@ -3140,8 +3186,11 @@ async function settingsPlugins(shell) {
 
   function details(p) {
     const form = settingsForm(p);
-    const mcp = mcpBlock(p, () => { closeLayer(); details(items.find((x) => x.id === p.id) || p); });
-    const coreRisk = !p.provides.mcp && p.provides.core_tools.length
+    const reopen = async () => { closeLayer(); await load(); details(items.find((x) => x.id === p.id) || p); };
+    const mcp = mcpBlock(p, reopen);
+    const account = accountBlock(p, reopen);
+    const coreTools = p.core_tools || [];
+    const coreRisk = !p.provides.mcp && coreTools.some((t) => !t.risk)
       ? h('select', { 'aria-label': tr('Risk') }, RISK_CHOICES.map(([k, label]) => h('option', { value: k, selected: k === p.risk }, label)))
       : null;
     const save = h('button', { class: 'btn btn-primary' }, p.installed ? tr('Save') : tr('Install'));
@@ -3162,7 +3211,11 @@ async function settingsPlugins(shell) {
       } catch (err) { fail(err); } finally { save.disabled = false; }
     });
     const what = [
-      p.provides.core_tools.length ? h('div', { class: 'plugin-provides' }, icon('globe'), h('div', { class: 'row-text' }, h('div', { class: 'tool-row-title' }, tr('Tools in Core: {0}', p.provides.core_tools.join(', '))), h('div', { class: 'row-desc' }, tr('They run on the Core server; requests to the network go through approval unless you lower the risk.')), coreRisk ? h('label', { class: 'plugin-field plugin-risk' }, h('div', { class: 'plugin-field-head' }, h('span', {}, tr('Risk of its tools'))), coreRisk) : null)) : null,
+      coreTools.length ? h('div', { class: 'plugin-mcp' },
+        h('div', { class: 'field-label' }, tr('Tools in Core')),
+        h('div', { class: 'row-desc' }, coreRisk ? tr('They run on the Core server; requests to the network go through approval unless you lower the risk.') : tr('They run on the Core server; each tool carries its own risk, and a switch turns it off for the agent.')),
+        coreRisk ? h('label', { class: 'plugin-field plugin-risk' }, h('div', { class: 'plugin-field-head' }, h('span', {}, tr('Risk of its tools'))), coreRisk) : null,
+        toolRows(p, coreTools)) : null,
       p.tools.length ? [h('div', { class: 'field-label' }, tr('Tools on devices')), h('div', { class: 'market-tools' }, p.tools.map((t) => h('div', { class: 'market-tool' },
         h('div', { class: 'market-tool-head' }, h('code', {}, t.name), h('span', { class: 'pill' }, RISK_SHORT[t.risk] || t.risk)),
         h('div', { class: 'row-desc' }, t.description),
@@ -3172,10 +3225,11 @@ async function settingsPlugins(shell) {
     openModal(
       h('div', { class: 'modal-head' }, h('h2', {}, txt(p.name)), h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
       h('div', { class: 'market-meta' }, [p.author, tr('version {0}', p.installed ? p.installed.version : p.version), p.installed?.source === 'custom' ? tr('your plugin') : null].filter(Boolean).join(' · '), p.homepage ? [' · ', h('a', { href: p.homepage, target: '_blank', rel: 'noopener' }, tr('Website'))] : null, state ? [' ', h('span', { class: `pill ${state[1]}` }, state[0])] : null),
-      h('p', {}, txt(p.description) || txt(p.summary)),
+      h('p', {}, linkify(txt(p.description) || txt(p.summary))),
       what,
       mcp ? mcp.el : null,
       form.rows.length ? [h('div', { class: 'field-label' }, tr('Settings')), h('div', { class: 'plugin-form' }, form.rows)] : null,
+      account,
       h('div', { class: 'modal-actions' },
         p.installed ? h('button', { class: 'btn btn-danger btn-sm', onclick: () => remove(p) }, tr('Remove')) : null,
         h('span', { class: 'spacer' }),

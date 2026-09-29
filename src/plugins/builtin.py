@@ -22,6 +22,10 @@ class BuiltinError(Exception):
     pass
 
 
+class AuthError(BuiltinError):
+    """The provider rejected the access token: a refreshed one may help."""
+
+
 async def web_search(config: dict[str, Any], args: dict[str, Any]) -> str:
     key = config.get("api_key")
     if not key:

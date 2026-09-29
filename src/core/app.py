@@ -17,7 +17,14 @@ from urllib.parse import quote, urlparse
 
 import yaml
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
@@ -47,6 +54,7 @@ from mensarium.core.events import EventBus
 from mensarium.core.instructions import InstructionError, InstructionStore
 from mensarium.core.limits import LimitsStore
 from mensarium.core.memory import KINDS, Memory, NoteError
+from mensarium.core.oauth import callback_page
 from mensarium.core.orchestrator import Orchestrator, TaskError, full_access, missing_tools
 from mensarium.core.plugins import PluginError, PluginManager
 from mensarium.core.projects import ProjectManager
@@ -195,6 +203,10 @@ class DreamSettings(BaseModel):
 
 class InstallBody(BaseModel):
     id: str
+
+
+class OAuthStartBody(BaseModel):
+    origin: str = Field(pattern=r"^https?://[^/\s]+$", max_length=300)
 
 
 class PluginConfigBody(BaseModel):
@@ -892,6 +904,35 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     async def probe_plugin(plugin_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
         try:
             await c.plugins.probe(plugin_id)
+        except PluginError as e:
+            raise plugin_error(e) from e
+        return await plugin_view(c, plugin_id)
+
+    @app.post("/v1/plugins/{plugin_id}/oauth/start")
+    async def oauth_start(plugin_id: str, body: OAuthStartBody, c: Core = Depends(auth)) -> dict[str, str]:
+        try:
+            return {"url": await c.plugins.oauth_start(plugin_id, body.origin)}
+        except PluginError as e:
+            raise plugin_error(e) from e
+
+    @app.get("/v1/oauth/callback", include_in_schema=False)
+    async def oauth_callback(request: Request, state: str = "", code: str = "", error: str = "", error_description: str = "") -> HTMLResponse:
+        """The provider sends the browser here; the UI cookie is not sent on that cross-site redirect, the one-time `state` is the proof."""
+        c = core(request)
+        if not state:
+            raise HTTPException(400, "state is required")
+        if error or not code:
+            return HTMLResponse(callback_page(False, "", error_description or error or "no authorization code"))
+        try:
+            plugin_id = await c.plugins.oauth_finish(state, code)
+        except PluginError as e:
+            return HTMLResponse(callback_page(False, "", str(e)))
+        return HTMLResponse(callback_page(True, plugin_id, "You can close this tab and go back to Mensarium."))
+
+    @app.delete("/v1/plugins/{plugin_id}/oauth")
+    async def oauth_disconnect(plugin_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            await c.plugins.oauth_disconnect(plugin_id)
         except PluginError as e:
             raise plugin_error(e) from e
         return await plugin_view(c, plugin_id)

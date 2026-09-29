@@ -27,6 +27,10 @@ class McpError(Exception):
     pass
 
 
+class McpAuthError(McpError):
+    """The server rejected the credentials (HTTP 401): a fresh token may help."""
+
+
 @dataclass
 class McpServer:
     """A server definition after config placeholders were filled."""
@@ -263,6 +267,8 @@ class HttpMcp(McpClient):
             resp = await self.client.post(str(self.server.url), json=msg, headers=self._headers(), timeout=timeout or self.timeout_s)
         except httpx.HTTPError as e:
             raise McpError(f"cannot reach {self.server.url}: {e}") from e
+        if resp.status_code == 401:
+            raise McpAuthError(f"HTTP 401: {resp.text[:300]}")
         if resp.status_code >= 400:
             raise McpError(f"HTTP {resp.status_code}: {resp.text[:300]}")
         if sid := resp.headers.get("mcp-session-id"):

@@ -1,0 +1,36 @@
+id: google-gmail
+name: {en: Gmail, ru: Gmail}
+version: 1.0.0
+author: Mensarium
+summary:
+  en: Search, read and send mail in your Gmail.
+  ru: Поиск, чтение и отправка писем в вашем Gmail.
+description:
+  en: Runs the gmail.search, gmail.read and gmail.send tools in the Core. Google has no shared sign-in for self-hosted apps, so you create your own OAuth client once. In Google Cloud Console create a project, enable the Gmail API, configure the OAuth consent screen (External, add yourself as a test user), create an OAuth client of type "Web application" and add the redirect URI shown in this plugin's settings. Paste the client id and client secret here and press Connect. While the app stays in "Testing" Google drops the sign-in after 7 days, so publish the app ("In production") for permanent access; the "unverified app" warning is expected. Sending is off by default. Turn on "Allow sending" and reconnect; every sent email goes through approval. The same client works for the Google Drive plugin.
+  ru: Инструменты gmail.search, gmail.read и gmail.send работают в Core. У Google нет общего входа для самостоятельно установленных приложений, поэтому один раз создайте свой OAuth-клиент. В Google Cloud Console создайте проект, включите Gmail API, настройте OAuth consent screen (External, добавьте себя в test users), создайте OAuth-клиент типа "Web application" и добавьте redirect URI, показанный в настройках этого плагина. Вставьте client id и client secret сюда и нажмите Connect. Пока приложение в статусе "Testing", Google сбрасывает вход через 7 дней. Опубликуйте приложение ("In production") для постоянного доступа; предупреждение "unverified app". Это ожидаемо. Отправка писем выключена по умолчанию. Включите "Allow sending" и переподключитесь; каждое отправленное письмо идёт через подтверждение. Тот же клиент подходит для плагина Google Drive.
+tags: [google, gmail, email]
+category: communication
+homepage: https://console.cloud.google.com/apis/credentials
+builtin: google_gmail
+config:
+  client_id:
+    required: true
+    title: {en: OAuth client id, ru: Client ID OAuth-клиента}
+    placeholder: "1234-abc.apps.googleusercontent.com"
+  client_secret:
+    secret: true
+    required: true
+    title: {en: OAuth client secret, ru: Секрет OAuth-клиента}
+  send:
+    type: boolean
+    default: false
+    title: {en: Allow sending mail, ru: Разрешить отправку писем}
+    help: {en: "Adds the gmail.send tool; reconnect after changing this", ru: "Добавляет инструмент gmail.send; после изменения переподключите аккаунт"}
+oauth:
+  authorize_url: https://accounts.google.com/o/oauth2/v2/auth
+  token_url: https://oauth2.googleapis.com/token
+  client_id: "{client_id}"
+  client_secret: "{client_secret}"
+  scopes: ["https://www.googleapis.com/auth/gmail.readonly"]
+  optional_scopes: {send: "https://www.googleapis.com/auth/gmail.send"}
+  params: {access_type: offline, prompt: consent}
