@@ -1,6 +1,6 @@
-// Memory map: the central note in the middle and every other note on rings by how many links away it is,
-// drawn like the product's diagrams: a lit hub, tiles on a dotted field, lines in the colour of a note's type.
-// Drag the background to pan, zoom with the wheel or a pinch; picking a note lights its path to the centre.
+// Memory map: the central note in the middle, every other note in the sector of its type around it, the important
+// ones nearest the centre, drawn like the product's diagrams: a lit hub, tiles on a dotted field, lines in the colour
+// of a note's type. Drag the background to pan, zoom with the wheel or a pinch; picking a note lights its links.
 
 import { createOrb } from './orb.js';
 
@@ -48,80 +48,91 @@ const svgEl = (tag, attrs = {}) => {
 };
 const polar = (r, a) => ({ x: r * Math.cos(a), y: r * Math.sin(a) });
 
-// A radial tree: breadth-first from the centre over links in both directions; a note nothing leads to is hung
-// on the centre with a dashed line. Every leaf gets the same slice of the circle, first-ring notes are grouped by type.
+const INNER = 260;
+const STEP = 124;
+const GAP = 124;
+const SECTOR_GAP = 0.12;
+
+// Areas: every note kind gets a sector of the circle, wide in proportion to its notes. Inside a sector the notes
+// fill rings from the inside out, the pinned and important ones first, so what matters most sits nearest the centre.
+// A ghost (a title that is linked to but has no note yet) sits in the sector of the note that mentions it.
 export function layoutMemory(nodes, links, centerId) {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const adj = new Map(nodes.map((n) => [n.id, new Set()]));
   for (const l of links) {
     if (l.source !== l.target && adj.has(l.source) && adj.has(l.target)) { adj.get(l.source).add(l.target); adj.get(l.target).add(l.source); }
   }
-  const weight = (id) => (byId.get(id).pinned ? 50 : 0) + (byId.get(id).weight || 0) + adj.get(id).size;
-  const kindRank = (id) => { const i = KIND_ORDER.indexOf(byId.get(id).kind); return i < 0 ? KIND_ORDER.length : i; };
-  const depth = new Map([[centerId, 0]]);
+  const area = new Map();
+  for (const n of nodes) if (n.id !== centerId && !n.ghost) area.set(n.id, n.kind);
+  for (const n of nodes) {
+    if (n.id === centerId || area.has(n.id)) continue;
+    const host = [...adj.get(n.id)].find((x) => area.has(x));
+    area.set(n.id, host ? area.get(host) : 'note');
+  }
+  // shortest path from the centre over links: the lit trail and the packet follow it
   const parent = new Map();
-  const children = new Map(nodes.map((n) => [n.id, []]));
-  const implicit = new Set();
-  const order = [centerId];
-  for (let i = 0; i < order.length; i++) {
-    const cur = order[i];
-    const next = [...adj.get(cur)].filter((x) => !depth.has(x));
-    next.sort((a, b) => (cur === centerId ? kindRank(a) - kindRank(b) : 0) || weight(b) - weight(a));
-    for (const x of next) { depth.set(x, depth.get(cur) + 1); parent.set(x, cur); children.get(cur).push(x); order.push(x); }
-    if (i === order.length - 1) {
-      const rest = nodes.map((n) => n.id).filter((x) => !depth.has(x)).sort((a, b) => weight(b) - weight(a));
-      if (rest.length) {
-        const root = rest[0];
-        depth.set(root, 1); parent.set(root, centerId); implicit.add(root); order.push(root);
-        const siblings = children.get(centerId);
-        const at = siblings.findIndex((s) => kindRank(s) > kindRank(root));
-        siblings.splice(at < 0 ? siblings.length : at, 0, root);
+  const seen = new Set([centerId]);
+  for (const queue = [centerId]; queue.length;) {
+    const cur = queue.shift();
+    for (const x of adj.get(cur)) if (!seen.has(x)) { seen.add(x); parent.set(x, cur); queue.push(x); }
+  }
+  const rank = (id) => (byId.get(id).pinned ? 50 : 0) + (byId.get(id).weight || 0) * 3 + adj.get(id).size;
+  const kinds = [...new Set([...KIND_ORDER, ...area.values()])].filter((k) => [...area.values()].includes(k));
+  const groups = new Map(kinds.map((k) => [k, [...area].filter(([, a]) => a === k).map(([id]) => id).sort((a, b) => rank(b) - rank(a) || byId.get(a).label.localeCompare(byId.get(b).label))]));
+  const free = 2 * Math.PI - kinds.length * SECTOR_GAP;
+  const minAngle = (GAP * 1.15) / INNER;
+  const weights = kinds.map((k) => 3 + groups.get(k).length);
+  const total = weights.reduce((s, w) => s + w, 0);
+  let angles = weights.map((w) => (w / total) * free);
+  const small = angles.filter((a) => a < minAngle).length;
+  if (small && small < kinds.length) {
+    const left = free - small * minAngle;
+    const big = angles.filter((a) => a >= minAngle).reduce((s, a) => s + a, 0);
+    angles = angles.map((a) => (a < minAngle ? minAngle : (a / big) * left));
+  }
+  const pos = new Map([[centerId, { x: 0, y: 0, a: 0, r: 0 }]]);
+  const sectors = [];
+  let a0 = -Math.PI / 2 - angles[0] / 2;
+  let ringCount = 0;
+  kinds.forEach((kind, i) => {
+    const ids = groups.get(kind);
+    const angle = angles[i];
+    let ring = 0;
+    for (let placed = 0; placed < ids.length; ring++) {
+      const r = INNER + ring * STEP;
+      const take = Math.min(ids.length - placed, Math.max(1, Math.floor((angle * r) / GAP)));
+      const stepA = angle / take;
+      for (let j = 0; j < take; j++) {
+        const a = a0 + stepA * (j + 0.5);
+        pos.set(ids[placed + j], { ...polar(r, a), a, r, ring });
       }
+      placed += take;
     }
-  }
-  const leaves = new Map();
-  for (let i = order.length - 1; i >= 0; i--) {
-    const id = order[i];
-    const kids = children.get(id);
-    leaves.set(id, kids.length ? kids.reduce((s, k) => s + leaves.get(k), 0) : 1);
-  }
-  const perDepth = [];
-  for (const [id, d] of depth) if (id !== centerId) perDepth[d] = (perDepth[d] || 0) + 1;
-  const rings = [0];
-  for (let d = 1; d < perDepth.length; d++) rings[d] = Math.max(d === 1 ? 310 : rings[d - 1] + 170, (perDepth[d] * 112) / (2 * Math.PI));
-  const pos = new Map([[centerId, { x: 0, y: 0, a: 0, r: 0, depth: 0 }]]);
-  const span = new Map([[centerId, [-Math.PI / 2, (3 * Math.PI) / 2]]]);
-  for (const id of order) {
-    const [a0, a1] = span.get(id);
-    let a = a0;
-    for (const k of children.get(id)) {
-      const share = ((a1 - a0) * leaves.get(k)) / leaves.get(id);
-      span.set(k, [a, a + share]);
-      const mid = a + share / 2;
-      pos.set(k, { ...polar(rings[depth.get(k)], mid), a: mid, r: rings[depth.get(k)], depth: depth.get(k) });
-      a += share;
-    }
-  }
-  const tree = [...parent].map(([to, from]) => ({ from, to, implicit: implicit.has(to) }));
-  const treeKey = new Set(tree.map((e) => [e.from, e.to].sort().join('|')));
-  const cross = [];
-  const seen = new Set();
+    ringCount = Math.max(ringCount, ring);
+    sectors.push({ kind, a0, a1: a0 + angle, count: ids.filter((id) => !byId.get(id).ghost).length, outer: INNER + (ring - 1) * STEP });
+    a0 += angle + SECTOR_GAP;
+  });
+  const rings = Array.from({ length: ringCount + 1 }, (_, i) => INNER + i * STEP);
+  const edges = [];
+  const keys = new Set();
   for (const l of links) {
     const key = [l.source, l.target].sort().join('|');
-    if (l.source === l.target || treeKey.has(key) || seen.has(key) || !pos.has(l.source) || !pos.has(l.target)) continue;
-    seen.add(key);
-    cross.push({ a: l.source, b: l.target });
+    if (l.source === l.target || keys.has(key) || !pos.has(l.source) || !pos.has(l.target)) continue;
+    keys.add(key);
+    const toCenter = l.source === centerId || l.target === centerId;
+    edges.push({ from: toCenter ? centerId : l.source, to: toCenter ? (l.source === centerId ? l.target : l.source) : l.target, tree: toCenter });
   }
-  return { pos, tree, cross, rings, parent, adj };
+  return { pos, sectors, rings, parent, adj, area, edges };
 }
 
-export function createMemoryMap(stage, { icon, onSelect, onFile, centerTitle, countText }) {
+export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerTitle, countText, kindLabel }) {
   const world = el('div', 'mm-world');
   const svg = svgEl('svg', { class: 'mm-lines', width: '1', height: '1' });
+  const areasG = svgEl('g');
   const ringsG = svgEl('g');
   const crossG = svgEl('g');
   const treeG = svgEl('g');
-  svg.append(ringsG, crossG, treeG);
+  svg.append(areasG, ringsG, crossG, treeG);
   world.append(svg);
   stage.append(world);
   let view = { k: 1, x: 0, y: 0 };
@@ -133,6 +144,7 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, centerTitle, co
   let edges = [];
   let selected = null;
   let hovered = null;
+  let only = null;
   let token = 0;
   let moved = false;
   let files = [];
@@ -140,34 +152,53 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, centerTitle, co
 
   const apply = () => {
     world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.k})`;
-    stage.classList.toggle('mm-far', view.k < 0.6);
+    stage.classList.toggle('mm-far', view.k < 0.75);
   };
   const size = () => { const r = stage.getBoundingClientRect(); return { w: r.width, h: r.height }; };
 
-  function edgePath(from, to) {
-    const a = layout.pos.get(from);
-    const b = layout.pos.get(to);
-    const ang = from === centerId ? b.a : Math.atan2(b.y - a.y, b.x - a.x);
-    // from the centre a line leaves the card at its edge, whatever the card's shape
-    const edge = Math.min(hubBox.hw / Math.max(Math.abs(Math.cos(ang)), 1e-6), hubBox.hh / Math.max(Math.abs(Math.sin(ang)), 1e-6)) + 4;
-    const start = from === centerId ? polar(edge, b.a) : { x: a.x + Math.cos(ang) * TILE_R, y: a.y + Math.sin(ang) * TILE_R };
-    const end = { x: b.x - Math.cos(ang) * TILE_R, y: b.y - Math.sin(ang) * TILE_R };
-    if (from === centerId) return `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
-    const rm = (a.r + b.r) / 2;
-    const c1 = polar(rm, a.a);
-    const c2 = polar(rm, b.a);
-    return `M ${start.x} ${start.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${end.x} ${end.y}`;
-  }
-  function crossPath(x, y) {
-    const a = layout.pos.get(x);
-    const b = layout.pos.get(y);
+  // from the centre a line leaves the card at its edge, whatever the card's shape; between notes it bends towards the centre
+  function edgePath(e) {
+    const a = layout.pos.get(e.from);
+    const b = layout.pos.get(e.to);
+    if (e.tree) {
+      const edge = Math.min(hubBox.hw / Math.max(Math.abs(Math.cos(b.a)), 1e-6), hubBox.hh / Math.max(Math.abs(Math.sin(b.a)), 1e-6)) + 4;
+      const start = polar(edge, b.a);
+      const end = polar(b.r - TILE_R, b.a);
+      return `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
+    }
     const m = { x: ((a.x + b.x) / 2) * 0.72, y: ((a.y + b.y) / 2) * 0.72 };
     return `M ${a.x} ${a.y} Q ${m.x} ${m.y} ${b.x} ${b.y}`;
+  }
+  // a sector is a ring slice from just outside the hub to a little past its last ring
+  function wedgePath(s) {
+    const r0 = INNER - 90;
+    const r1 = s.outer + STEP * 0.55;
+    const big = s.a1 - s.a0 > Math.PI ? 1 : 0;
+    const [p, q, u, v] = [polar(r1, s.a0), polar(r1, s.a1), polar(r0, s.a1), polar(r0, s.a0)];
+    return `M ${p.x} ${p.y} A ${r1} ${r1} 0 ${big} 1 ${q.x} ${q.y} L ${u.x} ${u.y} A ${r0} ${r0} 0 ${big} 0 ${v.x} ${v.y} Z`;
+  }
+  // the sector's name runs along its inner edge; on the lower half the arc is drawn backwards so the text stays upright
+  function areaLabel(s) {
+    const mid = (s.a0 + s.a1) / 2;
+    const lower = Math.sin(mid) > 0;
+    const r = INNER - (lower ? 44 : 78);
+    const p = polar(r, lower ? s.a1 : s.a0);
+    const q = polar(r, lower ? s.a0 : s.a1);
+    const big = s.a1 - s.a0 > Math.PI ? 1 : 0;
+    const id = `mm-arc-${s.kind}`;
+    const path = svgEl('path', { id, d: `M ${p.x} ${p.y} A ${r} ${r} 0 ${big} ${lower ? 0 : 1} ${q.x} ${q.y}`, fill: 'none' });
+    const text = svgEl('text', { class: 'mm-area-label' });
+    text.style.setProperty('--c', graphColor(s.kind));
+    const tp = svgEl('textPath', { href: `#${id}`, startOffset: '50%', 'text-anchor': 'middle' });
+    tp.textContent = `${kindLabel(s.kind)} · ${s.count}`;
+    text.append(tp);
+    text.addEventListener('click', () => onArea?.(s.kind));
+    return [path, text];
   }
 
   function nodeEl(n) {
     const p = layout.pos.get(n.id);
-    const b = el('button', `mm-node${n.ghost ? ' ghost' : ''}${n.pinned ? ' pinned' : ''}`);
+    const b = el('button', `mm-node${n.ghost ? ' ghost' : ''}${n.pinned ? ' pinned' : ''}${n.pinned || (n.weight || 0) >= 8 ? ' key' : ''}`);
     b.type = 'button';
     b.style.left = `${p.x}px`;
     b.style.top = `${p.y}px`;
@@ -183,7 +214,6 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, centerTitle, co
     b.addEventListener('mouseleave', () => { if (hovered === n.id) { hovered = null; light(); } });
     return b;
   }
-
   // the centre holds the central note and the instruction files the agent reads before every chat
   function hubEl(n) {
     const hub = el('div', 'mm-hub hub-edge');
@@ -219,26 +249,23 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, centerTitle, co
 
   function render() {
     world.querySelectorAll('.mm-node, .mm-hub, .mm-packet').forEach((x) => x.remove());
-    ringsG.replaceChildren(...[...layout.rings.slice(1), (layout.rings.at(-1) || 0) + 165, (layout.rings.at(-1) || 0) + 330]
-      .filter((r) => r > 0).map((r, i, all) => svgEl('circle', { class: i >= all.length - 2 ? 'mm-ring faint' : 'mm-ring', cx: 0, cy: 0, r })));
-    if (layout.rings.length < 2) ringsG.replaceChildren(...[310, 480].map((r) => svgEl('circle', { class: 'mm-ring faint', cx: 0, cy: 0, r })));
+    areasG.replaceChildren(...layout.sectors.flatMap((s) => {
+      const wedge = svgEl('path', { class: 'mm-wedge', d: wedgePath(s), 'data-area': s.kind });
+      wedge.style.setProperty('--c', graphColor(s.kind));
+      return [wedge, ...areaLabel(s)];
+    }));
+    ringsG.replaceChildren(...[...layout.rings, layout.rings.at(-1) + STEP].map((r, i, all) => svgEl('circle', { class: i === all.length - 1 ? 'mm-ring faint' : 'mm-ring', cx: 0, cy: 0, r })));
     const hub = hubEl(byId.get(centerId));
     world.append(hub);
     hubBox = { hw: hub.offsetWidth / 2 || HUB_R, hh: hub.offsetHeight / 2 || HUB_R };
     crossG.replaceChildren();
     treeG.replaceChildren();
     edges = [];
-    for (const e of layout.tree) {
-      const n = byId.get(e.to);
-      const path = svgEl('path', { class: `mm-edge${e.implicit ? ' implicit' : ''}`, d: edgePath(e.from, e.to) });
-      path.style.setProperty('--c', graphColor(n.ghost ? 'ghost' : n.kind));
-      treeG.append(path);
-      edges.push({ ...e, path, tree: true });
-    }
-    for (const e of layout.cross) {
-      const path = svgEl('path', { class: 'mm-cross', d: crossPath(e.a, e.b) });
-      crossG.append(path);
-      edges.push({ from: e.a, to: e.b, path, tree: false });
+    for (const e of layout.edges) {
+      const path = svgEl('path', { class: e.tree ? 'mm-edge' : 'mm-cross', d: edgePath(e) });
+      if (e.tree) path.style.setProperty('--c', graphColor(byId.get(e.to).kind));
+      (e.tree ? treeG : crossG).append(path);
+      edges.push({ ...e, path });
     }
     nodeEls = new Map();
     for (const n of nodes) {
@@ -256,41 +283,48 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, centerTitle, co
     for (let cur = id; cur && cur !== centerId; cur = layout.parent.get(cur)) out.unshift(cur);
     return out;
   };
+  const touches = (e, a, b) => (e.from === a && e.to === b) || (e.from === b && e.to === a);
 
-  // one note in focus: its neighbours and its path to the centre stay lit, everything else steps back
+  // one note in focus: its neighbours and its path to the centre stay lit, everything else steps back;
+  // with one area chosen, the other areas fade
   function light() {
     const focus = hovered || selected;
     stage.classList.toggle('mm-focus', !!focus && focus !== centerId);
+    stage.classList.toggle('mm-only', !!only);
     const lit = new Set();
-    const path = new Set();
+    const trail = new Set();
     if (focus && focus !== centerId) {
       lit.add(focus);
       for (const x of layout.adj.get(focus) || []) lit.add(x);
       const c = chain(focus);
-      c.forEach((x) => { lit.add(x); path.add(x); });
+      if (layout.parent.has(focus)) c.forEach((x, i) => { lit.add(x); trail.add([c[i - 1] ?? centerId, x].sort().join('|')); });
       lit.add(centerId);
     }
     for (const [id, b] of nodeEls) {
       b.classList.toggle('lit', lit.has(id));
       b.classList.toggle('sel', id === selected);
+      b.classList.toggle('in', !only || id === centerId || layout.area.get(id) === only);
     }
     for (const e of edges) {
-      const on = e.tree ? path.has(e.to) : false;
-      const near = focus && (e.from === focus || e.to === focus);
-      e.path.classList.toggle('on', on || (e.tree && near));
-      e.path.classList.toggle('near', !e.tree && !!near);
+      const near = !!focus && (e.from === focus || e.to === focus);
+      e.path.classList.toggle('on', near || trail.has([e.from, e.to].sort().join('|')));
+      e.path.classList.toggle('in', !only || (layout.area.get(e.from) ?? only) === only && (layout.area.get(e.to) ?? only) === only);
     }
+    for (const w of areasG.querySelectorAll('.mm-wedge')) w.classList.toggle('in', !only || w.dataset.area === only);
   }
 
   // a signal runs from the centre along the lit path, the way requests travel in the diagrams
   async function send(id) {
     const my = ++token;
     world.querySelectorAll('.mm-packet').forEach((x) => x.remove());
-    if (reduceMotion.matches) return;
+    if (reduceMotion.matches || !layout.parent.has(id)) return;
     const color = graphColor(byId.get(id)?.kind);
+    let prev = centerId;
     for (const step of chain(id)) {
-      const e = edges.find((x) => x.tree && x.to === step);
+      const e = edges.find((x) => touches(x, prev, step));
       if (!e) return;
+      const forward = e.from === prev;
+      prev = step;
       const dot = el('span', 'mm-packet');
       dot.style.setProperty('--c', color);
       world.append(dot);
@@ -302,7 +336,7 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, centerTitle, co
           if (my !== token) { dot.remove(); resolve(); return; }
           const t = Math.min(1, (now - t0) / dur);
           const q = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
-          const p = e.path.getPointAtLength(len * q);
+          const p = e.path.getPointAtLength(len * (forward ? q : 1 - q));
           dot.style.transform = `translate(${p.x}px, ${p.y}px)`;
           if (t < 1) requestAnimationFrame(frame); else { dot.remove(); resolve(); }
         };
@@ -331,13 +365,11 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, centerTitle, co
     send(selected);
   }
 
-  // the first view frames the centre and the two nearest rings; "show all" is one button away
-  function fit(all = false) {
+  // the whole map in view: the areas are the point, so nothing is cropped
+  function fit() {
     const { w, h } = size();
     if (!layout || !w) return;
-    const rings = layout.rings.slice(1);
-    const near = w < 600 ? rings[0] : rings[1] ?? rings[0];
-    const outer = all ? Math.max(HUB_R + 60, ...[...layout.pos.values()].map((p) => p.r + 90)) : (near ?? HUB_R) + 90;
+    const outer = Math.max(HUB_R + 60, ...[...layout.pos.values()].map((p) => p.r + 90));
     const k = Math.max(0.3, Math.min(1.1, Math.min(w, h) / (outer * 2 + 20)));
     view = { k, x: w / 2, y: h / 2 };
     apply();
@@ -420,13 +452,16 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, centerTitle, co
       if (!moved) fit();
     },
     select,
-    fit() { moved = false; fit(true); },
+    fit() { moved = false; fit(); },
     setFiles(list) {
       files = list;
       if (layout) render();
     },
+    setOnly(kind) { only = kind; if (layout) light(); },
+    only: () => only,
+    sectors: () => layout?.sectors || [],
     zoom: (f) => zoom(f),
-    isImplicit: (id) => !!layout?.tree.find((e) => e.to === id && e.implicit),
+    isDetached: (id) => !layout?.adj.get(id)?.size,
     destroy() { ro.disconnect(); token++; },
   };
 }

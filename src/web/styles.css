@@ -62,6 +62,7 @@
   --haze-login: radial-gradient(60% 55% at 50% -8%, rgba(150, 85, 160, 0.16), rgba(150, 85, 160, 0.04) 50%, transparent 80%);
   --hub-fill: linear-gradient(180deg, #1c1824, #141219);
   --cross-near: rgba(187, 156, 255, 0.75);
+  --wedge: 0.05;
 
   --font: "Onest", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
@@ -124,6 +125,7 @@
   --haze-login: radial-gradient(60% 55% at 50% -8%, rgba(150, 85, 160, 0.1), rgba(150, 85, 160, 0.03) 50%, transparent 80%);
   --hub-fill: linear-gradient(180deg, #ffffff, #f5f2fc);
   --cross-near: rgba(116, 69, 240, 0.5);
+  --wedge: 0.07;
 
   --pop: 0 24px 60px -18px rgba(26, 20, 40, 0.3), 0 0 0 1px var(--line-strong);
   --shadow-md: 0 20px 40px -26px rgba(26, 20, 40, 0.45);
@@ -919,13 +921,19 @@ a.chip:hover { text-decoration: none; }
 .mm-lines { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
 .mm-ring { fill: none; stroke: rgba(var(--ink), 0.06); }
 .mm-ring.faint { stroke: rgba(var(--ink), 0.035); }
+.mm-wedge { fill: var(--c); fill-opacity: var(--wedge); stroke: var(--c); stroke-opacity: 0.1; stroke-width: 1; transition: fill-opacity 0.3s var(--ease); }
+.mm-area-label { fill: var(--c); font: 600 11px var(--mono); letter-spacing: 0.12em; text-transform: uppercase; pointer-events: auto; cursor: pointer; opacity: 0.85; transition: opacity 0.2s; }
+.mm-area-label:hover { opacity: 1; }
+.mm-only .mm-wedge:not(.in) { fill-opacity: 0; stroke-opacity: 0.04; }
+.mm-only .mm-node:not(.in) { opacity: 0.1; pointer-events: none; }
+.mm-only .mm-edge:not(.in), .mm-only .mm-cross:not(.in) { stroke-opacity: 0.04; }
 .mm-edge { fill: none; stroke: var(--c); stroke-opacity: 0.5; stroke-width: 1.5; stroke-linecap: round; transition: stroke-opacity 0.3s var(--ease); }
 .mm-edge.implicit { stroke-dasharray: 4 6; stroke-opacity: 0.35; }
 .mm-edge.on { stroke-opacity: 1; stroke-width: 2; }
 .mm-cross { fill: none; stroke: rgba(var(--ink), 0.13); stroke-width: 1.2; stroke-dasharray: 2 5; transition: stroke 0.3s var(--ease); }
-.mm-cross.near { stroke: var(--cross-near); }
+.mm-cross.on { stroke: var(--cross-near); }
 .mm-focus .mm-edge:not(.on) { stroke-opacity: 0.12; }
-.mm-focus .mm-cross:not(.near) { stroke: rgba(var(--ink), 0.05); }
+.mm-focus .mm-cross:not(.on) { stroke: rgba(var(--ink), 0.05); }
 .hub-edge {
   border: 1.5px solid transparent;
   background: var(--hub-fill) padding-box, linear-gradient(140deg, #96aaff, #a47bff 35%, #d66cf0 68%, #ff86c4) border-box;
@@ -968,22 +976,33 @@ a.chip:hover { text-decoration: none; }
 .mm-node.ghost .mm-tile { border-radius: 50%; border-style: dashed; border-color: rgba(var(--ink), 0.22); background: rgba(var(--card), 0.6); box-shadow: none; }
 .mm-node.ghost .mm-tile::after { display: none; }
 .mm-label {
-  max-width: 150px; padding: 1px 7px; border-radius: 7px; background: rgba(var(--veil), 0.78); text-align: center; overflow: hidden;
+  max-width: 116px; padding: 1px 7px; border-radius: 7px; background: rgba(var(--veil), 0.78); text-align: center; overflow: hidden;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; transition: opacity 0.2s;
 }
 .mm-node:hover .mm-tile, .mm-node:focus-visible .mm-tile, .mm-node.sel .mm-tile { border-color: var(--c); box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 18%, transparent), var(--shadow-tile); }
 .mm-node:focus-visible { outline: none; }
 .mm-node.sel .mm-label, .mm-node:hover .mm-label { color: var(--text); }
 .mm-focus .mm-node:not(.lit) { opacity: 0.28; }
-.mm-far .mm-node:not(.sel):not(:hover) .mm-label { opacity: 0; }
+.mm-far .mm-node:not(.sel):not(:hover):not(.key) .mm-label { opacity: 0; }
 .mm-node.arrived .mm-tile { animation: mm-arrive 0.7s var(--ease); }
 @keyframes mm-arrive { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 60%, transparent); } to { box-shadow: 0 0 0 16px transparent; } }
 .mm-packet {
   position: absolute; left: 0; top: 0; z-index: 3; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; pointer-events: none; background: var(--c);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 22%, transparent), 0 0 16px 2px color-mix(in srgb, var(--c) 60%, transparent);
 }
-.mm-tools { position: absolute; z-index: 5; top: 14px; left: 16px; width: min(320px, calc(100% - 32px)); }
+.mm-tools { position: absolute; z-index: 5; top: 14px; left: 16px; width: min(320px, calc(100% - 32px)); display: flex; flex-direction: column; gap: 8px; }
+.mm-tools .graph-search { flex: none; }
 .mm-tools .graph-search input { background: rgba(var(--card), 0.88); }
+.mm-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.mm-chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--line); background: rgba(var(--card), 0.88); color: var(--text-2); font: 11.5px var(--mono);
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.mm-chip .kind-dot { background: var(--c); }
+.mm-chip-n { color: var(--muted); }
+.mm-chip:hover { color: var(--text); border-color: var(--line-strong); }
+.mm-chip.active { color: var(--text); border-color: color-mix(in srgb, var(--c, var(--accent)) 60%, transparent); background: color-mix(in srgb, var(--c, var(--accent)) 12%, rgba(var(--card), 0.88)); }
 .mm-zoom { position: absolute; z-index: 5; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 2px; padding: 4px; border-radius: 14px; border: 1px solid var(--line); background: rgba(var(--card), 0.88); }
 .mm-legend { position: absolute; z-index: 5; left: 16px; bottom: 16px; max-width: calc(100% - 110px); margin: 0; padding: 7px 12px; border-radius: 12px; background: rgba(var(--veil), 0.72); }
 .graph-side { z-index: 6; }
@@ -1234,7 +1253,7 @@ input.mono { font-family: var(--mono); font-size: 13px; }
   .autos .auto-next { white-space: normal; }
   .audit-item { grid-template-columns: 1fr; gap: 4px; }
   .segmented { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
-  .mm-legend, .mem-title, .mem-new-label { display: none; }
+  .mm-chips, .mem-title, .mem-new-label { display: none; }
   .mem-new { width: 30px; padding: 0; }
   .mm-tools { top: 10px; left: 10px; width: calc(100% - 20px); }
   .mm-zoom { right: 10px; bottom: 10px; }

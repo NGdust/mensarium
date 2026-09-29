@@ -717,6 +717,7 @@ function ensureAppShell() {
     sessions,
     h('div', { class: 'sidebar-foot' }, devicesLink, h('div', { class: 'sidebar-foot-row' },
       h('a', { class: 'nav-item', href: '#/settings/overview' }, icon('sliders'), tr('Settings')),
+      h('a', { class: 'icon-btn limits-btn', href: '#/settings/memory', title: tr('Memory graph'), 'aria-label': tr('Memory graph') }, icon('graph')),
       h('button', { class: 'icon-btn limits-btn', title: tr('Usage limits'), 'aria-label': tr('Usage limits'), onclick: limitsModal }, icon('gauge')))),
   ]);
 
@@ -1454,9 +1455,9 @@ function outdatedBanner(t) {
 
 // ---------- chat ----------
 
-async function viewChat(taskId) {
 const TURNS = 10;
 
+async function viewChat(taskId) {
   const shell = ensureAppShell();
   shell.setActive(null);
   let task;
@@ -1529,9 +1530,9 @@ const TURNS = 10;
   setStatus(task.status);
 
   // --- rendering ---
-  let stick = true;
   // Like a messenger: the chat opens at its last turns and older ones are fetched as the user scrolls up.
   // `past` renders such a chunk into `sink` with its own activity state and without touching the live widgets.
+  let stick = true;
   let past = false;
   let sink = inner;
   const scrollDown = () => { thread.scrollTop = thread.scrollHeight; };
@@ -1962,7 +1963,6 @@ const TURNS = 10;
       delay = Math.min(delay * 2, 15000);
     };
   };
-  connect();
   // Older turns render into a fragment with a fresh activity block, then go in above the loader with the view kept in place.
   const renderPast = (events) => {
     const saved = { sink, work, lastAgent, draft, draftFor, stick };
@@ -2003,6 +2003,7 @@ const TURNS = 10;
   scrollDown();
   const grow = new ResizeObserver(() => { if (stick) scrollDown(); });
   grow.observe(inner);
+  connect();
   usage.refresh();
   if (thread.scrollTop < 300) loadOlder();
   viewCleanups.push(() => { closed = true; grow.disconnect(); if (es) es.close(); });
@@ -2661,9 +2662,24 @@ async function settingsMemory(shell) {
       icon,
       centerTitle: tr('About me'),
       countText: (n) => tp('{0} note around|{0} notes around', n),
+      kindLabel: (kind) => MEM_KINDS[kind] || kind,
       onSelect: (node) => preview(node),
       onFile: (name) => previewFile(name),
+      onArea: (kind) => setOnly(kind),
     });
+    // one chip per area with its note count; a chip narrows the map to that area, the same chip again shows all
+    const chips = h('div', { class: 'mm-chips mm-ui' });
+    function setOnly(kind) {
+      map.setOnly(kind === map.only() ? null : kind);
+      renderChips();
+    }
+    function renderChips() {
+      const only = map.only();
+      chips.replaceChildren(
+        h('button', { class: `mm-chip${only ? '' : ' active'}`, onclick: () => setOnly(null) }, tr('All')),
+        ...map.sectors().map((s) => h('button', { class: `mm-chip${only === s.kind ? ' active' : ''}`, style: `--c:${graphColor(s.kind)}`, onclick: () => setOnly(s.kind) },
+          h('span', { class: 'kind-dot' }), MEM_KINDS[s.kind] || s.kind, h('span', { class: 'mm-chip-n' }, String(s.count)))));
+    }
 
     async function loadFiles() {
       const ins = await get('/v1/instructions');
@@ -2696,6 +2712,7 @@ async function settingsMemory(shell) {
       }
       centerId = data.center;
       map.setData(data);
+      renderChips();
     }
     const hideSide = () => { side.classList.add('hidden'); map.select(null); };
     async function preview(node) {
@@ -2719,7 +2736,7 @@ async function settingsMemory(shell) {
         if (target) { map.select(target.id, { pan: true }); preview(target); }
       });
       const center = data.nodes.find((x) => x.id === centerId);
-      const detached = !isCenter && map.isImplicit(n.id);
+      const detached = !isCenter && map.isDetached(n.id);
       const attach = detached && center ? h('button', { class: 'btn btn-sm', onclick: async () => {
         try { await api(`/v1/memory/notes/${n.id}`, { method: 'PATCH', body: JSON.stringify({ body: `${(n.body || '').trimEnd()}\n\n[[${center.label}]]`.trim() }) }); toast(tr('Linked')); await load(); map.select(n.id); preview(node); } catch (err) { fail(err); }
       } }, icon('link'), tr('Link to “{0}”', center.label)) : null;
@@ -2729,7 +2746,7 @@ async function settingsMemory(shell) {
       side.replaceChildren(...[
         h('div', { class: 'graph-side-head' }, h('h3', {}, n.title), close),
         h('div', { class: 'graph-side-meta' }, isCenter ? h('span', { class: 'pill accent' }, tr('central')) : null, kindPill(n.kind), n.pinned ? h('span', { class: 'pill accent', title: tr('Always in the agent\'s context') }, icon('pin'), tr('pinned')) : null, (n.tags || []).map((t) => h('span', { class: 'pill tag' }, `#${t}`))),
-        detached ? h('p', { class: 'market-note' }, tr('Not linked to other notes yet, so it hangs on the central one.')) : null,
+        detached ? h('p', { class: 'market-note' }, tr('Not linked to other notes yet.')) : null,
         bodyEl,
         n.backlinks.length ? h('div', { class: 'note-backlinks' }, tr('Linked from: '), n.backlinks.map((b, i) => [i ? ', ' : '', h('a', { href: '#', onclick: (e) => { e.preventDefault(); map.select(b.id, { pan: true }); preview(data.nodes.find((x) => x.id === b.id)); } }, b.title)])) : null,
         h('div', { class: 'market-meta' }, tr('source: {0} · importance {1}', MEM_SOURCES[n.source] || n.source, n.importance)),
@@ -2745,14 +2762,12 @@ async function settingsMemory(shell) {
       const node = data.nodes.find((x) => x.label.toLowerCase() === q) || data.nodes.find((x) => x.label.toLowerCase().includes(q));
       if (node) { map.select(node.id, { pan: true }); preview(node); } else toast(tr('No such note found'));
     });
-    const legend = h('div', { class: 'graph-legend mm-legend mm-ui' }, Object.entries(MEM_KINDS).map(([k, label]) => h('span', {}, h('span', { class: 'kind-dot', style: `background:${graphColor(k)}` }), label)));
     stage.append(
-      h('div', { class: 'mm-tools mm-ui' }, h('div', { class: 'settings-search graph-search' }, icon('search'), search)),
+      h('div', { class: 'mm-tools mm-ui' }, h('div', { class: 'settings-search graph-search' }, icon('search'), search), chips),
       h('div', { class: 'mm-zoom mm-ui' },
         h('button', { class: 'icon-btn', title: tr('Zoom in'), 'aria-label': tr('Zoom in'), onclick: () => map.zoom(1.25) }, icon('plus')),
         h('button', { class: 'icon-btn', title: tr('Show all'), 'aria-label': tr('Show all'), onclick: () => map.fit() }, icon('layers')),
         h('button', { class: 'icon-btn', title: tr('Zoom out'), 'aria-label': tr('Zoom out'), onclick: () => map.zoom(1 / 1.25) }, h('span', { class: 'zoom-sign' }, '−'))),
-      legend,
       side,
     );
     host.append(stage);
