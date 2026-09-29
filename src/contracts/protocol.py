@@ -42,6 +42,7 @@ class Capabilities(BaseModel):
     projects_root: str | None = None
     project_ops: list[str] = []
     gateway_port: int | None = None  # gateway sessions: the loopback port a browser on that machine can reach
+    secrets: bool = False  # takes user secrets in ExecutionRequest.secrets
 
 
 class TargetHello(BaseModel):
@@ -87,6 +88,7 @@ class ExecutionRequest(BaseModel):
     approval_ref: str | None = None
     mode: AccessMode = "ask"
     workdir: str | None = None
+    secrets: dict[str, str] = {}
     signature: str = ""
 
 

@@ -53,6 +53,7 @@ from mensarium.contracts.tools import (
 from mensarium.shared.gitflags import GIT_SAFE_FLAGS
 from mensarium.shared.paths import ensure_private_dir, projects_dir
 from mensarium.shared.redaction import GIT_DIRS, SECRET_DIRS, SECRET_FILE_PATTERNS, is_secret_path, redact
+from mensarium.shared.secret_refs import mask_secrets
 from mensarium.tool_runtime.mcp import McpError
 
 if TYPE_CHECKING:
@@ -63,6 +64,7 @@ SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cach
 SECRET_ENV = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|PRIVATE|CREDENTIAL|_KEY$)", re.I)
 _FULL_ACCESS: ContextVar[bool] = ContextVar("mensarium_full_access", default=False)
 _WORKDIR: ContextVar[Path | None] = ContextVar("mensarium_workdir", default=None)
+_SECRETS: ContextVar[dict[str, str] | None] = ContextVar("secrets", default=None)
 
 
 class ToolError(Exception):
@@ -110,11 +112,20 @@ class Executor:
             return text, False
         return data[:limit].decode(errors="ignore") + "\n...[truncated by target]", True
 
-    async def run(self, tool: str, args: dict[str, Any], workdir: Path | None = None, *, mode: AccessMode = "ask") -> ToolOutput:
+    async def run(
+        self,
+        tool: str,
+        args: dict[str, Any],
+        workdir: Path | None = None,
+        *,
+        mode: AccessMode = "ask",
+        secrets: dict[str, str] | None = None,
+    ) -> ToolOutput:
         if mode == "full" and not self.cfg.allow_full_access:
             raise ToolError("full access is disabled on this device")
         access_token = _FULL_ACCESS.set(mode == "full")
         token = _WORKDIR.set(workdir)
+        secrets_token = _SECRETS.set(secrets or {})
         try:
             handler = {
                 "files.list": self.files_list,
@@ -149,16 +160,28 @@ class Executor:
             if handler is None:
                 raise ToolError(f"unsupported tool {tool!r}")
             try:
-                return await handler(args)
+                output = await handler(args)
             except DesktopError as e:
-                raise ToolError(str(e)) from e
+                raise ToolError(mask_secrets(str(e), secrets or {})) from e
+            except ToolError as e:
+                raise ToolError(mask_secrets(str(e), secrets or {})) from e
+            if secrets:
+                output.stdout = mask_secrets(output.stdout, secrets)
+                output.stderr = mask_secrets(output.stderr, secrets)
+            return output
         finally:
+            _SECRETS.reset(secrets_token)
             _WORKDIR.reset(token)
             _FULL_ACCESS.reset(access_token)
 
     @staticmethod
     def _redact(text: str) -> str:
         return text if _FULL_ACCESS.get() else redact(text)
+
+    @staticmethod
+    def _env() -> dict[str, str]:
+        env = dict(os.environ) if _FULL_ACCESS.get() else {k: v for k, v in os.environ.items() if not SECRET_ENV.search(k)}
+        return {**env, **(_SECRETS.get() or {})}
 
     async def files_list(self, raw: dict[str, Any]) -> ToolOutput:
         a = FilesListArgs.model_validate(raw)
@@ -566,8 +589,7 @@ class Executor:
         if not shell:
             raise ToolError("no bash or sh on this device")
         timeout = min(a.timeout_s, self.cfg.limits.max_exec_seconds)
-        env = dict(os.environ) if _FULL_ACCESS.get() else {k: v for k, v in os.environ.items() if not SECRET_ENV.search(k)}
-        code, out, err = await _run([shell, "-c", a.script], cwd=cwd, timeout=timeout, stdin=a.stdin, env=env)
+        code, out, err = await _run([shell, "-c", a.script], cwd=cwd, timeout=timeout, stdin=a.stdin, env=self._env())
         out, t1 = self._limit(self._redact(out))
         err, t2 = self._limit(self._redact(err))
         return ToolOutput(exit_code=code, stdout=out, stderr=err, truncated=t1 or t2)
@@ -622,8 +644,7 @@ class Executor:
         if program is None and "/" not in argv[0]:
             raise ToolError(f"program {argv[0]!r} not found on PATH")
         timeout = min(a.timeout_s, self.cfg.limits.max_exec_seconds)
-        env = dict(os.environ) if _FULL_ACCESS.get() else {k: v for k, v in os.environ.items() if not SECRET_ENV.search(k)}
-        code, out, err = await _run([program or argv[0], *argv[1:]], cwd=cwd, timeout=timeout, stdin=a.stdin, env=env)
+        code, out, err = await _run([program or argv[0], *argv[1:]], cwd=cwd, timeout=timeout, stdin=a.stdin, env=self._env())
         out, t1 = self._limit(self._redact(out))
         err, t2 = self._limit(self._redact(err))
         return ToolOutput(exit_code=code, stdout=out, stderr=err, truncated=t1 or t2)

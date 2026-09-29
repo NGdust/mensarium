@@ -1,11 +1,18 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from mensarium.client.config import ClientConfig
+from mensarium.client.tools import Executor, ToolError
 from mensarium.contracts.protocol import TargetPolicy
 from mensarium.core.config import CorePaths
 from mensarium.core.secrets import SecretError, SecretStore
 from mensarium.policy_engine.engine import evaluate
+from mensarium.shared.crypto import public_key_b64
 from mensarium.shared.secret_refs import fill_secrets, mask_secrets
 from mensarium.tool_runtime.registry import REGISTRY
 
@@ -62,3 +69,27 @@ class RefsTests(unittest.TestCase):
         self.assertEqual(filled["headers"]["Authorization"], "Bearer aaaa")
         self.assertIn("{{secret:A_KEY}}", http.arguments["headers"]["Authorization"])
         self.assertEqual(mask_secrets("x aaaa y", {"A_KEY": "aaaa"}), "x [secret:A_KEY] y")
+
+
+class ClientTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "workspace"
+        self.root.mkdir()
+        home = patch.dict(os.environ, {"MENSARIUM_HOME": str(Path(self.tmp.name) / "home")})
+        home.start()
+        self.addCleanup(home.stop)
+        cfg = ClientConfig(server="http://localhost", ws_url="ws://localhost", target_id="device", workspace_id="workspace",
+                           name="test", core_public_key=public_key_b64(Ed25519PrivateKey.generate()), core_fingerprint="test",
+                           roots=[str(self.root)], command_allowlist=["echo"])
+        self.executor = Executor(cfg)
+
+    async def test_env_and_masking(self):
+        values = {"API_TOKEN": "fixture-value-123"}
+        result = await self.executor.run("shell.bash", {"script": 'printf "%s" "$API_TOKEN"; echo "$API_TOKEN" >&2', "cwd": str(self.root)}, secrets=values)
+        self.assertEqual(result.stdout, "[secret:API_TOKEN]")
+        self.assertIn("[secret:API_TOKEN]", result.stderr)
+        with self.assertRaises(ToolError) as e:
+            await self.executor.run("shell.bash", {"script": "exit 0", "cwd": "/nope-fixture-value-123"}, secrets=values)
+        self.assertNotIn("fixture-value-123", str(e.exception))

@@ -144,6 +144,7 @@ class ClientAgent:
                 projects=self.projects.enabled,
                 projects_root=str(self.projects.root) if self.projects.enabled else None,
                 project_ops=list(PROJECT_FEATURES) if self.projects.enabled else [],
+                secrets=True,
             ),
             policy=self.policy,
         )
@@ -389,7 +390,7 @@ class ClientAgent:
         else:
             try:
                 workdir = self.executor.workdir(req.workdir) if req.workdir else None
-                output = await self.executor.run(req.tool, req.arguments, workdir, mode=req.mode)
+                output = await self.executor.run(req.tool, req.arguments, workdir, mode=req.mode, secrets=req.secrets)
                 status = "succeeded" if output.exit_code in (0, None) else "failed"
             except ToolError as e:
                 status, error = "failed", str(e)
