@@ -170,6 +170,43 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.op("diff", "task_r", base_sha=base))["data"]["files"], [])
         self.assertEqual((await self.op("revert", "task_r", base_sha=base, path=".env"))["state"], "error")
 
+    async def fetch_into(self, role: str, refs: dict[str, str], bundle_refs: list[str], request_id: str = "f1") -> dict:
+        from mensarium.shared import bundles
+        path = Path(self.tmp.name) / "down.bundle"
+        git(self.repo, "bundle", "create", str(path), *bundle_refs)
+        for part in bundles.chunks(path):
+            self.host.receive_chunk({"type": "project.bundle", "request_id": request_id, "project_id": "prj_1", "seq": 0, "data": part})
+        info = bundles.describe(path, {r: git(self.repo, "rev-parse", r) for r in bundle_refs}, [])
+        req = ProjectOp(request_id=request_id, target_id="device", project_id="prj_1", task_id="", op="fetch",
+                        args={"role": role, "bundle": info.model_dump(), "refs": refs, **({} if role == "executor" else self.args)}, issued_at="", expires_at="", nonce="")
+        return (await self.host.op(req, send=self.send)).model_dump()
+
+    async def test_executor_fetches_into_repo_git_and_checks_out_from_a_sha(self) -> None:
+        main = git(self.repo, "rev-parse", "main")
+        status = await self.fetch_into("executor", {"refs/heads/main": "refs/devices/tgt_src/heads/main"}, ["refs/heads/main"])
+        self.assertEqual(status["state"], "ok", status["detail"])
+        bare = Path(os.environ["MENSARIUM_HOME"]) / "projects" / "prj_1" / "repo.git"
+        self.assertEqual(git(bare, "rev-parse", "refs/devices/tgt_src/heads/main"), main)
+        status = await self.op("checkout", "task_e", role="executor", branch="mensarium/e-1", start=main, base_name="main")
+        self.assertEqual(status["state"], "ok", status["detail"])
+        self.assertEqual((status["head_sha"], status["data"]["base"]), (main, "main"))
+        wt = Path(os.environ["MENSARIUM_HOME"]) / "projects" / "prj_1" / "wt" / "task_e"
+        self.assertEqual((wt / "app.py").read_text(), "print('hi')\n")
+        self.assertEqual((await self.op("checkout", "task_x", role="executor", branch="mensarium/x-1", start="0" * 40))["state"], "error")
+        status = await self.op("remove", "task_e", role="executor", branch="mensarium/e-1", delete_branch=True)
+        self.assertEqual(status["state"], "ok", status["detail"])
+        self.assertFalse(wt.exists())
+        status = await self.op("remove", "", role="executor", delete_repo=True)
+        self.assertFalse(bare.exists())
+
+    async def test_fetch_refuses_a_checked_out_branch(self) -> None:
+        await self.op("checkout", "task_s", branch="mensarium/s-1", start="default")
+        status = await self.fetch_into("source", {"refs/heads/mensarium/s-1": "refs/heads/mensarium/s-1"}, ["refs/heads/main"], request_id="f2")
+        self.assertEqual(status["state"], "error")
+        self.assertIn("checked out", status["detail"])
+        status = await self.fetch_into("source", {"refs/heads/main": "refs/heads/main"}, ["refs/heads/main"], request_id="f3")
+        self.assertEqual(status["state"], "error")
+
     def test_workdir_may_be_a_project_folder_inside_the_roots(self) -> None:
         executor = self.host.executor
         self.assertEqual(executor.workdir(str(self.repo)), self.repo.resolve())

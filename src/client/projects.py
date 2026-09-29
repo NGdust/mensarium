@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,8 @@ from mensarium.client.tools import GIT_SAFE_FLAGS, SKIP_DIRS, ExecTimeout, Execu
 from mensarium.contracts.projects import (
     BRANCH_PREFIX,
     BRANCH_RE,
+    CHAT_REFS,
+    DEVICE_REFS,
     DOC_FILES,
     FOLDER_EXCLUDES,
     INSTRUCTIONS_LIMIT,
@@ -52,6 +55,7 @@ NO_ACCESS = (
     "(git@github.com:user/repo.git) with an ssh key set up on this machine, or a credential helper for https"
 )
 SAFE_ID = re.compile(r"[A-Za-z0-9_-]+")
+INCOMING_TTL = 600
 
 log = logging.getLogger(__name__)
 Send = Callable[[dict[str, Any]], Awaitable[None]]
@@ -85,6 +89,7 @@ class ProjectHost:
         self.inbox = self.root / "inbox"
         shutil.rmtree(self.inbox, ignore_errors=True)
         self.active: set[str] = set()
+        self.incoming: dict[str, float] = {}
 
     @property
     def enabled(self) -> bool:
@@ -112,13 +117,18 @@ class ProjectHost:
     def _shadow(self, project_id: str) -> Path:
         return self.root / _safe_id(project_id) / "shadow.git"
 
+    def _repo(self, project_id: str) -> Path:
+        return self.root / _safe_id(project_id) / "repo.git"
+
     def _worktree(self, project_id: str, task_id: str) -> Path:
         return self.root / _safe_id(project_id) / "wt" / _safe_id(task_id)
 
     def _lock(self, project_id: str) -> asyncio.Lock:
         return self.locks.setdefault(project_id, asyncio.Lock())
 
-    def _base(self, kind: ProjectKind, project_id: str) -> list[str]:
+    def _base(self, kind: ProjectKind, project_id: str, role: str = "source") -> list[str]:
+        if role == "executor":
+            return ["--git-dir", str(self._repo(project_id))]
         return [] if kind == "repo" else ["--git-dir", str(self._shadow(project_id))]
 
     async def _call(self, *args: str, cwd: Path, env: dict[str, str] | None = None, timeout: float = GIT_TIMEOUT) -> tuple[int, str, str]:
@@ -148,6 +158,14 @@ class ProjectHost:
         lines = [*sorted(SKIP_DIRS), *FOLDER_EXCLUDES, *SECRET_EXCLUDES, *(f"{d}/" for d in SECRET_DIRS)]
         (shadow / "info").mkdir(exist_ok=True)
         (shadow / "info" / "exclude").write_text("\n".join(lines) + "\n")
+
+    # A device that runs chats of a project it is not the source of keeps the Core's history in a bare repo.git.
+    async def _ensure_repo(self, project_id: str) -> Path:
+        bare = self._repo(project_id)
+        if not (bare / "HEAD").is_file():
+            ensure_private_dir(bare.parent)
+            await self._git("init", "--bare", "--quiet", str(bare), cwd=self.root)
+        return bare
 
     # ---- snapshot ---------------------------------------------------------------
 
@@ -270,14 +288,20 @@ class ProjectHost:
         if SAFE_ID.fullmatch(request_id):
             (self.inbox / f"{request_id}.bundle").unlink(missing_ok=True)
 
-    # A project.bundle frame for a request being handled right now; anything else is dropped.
+    # A project.bundle frame for a request being handled now, or one whose signed op has not arrived yet (a fetch).
     def receive_chunk(self, msg: dict[str, Any]) -> None:
+        now = time.monotonic()
+        for rid in [rid for rid, until in self.incoming.items() if until < now]:
+            del self.incoming[rid]
+            (self.inbox / f"{rid}.bundle").unlink(missing_ok=True)
         try:
             chunk = ProjectBundle.model_validate(msg)
         except ValidationError:
             return
-        if chunk.request_id not in self.active:
+        if not SAFE_ID.fullmatch(chunk.request_id):
             return
+        if chunk.request_id not in self.active:
+            self.incoming.setdefault(chunk.request_id, now + INCOMING_TTL)
         try:
             bundles.append_chunk(self.inbox / f"{_safe_id(chunk.request_id)}.bundle", chunk.data)
         except (BundleTooLarge, ToolError, ValueError, OSError) as e:
@@ -303,9 +327,10 @@ class ProjectHost:
             return status
         handler = {
             "browse": self._browse, "checkout": self._checkout, "commit": self._commit, "status": self._status, "remove": self._remove,
-            "branches": self._branches, "diff": self._diff, "docs": self._docs, "revert": self._revert,
+            "branches": self._branches, "diff": self._diff, "docs": self._docs, "revert": self._revert, "fetch": self._fetch,
         }[req.op]
         lock = contextlib.nullcontext() if req.op in ("browse", "branches", "diff", "docs") else self._lock(req.project_id)
+        self.incoming.pop(req.request_id, None)
         self.active.add(req.request_id)
         try:
             async with lock:
@@ -368,11 +393,16 @@ class ProjectHost:
         return {"data": {"branches": items, "default": await self._default_base(src), "current": await self._current(src)}}
 
     async def _checkout(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
-        src = self._source(str(a["source_path"]), project_id, a.get("git_url"))
-        kind: ProjectKind = a["kind"]
-        base = self._base(kind, project_id)
+        executor = str(a.get("role") or "source") == "executor"
+        kind: ProjectKind = "repo" if executor else a["kind"]
+        if executor:
+            await self._ensure_repo(project_id)
+            cwd = self.root
+        else:
+            cwd = self._source(str(a["source_path"]), project_id, a.get("git_url"))
+        base = self._base(kind, project_id, "executor" if executor else "source")
         branch = _ref_name(str(a["branch"]))
-        code, _, _ = await self._call("check-ref-format", "--branch", branch, cwd=src, timeout=30)
+        code, _, _ = await self._call("check-ref-format", "--branch", branch, cwd=cwd, timeout=30)
         if code != 0:
             raise ToolError(f"{branch!r} is not a valid branch name")
         wt = self._worktree(project_id, task_id)
@@ -383,12 +413,16 @@ class ProjectHost:
             return {"head_sha": (await self._git("rev-parse", "HEAD", cwd=wt)).strip()}
         start = str(a["start"])
         base_name = start
-        if start == "snapshot":
+        if executor:
+            if not SHA_RE.fullmatch(start) or not await self._rev(base, f"{start}^{{commit}}", cwd):
+                raise ToolError("the start commit is missing on this device")
+            base_name = str(a.get("base_name") or start[:10])
+        elif start == "snapshot":
             snap = await self._snapshot(project_id, str(a["source_path"]), kind, bool(a.get("include_remotes", True)), False, int(a.get("size_limit_mb", 1024)), int(a.get("file_limit_mb", 100)), a.get("git_url"))
             start = str(snap["snapshot_sha"])
         elif kind == "repo":
-            base_name = await self._default_base(src) if start == "default" else _ref_name(start)
-            sha = await self._rev(base, f"{base_name}^{{commit}}", src)
+            base_name = await self._default_base(cwd) if start == "default" else _ref_name(start)
+            sha = await self._rev(base, f"{base_name}^{{commit}}", cwd)
             if not sha:
                 raise ToolError(f"branch {base_name} is not found on this device")
             start = sha
@@ -396,11 +430,39 @@ class ProjectHost:
             raise ToolError("a folder project starts only from its snapshot")
         ensure_private_dir(wt.parent.parent)
         ensure_private_dir(wt.parent)
-        await self._git(*base, "worktree", "prune", cwd=src)
-        if await self._rev(base, f"refs/heads/{branch}", src):
+        await self._git(*base, "worktree", "prune", cwd=cwd)
+        if await self._rev(base, f"refs/heads/{branch}", cwd):
             raise ToolError(f"branch {branch} already exists on this device")
-        await self._git(*base, "worktree", "add", "--quiet", "--no-track", "-B", branch, str(wt), start, cwd=src)
+        await self._git(*base, "worktree", "add", "--quiet", "--no-track", "-B", branch, str(wt), start, cwd=cwd)
         return {"head_sha": start, "data": {"base": base_name}}
+
+    # Takes refs from a Core bundle: into repo.git on an executor, into the user's repository (or shadow.git) on the source.
+    async def _fetch(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
+        info = BundleInfo.model_validate(a["bundle"])
+        refs = {str(k): str(v) for k, v in dict(a["refs"]).items()}
+        for dst in refs.values():
+            if not dst.startswith((CHAT_REFS, DEVICE_REFS)) or not BRANCH_RE.fullmatch(dst.removeprefix("refs/")):
+                raise ToolError(f"{dst} is not a ref this device takes from the Core")
+        if str(a.get("role") or "source") == "executor":
+            cwd, base = self.root, ["--git-dir", str(await self._ensure_repo(project_id))]
+        else:
+            kind: ProjectKind = a["kind"]
+            cwd = self._source(str(a["source_path"]), project_id, a.get("git_url"))
+            base = self._base(kind, project_id)
+            busy = await self._git(*base, "worktree", "list", "--porcelain", cwd=cwd, check=False)
+            taken = {line.split(" ", 1)[1] for line in busy.splitlines() if line.startswith("branch ")}
+            if held := [dst for dst in refs.values() if dst in taken]:
+                raise ToolError(f"{held[0].removeprefix('refs/heads/')} is checked out in a worktree on this device")
+        if missing := [src for src in refs if src not in info.refs]:
+            raise ToolError(f"{missing[0]} is not in the bundle")
+        path = self.inbox / f"{_safe_id(request_id)}.bundle"
+        try:
+            bundles.check(path, info)
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+        await self._git(*base, "bundle", "verify", "--quiet", str(path), cwd=cwd)
+        await self._git(*base, "fetch", "--quiet", "--no-tags", str(path), *(f"+{src}:{dst}" for src, dst in refs.items()), cwd=cwd)
+        return {"data": {"refs": {dst: info.refs[src] for src, dst in refs.items()}}}
 
     async def _commit(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
         wt = self._worktree(project_id, task_id)
@@ -499,16 +561,20 @@ class ProjectHost:
         return {"head_sha": (await self._git("rev-parse", "HEAD", cwd=wt)).strip()}
 
     async def _remove(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
-        kind: ProjectKind = a["kind"]
-        base = self._base(kind, project_id)
+        executor = str(a.get("role") or "source") == "executor"
+        kind: ProjectKind = "repo" if executor else a["kind"]
+        base = self._base(kind, project_id, "executor" if executor else "source")
         project_dir = self.root / _safe_id(project_id)
         wt = self._worktree(project_id, task_id) if task_id else None
         branch = _branch(str(a["branch"])) if wt and a.get("delete_branch") and a.get("branch") else None
         cwd: Path | None
-        try:
-            cwd = self._source(str(a["source_path"]), project_id, a.get("git_url"))
-        except ToolError:
-            cwd = self.root if kind == "folder" else None
+        if executor:
+            cwd = self.root if (self._repo(project_id) / "HEAD").is_file() else None
+        else:
+            try:
+                cwd = self._source(str(a["source_path"]), project_id, a.get("git_url"))
+            except ToolError:
+                cwd = self.root if kind == "folder" else None
         if wt and wt.exists():
             if cwd:
                 await self._git(*base, "worktree", "remove", "--force", str(wt), cwd=cwd, check=False)
@@ -517,8 +583,10 @@ class ProjectHost:
             await self._git(*base, "worktree", "prune", cwd=cwd, check=False)
             if branch:
                 await self._git(*base, "branch", "-D", branch, cwd=cwd, check=False)
-        if cwd and not task_id and kind == "repo":
+        if cwd and not task_id and kind == "repo" and not executor:
             await self._git("update-ref", "-d", SNAPSHOT_REF, cwd=cwd, check=False)
+        if a.get("delete_repo") and executor:
+            shutil.rmtree(self._repo(project_id), ignore_errors=True)
         if a.get("delete_shadow") and kind == "folder":
             shutil.rmtree(self._shadow(project_id), ignore_errors=True)
         if a.get("delete_clone") and a.get("git_url") and not task_id:
