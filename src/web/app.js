@@ -1,7 +1,7 @@
 // Mensarium web UI. Vanilla ES module, no build step, no dependencies.
 
 import { LANGUAGES, lang, locale, setLang, t as tr, tp } from './i18n.js';
-import { THEMES, setTheme, themeChoice } from './theme.js';
+import { MODES as COLOR_MODES, PALETTES, custom, importTweakcn, modeChoice, paletteChoice, removeCustom, setMode, setPalette, swatches } from './theme.js';
 import { createOrb } from './orb.js';
 import { createMemoryMap, graphColor } from './graph.js';
 
@@ -152,6 +152,9 @@ const ICONS = {
   send: '<path d="m21 3-7 18-4-8-8-4z"/><path d="M21 3 10 13"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   user: '<circle cx="12" cy="8" r="3.6"/><path d="M4.5 20c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/>',
+  palette: '<path d="M12 3a9 9 0 1 0 0 18c1 0 1.7-.8 1.7-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.8-1.7 1.7-1.7H16a5 5 0 0 0 5-5c0-3.9-4-7.2-9-7.2z"/><circle cx="7.5" cy="11.5" r="1"/><circle cx="10" cy="7.5" r="1"/><circle cx="15" cy="7.5" r="1"/>',
+  download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+  external: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/>',
   agents: '<circle cx="9" cy="8" r="3.2"/><path d="M3 19c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><circle cx="17" cy="9" r="2.5"/><path d="M16.5 13.6c2.7.3 4.5 2.3 4.5 5.4"/>',
 };
 
@@ -497,12 +500,6 @@ function languageSelect() {
     Object.entries(LANGUAGES).map(([code, name]) => h('option', { value: code, selected: code === lang }, name)));
 }
 
-const THEME_NAMES = { dark: () => tr('Dark'), light: () => tr('Light'), auto: () => tr('System theme') };
-
-function themeSelect() {
-  return h('select', { class: 'theme-select', 'aria-label': tr('Theme'), onchange: (e) => { if (e.target.value !== themeChoice) setTheme(e.target.value); } },
-    THEMES.map((key) => h('option', { value: key, selected: key === themeChoice }, THEME_NAMES[key]())));
-}
 
 // ---------- usage limits ----------
 
@@ -2015,6 +2012,7 @@ async function viewChat(taskId) {
 
 const SETTINGS = [
   ['overview', 'pulse', tr('Overview')],
+  ['appearance', 'palette', tr('Appearance')],
   ['providers', 'robot', tr('Providers')],
   ['devices', 'laptop', tr('Devices')],
   ['channels', 'send', tr('Channels')],
@@ -2080,8 +2078,44 @@ async function viewSettings(key) {
   if (key === 'instructions') { go('#/settings/memory'); return; }
   const shell = ensureSettingsShell();
   shell.setActive();
-  const views = { overview: settingsOverview, providers: settingsProviders, model: settingsProviders, devices: settingsDevices, channels: settingsChannels, memory: settingsMemory, skills: settingsSkills, plugins: settingsPlugins, marketplace: settingsPlugins, profiles: settingsProfiles, audit: settingsAudit };
+  const views = { overview: settingsOverview, appearance: settingsAppearance, providers: settingsProviders, model: settingsProviders, devices: settingsDevices, channels: settingsChannels, memory: settingsMemory, skills: settingsSkills, plugins: settingsPlugins, marketplace: settingsPlugins, profiles: settingsProfiles, audit: settingsAudit };
   await (views[key] || settingsOverview)(shell);
+}
+
+const MODE_NAMES = { auto: () => tr('System theme'), light: () => tr('Light'), dark: () => tr('Dark') };
+
+function settingsAppearance(shell) {
+  const dots = (id) => h('span', { class: 'theme-dots', 'aria-hidden': 'true' }, swatches(id).map((c) => h('i', { style: `background:${c}` })));
+  const card = (id, name) => h('button', {
+    class: `theme-card${id === paletteChoice ? ' active' : ''}`, role: 'radio', 'aria-checked': String(id === paletteChoice),
+    onclick: () => { if (id !== paletteChoice) setPalette(id); },
+  }, dots(id), h('span', { class: 'theme-name', title: name }, name));
+  const input = h('input', { type: 'text', placeholder: 'https://tweakcn.com/themes/… or amethyst-haze', 'aria-label': tr('Theme link or ID'), spellcheck: 'false' });
+  const importBtn = h('button', { class: 'btn btn-primary', onclick: async () => {
+    importBtn.disabled = true;
+    try { await importTweakcn(input.value); } catch (err) { toast(tr(err.message), true); importBtn.disabled = false; }
+  } }, tr('Import theme'));
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') importBtn.click(); });
+  const importBox = h('div', { class: 'theme-import', hidden: true },
+    h('h3', {}, tr('Import from tweakcn')),
+    h('p', {}, tr('Open tweakcn.com, pick or make a theme, press Share, and paste the copied link here. Share links, editor and registry URLs, theme IDs, and built-in theme names like amethyst-haze work. The imported theme replaces the previous one.')),
+    h('a', { href: 'https://tweakcn.com/editor/theme', target: '_blank', rel: 'noopener noreferrer' }, tr('Browse tweakcn themes'), icon('external')),
+    field(tr('Theme link or ID'), input),
+    h('div', { class: 'actions' }, importBtn));
+  const importCard = h('button', { class: 'theme-card', onclick: () => { importBox.hidden = !importBox.hidden; if (!importBox.hidden) input.focus(); } }, icon('download'), h('span', { class: 'theme-name' }, tr('Import')));
+  const customSlot = custom ? h('div', { class: 'theme-slot removable' }, card('custom', custom.name),
+    h('button', { class: 'icon-btn', title: tr('Remove the imported theme'), 'aria-label': tr('Remove the imported theme'), onclick: removeCustom }, icon('x'))) : null;
+  const modes = h('div', { class: 'segmented', role: 'radiogroup', 'aria-label': tr('Color mode') },
+    COLOR_MODES.map((m) => h('button', { class: `seg${m === modeChoice ? ' active' : ''}`, role: 'radio', 'aria-checked': String(m === modeChoice), onclick: () => { if (m !== modeChoice) setMode(m); } }, MODE_NAMES[m]())));
+  page(shell, tr('Appearance'), tr('Theme, color mode, and language of this web UI. Saved in this browser.'), null,
+    section(tr('Language'), null, h('div', { class: 'rows' }, row(tr('Interface language'), null, languageSelect()))),
+    section(tr('Theme'), tr('A theme family has a dark and a light variant; the color mode picks which one is on screen.'),
+      h('div', { class: 'theme-box' },
+        h('div', { class: 'theme-grid', role: 'radiogroup', 'aria-label': tr('Theme') },
+          Object.entries(PALETTES).map(([id, p]) => h('div', { class: 'theme-slot' }, card(id, tr(p.name)))), customSlot, h('div', { class: 'theme-slot' }, importCard)),
+        row(tr('Color mode'), tr('System follows the light or dark setting of this device.'), modes),
+        importBox)),
+  );
 }
 
 async function settingsOverview(shell) {
@@ -2115,7 +2149,7 @@ async function settingsOverview(shell) {
   const renderLimits = () => limitsBox.replaceChildren(...limitsBody());
   renderLimits();
   state.limitsRender = () => { if (limitsBox.isConnected) renderLimits(); };
-  page(shell, tr('Overview'), tr('Where the main agent is reachable, and how to check that devices are talking to it.'), [themeSelect(), languageSelect(), logout],
+  page(shell, tr('Overview'), tr('Where the main agent is reachable, and how to check that devices are talking to it.'), [logout],
     h('div', { class: 'hero' }, orb('md'), h('div', { class: 'hero-text' }, h('h2', {}, 'Mensarium Core'), h('p', {}, tr('Version {0}', s.version))), coreUpdate),
     section(tr('Usage limits'), tr('How much of each connected provider\'s quota is used. The default provider, the one last picked for a new chat, warns above the chat input from {0}%.', Math.round((state.limits?.threshold || 0.75) * 100)), limitsBox),
     section(tr('Connection'), null, h('div', { class: 'rows' },

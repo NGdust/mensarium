@@ -12,13 +12,16 @@
   <link rel="stylesheet" href="/static/styles.css">
   <script>
     // The theme has to be on the element before the first paint, so it is picked here and not in app.js;
-    // theme.js owns everything else about it.
+    // theme.js owns everything else about it, including the palette CSS cached under theme-css.
     try {
       var choice = localStorage.getItem('theme');
       var auto = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
       var theme = choice === 'light' || choice === 'dark' ? choice : choice === 'auto' ? auto : 'dark';
       document.documentElement.dataset.theme = theme;
-      document.querySelector('meta[name="theme-color"]').content = theme === 'light' ? '#eeebf3' : '#050506';
+      var palette = localStorage.getItem('theme-css');
+      var frame = palette && palette.match(new RegExp('"' + theme + '"\\]\\{--frame:(#\\w+)'));
+      if (palette) document.head.appendChild(Object.assign(document.createElement('style'), { id: 'palette', textContent: palette }));
+      document.querySelector('meta[name="theme-color"]').content = frame ? frame[1] : theme === 'light' ? '#eeebf3' : '#050506';
     } catch (e) { /* no storage: stay dark */ }
   </script>
 </head>

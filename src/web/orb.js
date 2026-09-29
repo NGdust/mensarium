@@ -1,10 +1,12 @@
 // The agent's face: a particle sphere whose surface ripples and breathes. One shared animation loop.
 
 // On black the particles are added to the ground (composite "lighter"), so the arc is bright; on paper they are
-// painted over it, so the same violet arc has to be darker than the page. The theme is fixed for the page's life:
-// theme.js reloads on a switch.
+// painted over it, so the same violet arc has to be darker than the page. A palette other than Mensarium brings its
+// own arc in --orb-1..4. The theme is fixed for the page's life: theme.js reloads on a switch.
 const light = document.documentElement.dataset.theme === 'light';
-const STOPS = light
+const rootStyle = getComputedStyle(document.documentElement);
+const painted = [1, 2, 3, 4].map((i) => rootStyle.getPropertyValue(`--orb-${i}`).match(/\d+/g)?.map(Number));
+const STOPS = painted.every((c) => c?.length === 3) ? painted : light
   ? [
     [74, 96, 214],
     [110, 66, 226],
