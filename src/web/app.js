@@ -1485,6 +1485,110 @@ function outdatedBanner(t) {
 
 const TURNS = 10;
 
+// A rail of ticks beside the thread, one per message: hover previews it, click or arrow keys jump to it,
+// and the tick of the message at the top of the view stays lit while scrolling.
+function threadNav(thread, inner) {
+  const rail = h('div', { class: 'thread-nav-rail', role: 'navigation', 'aria-label': tr('Messages') });
+  const tip = h('div', { class: 'thread-nav-tip', hidden: true });
+  const el = h('div', { class: 'thread-nav', hidden: true }, rail, tip);
+  const ticks = new Map();
+  let nodes = [];
+  let active = null;
+
+  const label = (node) => (node.classList.contains('msg-user') ? tr('Your message') : tr('Agent message'));
+  const preview = (node) => {
+    const text = (node.querySelector('.bubble-text, .msg-body')?.innerText || '').replace(/\s+/g, ' ').trim();
+    const files = [...node.querySelectorAll('.attachment-name')].map((f) => f.textContent).join(', ');
+    return text.length > 180 ? `${text.slice(0, 179)}…` : text || files;
+  };
+  const showTip = (node) => {
+    const tick = ticks.get(node);
+    tip.replaceChildren(h('div', { class: 'thread-nav-tip-label' }, label(node)), h('div', { class: 'thread-nav-tip-text' }, preview(node)));
+    tip.hidden = false;
+    tip.style.top = `${tick.offsetTop - rail.scrollTop + tick.offsetHeight / 2}px`;
+  };
+  const jump = (node) => {
+    pinned = node;
+    setActive(node);
+    const top = thread.scrollTop + node.getBoundingClientRect().top - thread.getBoundingClientRect().top - 16;
+    thread.scrollTo({ top, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  };
+  const tickFor = (node) => {
+    const user = node.classList.contains('msg-user');
+    const tick = h('button', {
+      class: `thread-nav-tick${user ? ' user' : ''}`, type: 'button', 'aria-label': label(node),
+      onclick: () => jump(node),
+      onmouseenter: () => showTip(node),
+      onfocus: () => showTip(node),
+      onmouseleave: () => { tip.hidden = true; },
+      onblur: () => { tip.hidden = true; },
+    });
+    ticks.set(node, tick);
+    return tick;
+  };
+  // Hovering swells the ticks around the pointer like a wave that fades out over WAVE px.
+  const WAVE = 60;
+  rail.addEventListener('mousemove', (e) => {
+    const y = e.clientY - rail.getBoundingClientRect().top + rail.scrollTop;
+    for (const tick of rail.children) {
+      const d = Math.abs(tick.offsetTop + tick.offsetHeight / 2 - y);
+      tick.style.setProperty('--grow', d < WAVE ? ((Math.cos((Math.PI * d) / WAVE) + 1) / 2).toFixed(3) : '0');
+    }
+  });
+  rail.addEventListener('mouseleave', () => { for (const tick of rail.children) tick.style.removeProperty('--grow'); });
+  rail.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    const i = nodes.findIndex((n) => ticks.get(n) === document.activeElement);
+    const next = nodes[Math.max(0, Math.min(nodes.length - 1, i + (e.key === 'ArrowUp' ? -1 : 1)))];
+    if (!next) return;
+    e.preventDefault();
+    ticks.get(next).focus();
+    jump(next);
+  });
+
+  function setActive(current) {
+    if (current === active) return;
+    ticks.get(active)?.classList.remove('active');
+    active = current;
+    const tick = ticks.get(active);
+    if (!tick) return;
+    tick.classList.add('active');
+    if (tick.offsetTop < rail.scrollTop) rail.scrollTop = tick.offsetTop;
+    else if (tick.offsetTop + tick.offsetHeight > rail.scrollTop + rail.clientHeight) rail.scrollTop = tick.offsetTop + tick.offsetHeight - rail.clientHeight;
+  }
+  // A jumped-to message stays lit until the user scrolls by hand: a short one may never reach the top.
+  let pinned = null;
+  for (const type of ['wheel', 'touchstart', 'mousedown', 'keydown']) thread.addEventListener(type, () => { pinned = null; }, { passive: true });
+  const highlight = () => {
+    if (pinned && nodes.includes(pinned)) return;
+    pinned = null;
+    const anchor = thread.getBoundingClientRect().top + 48;
+    const atEnd = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 4;
+    let current = nodes[0];
+    if (atEnd) current = nodes[nodes.length - 1];
+    else for (const n of nodes) { if (n.getBoundingClientRect().top > anchor) break; current = n; }
+    setActive(current);
+  };
+  const rebuild = () => {
+    const found = [...inner.querySelectorAll(':scope > .msg-user, :scope > .msg-agent')];
+    if (found.length !== nodes.length || found.some((n, i) => n !== nodes[i])) {
+      for (const n of ticks.keys()) if (!found.includes(n)) ticks.delete(n);
+      nodes = found;
+      rail.replaceChildren(...nodes.map((n) => ticks.get(n) || tickFor(n)));
+      el.hidden = nodes.length < 2;
+    }
+    highlight();
+  };
+
+  let frame = 0;
+  const later = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; rebuild(); }); };
+  const observer = new MutationObserver(later);
+  observer.observe(inner, { childList: true });
+  thread.addEventListener('scroll', later);
+  rebuild();
+  return { el, stop: () => { observer.disconnect(); cancelAnimationFrame(frame); } };
+}
+
 async function viewChat(taskId) {
   const shell = ensureAppShell();
   shell.setActive(null);
@@ -1540,7 +1644,8 @@ async function viewChat(taskId) {
   const crumb = project
     ? h('a', { class: 'crumb-device', href: `#/projects/${project.id}` }, icon(KIND_ICON[project.kind] || 'folder'), project.name, h('span', { class: 'sep' }, '/'))
     : h('span', { class: 'crumb-device' }, icon('laptop'), task.target_name || tr('device'), h('span', { class: 'sep' }, '/'));
-  const chatBody = [thread, h('div', { class: 'thread-banner' }, banner || ''), c.el];
+  const nav = threadNav(thread, inner);
+  const chatBody = [h('div', { class: 'thread-wrap' }, thread, nav.el), h('div', { class: 'thread-banner' }, banner || ''), c.el];
   shell.panel.replaceChildren(
     topbar(shell,
       [crumb, h('span', { class: 'current', title: task.input }, taskTitle(task))],
@@ -2091,7 +2196,7 @@ async function viewChat(taskId) {
   connect();
   usage.refresh();
   if (thread.scrollTop < 300) loadOlder();
-  viewCleanups.push(() => { closed = true; grow.disconnect(); if (es) es.close(); });
+  viewCleanups.push(() => { closed = true; grow.disconnect(); nav.stop(); if (es) es.close(); });
   if (!c.textarea.disabled) c.textarea.focus();
 }
 

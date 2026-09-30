@@ -321,6 +321,31 @@ a.crumb-device:hover { color: var(--text); text-decoration: none; }
 
 /* thread and composer share one column: same width, same gutter, so every edge lines up with the input */
 .thread { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; overflow-anchor: none; scrollbar-gutter: stable both-edges; }
+.thread-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; container-type: inline-size; }
+.thread-nav { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); z-index: 3; }
+.thread-nav[hidden] { display: none; }
+.thread-nav-rail { position: relative; display: flex; flex-direction: column; max-height: min(60vh, 520px); overflow-y: auto; scrollbar-width: none; }
+.thread-nav-rail::-webkit-scrollbar { display: none; }
+.thread-nav-tick { --grow: 0; --base: 10px; flex: none; display: flex; align-items: center; width: 40px; height: 11px; padding: 0; border: 0; background: none; cursor: pointer; }
+.thread-nav-tick::before {
+  content: ""; width: calc(var(--base) + var(--grow) * (36px - var(--base))); height: 2px; border-radius: 1px;
+  background: var(--line-strong); transition: width 0.18s var(--ease), background 0.15s;
+}
+.thread-nav-tick.user { --base: 15px; }
+.thread-nav-tick.user::before { background: var(--faint); }
+.thread-nav-tick:focus-visible { --grow: 0.6; }
+.thread-nav-tick:hover::before, .thread-nav-tick:focus-visible::before { background: var(--text-2); }
+.thread-nav-tick.active { --base: 26px; }
+.thread-nav-tick.active::before { background: var(--text); }
+.thread-nav-tick:focus-visible { outline: none; }
+.thread-nav-tip {
+  position: absolute; left: 48px; width: 260px; transform: translateY(-50%); pointer-events: none;
+  padding: 9px 12px; border-radius: var(--r); background: var(--surface-2); box-shadow: var(--pop); font-size: 13px;
+}
+.thread-nav-tip[hidden] { display: none; }
+.thread-nav-tip-label { margin-bottom: 3px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.thread-nav-tip-text { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; color: var(--text-2); }
+@container (max-width: 900px) { .thread-nav { display: none; } }
 .thread-more { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 6px 0 14px; color: var(--muted); font-size: 12.5px; }
 .thread-more > .spinner { width: 13px; height: 13px; }
 .thread-more[hidden] { display: none; }
