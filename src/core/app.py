@@ -1439,12 +1439,17 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             raise task_error(e) from e
 
     @app.get("/v1/tasks/{task_id}/changes")
-    async def task_changes(task_id: str, path: str | None = Query(None, min_length=1, max_length=1000), c: Core = Depends(auth)) -> dict[str, Any]:
+    async def task_changes(
+        task_id: str,
+        path: str | None = Query(None, min_length=1, max_length=1000),
+        scope: Literal["pending", "committed"] = "pending",
+        c: Core = Depends(auth),
+    ) -> dict[str, Any]:
         task = await c.repo.get_task(task_id)
         if not task:
             raise HTTPException(404, "task not found")
         try:
-            return await c.projects.changes(task, path)
+            return await c.projects.changes(task, path, scope)
         except ProjectError as e:
             raise project_error(e) from e
 

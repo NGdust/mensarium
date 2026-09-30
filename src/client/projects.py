@@ -58,6 +58,8 @@ SAFE_ID = re.compile(r"[A-Za-z0-9_-]+")
 INCOMING_TTL = 600
 INCOMING_MAX = 4
 FULL_SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+TURN_COMMIT = "mensarium: "
+COMMITS_SHOWN = 50
 
 log = logging.getLogger(__name__)
 Send = Callable[[dict[str, Any]], Awaitable[None]]
@@ -525,7 +527,8 @@ class ProjectHost:
         base = str(a.get("base_sha") or "")
         if not SHA_RE.fullmatch(base):
             return result
-        rows = [r.split("\t", 2) for r in (await self._git("diff", "--numstat", "-z", "--no-renames", base, head, cwd=wt)).split("\0") if r]
+        start, _, _ = await self._history(wt, base)
+        rows = [r.split("\t", 2) for r in (await self._git("diff", "--numstat", "-z", "--no-renames", start, head, cwd=wt)).split("\0") if r]
         stat = {"files": len(rows), "added": sum(int(r[0]) for r in rows if r[0].isdigit()), "deleted": sum(int(r[1]) for r in rows if r[1].isdigit())}
         return {**result, "data": {"stat": stat}}
 
@@ -548,7 +551,35 @@ class ProjectHost:
             files.append({"name": name, "size": path.stat().st_size, "text": text[:INSTRUCTIONS_LIMIT], "truncated": len(text) > INSTRUCTIONS_LIMIT})
         return {"data": {"files": files}}
 
-    # The chat's changes since its start, uncommitted ones included; a copy of the index keeps the worktree untouched.
+    # The chat's own commits: reachable from its HEAD but from no other ref (copies of its branch aside), so upstream
+    # commits a rebase or merge brought in stay out. Returns where they hang on upstream, the last commit made by
+    # someone other than the Core's turn commits, and those commits newest first.
+    async def _history(self, wt: Path, base_sha: str) -> tuple[str, str | None, list[dict[str, str]]]:
+        branch = (await self._git("symbolic-ref", "-q", "HEAD", cwd=wt, check=False)).strip().removeprefix("refs/heads/")
+        exclude = [f"--exclude=*/{branch}"] if branch else []
+        out = await self._git("log", "--topo-order", "--format=%H%x1f%P%x1f%s", "HEAD", f"^{base_sha}", *exclude, "--not", "--glob=refs/*", cwd=wt)
+        rows = [line.split("\x1f", 2) for line in out.splitlines() if line]
+        if not rows:
+            return (await self._git("rev-parse", "HEAD", cwd=wt)).strip(), None, []
+        ours = {r[0] for r in rows}
+        attach = sorted({p for r in rows for p in r[1].split() if p not in ours})
+        start = (await self._git("rev-list", "-n", "1", "--topo-order", *attach, cwd=wt)).strip() if attach else base_sha
+        real = [{"sha": r[0], "subject": r[2]} for r in rows if not r[2].startswith(TURN_COMMIT)]
+        return start, real[0]["sha"] if real else None, real
+
+    async def _numstat(self, diff: tuple[str, ...], wt: Path, env: dict[str, str] | None = None) -> list[dict[str, Any]]:
+        numstat = (await self._git(*diff, "--numstat", "-z", cwd=wt, env=env)).split("\0")
+        names = (await self._git(*diff, "--name-status", "-z", cwd=wt, env=env)).split("\0")
+        kinds = dict(zip(names[1::2], names[0::2], strict=False))
+        files = []
+        for rec in filter(None, numstat):
+            added, deleted, path = rec.split("\t", 2)
+            binary = added == "-"
+            files.append({"path": path, "status": kinds.get(path, "M")[:1], "added": 0 if binary else int(added), "deleted": 0 if binary else int(deleted), "binary": binary})
+        return files
+
+    # What the chat has not committed yet (the Core's turn commits count as not committed), uncommitted edits included,
+    # and apart from it what was committed; a copy of the index keeps the worktree untouched.
     async def _diff(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
         wt = self._worktree(project_id, task_id)
         if not wt.is_dir():
@@ -556,6 +587,12 @@ class ProjectHost:
         base = str(a["base_sha"])
         if not SHA_RE.fullmatch(base):
             raise ToolError("invalid base commit")
+        start, last, commits = await self._history(wt, base)
+        committed = ("diff", "--no-color", "--no-ext-diff", "--no-renames", start, last) if last else None
+        path = str(a["path"]) if a.get("path") else None
+        if path and a.get("scope") == "committed":
+            patch = await self._git(*committed, "--", f":(literal){path}", cwd=wt) if committed else ""
+            return {"data": {"path": path, "patch": patch[:PATCH_BYTES], "truncated": len(patch) > PATCH_BYTES}}
         with tempfile.TemporaryDirectory(prefix="mensarium-index-") as tmp:
             index = Path(tmp) / "index"
             real = wt / (await self._git("rev-parse", "--git-path", "index", cwd=wt)).strip()
@@ -563,22 +600,18 @@ class ProjectHost:
                 shutil.copyfile(real, index)
             env = {"GIT_INDEX_FILE": str(index)}
             await self._git("add", "-A", "--", ".", *SECRET_PATHSPECS, cwd=wt, env=env)
-            diff = ("diff", "--cached", "--no-color", "--no-ext-diff", "--no-renames", base)
-            if a.get("path"):
-                path = str(a["path"])
+            diff = ("diff", "--cached", "--no-color", "--no-ext-diff", "--no-renames", last or start)
+            if path:
                 patch = await self._git(*diff, "--", f":(literal){path}", cwd=wt, env=env)
                 return {"data": {"path": path, "patch": patch[:PATCH_BYTES], "truncated": len(patch) > PATCH_BYTES}}
-            numstat = (await self._git(*diff, "--numstat", "-z", cwd=wt, env=env)).split("\0")
-            names = (await self._git(*diff, "--name-status", "-z", cwd=wt, env=env)).split("\0")
-        kinds = dict(zip(names[1::2], names[0::2], strict=False))
-        files = []
-        for rec in filter(None, numstat):
-            added, deleted, path = rec.split("\t", 2)
-            binary = added == "-"
-            files.append({"path": path, "status": kinds.get(path, "M")[:1], "added": 0 if binary else int(added), "deleted": 0 if binary else int(deleted), "binary": binary})
-        return {"changed": len(files), "data": {"files": files[:DIFF_FILES], "truncated": len(files) > DIFF_FILES}}
+            files = await self._numstat(diff, wt, env)
+        data: dict[str, Any] = {"files": files[:DIFF_FILES], "truncated": len(files) > DIFF_FILES}
+        if committed:
+            done = await self._numstat(committed, wt)
+            data["committed"] = {"commits": commits[:COMMITS_SHOWN], "more": max(0, len(commits) - COMMITS_SHOWN), "files": done[:DIFF_FILES], "truncated": len(done) > DIFF_FILES}
+        return {"changed": len(files), "data": data}
 
-    # Puts one file back to the chat's start: an added file goes away, a changed or deleted one comes back.
+    # Puts one file back to where its not yet committed changes began: an added file goes away, a changed or deleted one comes back.
     async def _revert(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
         wt = self._worktree(project_id, task_id)
         if not wt.is_dir():
@@ -588,9 +621,10 @@ class ProjectHost:
             raise ToolError("invalid base commit")
         if is_secret_path(path):
             raise ToolError("secret files are not reverted from here")
+        start, last, _ = await self._history(wt, base)
         spec = f":(literal){path}"
         await self._git("add", "-A", "--", spec, cwd=wt)
-        await self._git("restore", f"--source={base}", "--staged", "--worktree", "--", spec, cwd=wt)
+        await self._git("restore", f"--source={last or start}", "--staged", "--worktree", "--", spec, cwd=wt)
         return {"head_sha": (await self._git("rev-parse", "HEAD", cwd=wt)).strip()}
 
     async def _remove(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:

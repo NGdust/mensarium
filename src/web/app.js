@@ -4318,16 +4318,28 @@ function changesPanel(taskId) {
     if (error) { list.replaceChildren(h('div', { class: 'changes-empty' }, error)); return; }
     if (!data) { list.replaceChildren(h('div', { class: 'changes-empty' }, tr('Loading...'))); return; }
     if (!data.ready) { list.replaceChildren(h('div', { class: 'changes-empty' }, tr('The working copy is not ready yet.'))); return; }
-    list.replaceChildren(...(files.length
-      ? files.map((f) => {
-        const cut = f.path.lastIndexOf('/');
-        return h('button', { class: 'change-row', title: f.path, onclick: () => openDiff(taskId, f, stat, load) },
-          h('span', { class: `change-st st-${f.status}` }, f.status),
-          h('span', { class: 'change-path' }, cut >= 0 ? h('span', { class: 'change-dir' }, f.path.slice(0, cut + 1)) : null, h('span', { class: 'change-name' }, f.path.slice(cut + 1))),
-          h('span', { class: 'change-stat' }, ...stat(f)));
-      })
-      : [h('div', { class: 'changes-empty' }, tr('No changes yet.'))]),
-    data.truncated ? h('div', { class: 'changes-empty' }, tr('Only the first {0} files are shown.', files.length)) : '');
+    const row = (f, scope) => {
+      const cut = f.path.lastIndexOf('/');
+      return h('button', { class: 'change-row', title: f.path, onclick: () => openDiff(taskId, f, stat, load, scope) },
+        h('span', { class: `change-st st-${f.status}` }, f.status),
+        h('span', { class: 'change-path' }, cut >= 0 ? h('span', { class: 'change-dir' }, f.path.slice(0, cut + 1)) : null, h('span', { class: 'change-name' }, f.path.slice(cut + 1))),
+        h('span', { class: 'change-stat' }, ...stat(f)));
+    };
+    const rows = (group, scope) => [
+      ...group.files.map((f) => row(f, scope)),
+      group.truncated ? h('div', { class: 'changes-empty' }, tr('Only the first {0} files are shown.', group.files.length)) : '',
+    ];
+    // Committed work leaves the list of changes and shows up below it, with the commits that took it.
+    const done = data.committed;
+    list.replaceChildren(
+      done ? h('div', { class: 'changes-group' }, tr('Not committed')) : '',
+      ...(files.length ? rows(data, 'pending') : [h('div', { class: 'changes-empty' }, done ? tr('Everything is committed.') : tr('No changes yet.'))]),
+      ...(done ? [
+        h('div', { class: 'changes-group' }, tr('Committed')),
+        ...done.commits.map((c) => h('div', { class: 'change-commit', title: c.subject }, h('code', {}, c.sha.slice(0, 7)), h('span', {}, c.subject))),
+        done.more ? h('div', { class: 'change-commit' }, tp('and {0} more commit|and {0} more commits', done.more)) : '',
+        ...rows(done, 'committed'),
+      ] : []));
   };
   async function load() {
     if (busy) { again = true; return; }
@@ -4350,7 +4362,7 @@ function changesPanel(taskId) {
   return { el, btn, later };
 }
 
-async function openDiff(taskId, f, stat, onChange) {
+async function openDiff(taskId, f, stat, onChange, scope = 'pending') {
   const body = h('div', { class: 'diff-body' }, h('div', { class: 'changes-empty' }, tr('Loading...')));
   const cut = f.path.lastIndexOf('/');
   let patch = '';
@@ -4358,7 +4370,7 @@ async function openDiff(taskId, f, stat, onChange) {
   const revert = h('button', { class: 'btn btn-sm btn-danger', onclick: async () => {
     const yes = await confirmDialog({
       title: tr('Revert the changes to {0}?', f.path.slice(cut + 1)),
-      text: f.status === 'A' ? tr('The file was created in this chat and will be deleted.') : tr('The file goes back to how it was when the chat started.'),
+      text: f.status === 'A' ? tr('The file was created in this chat and will be deleted.') : tr('The file goes back to its last committed version.'),
       action: tr('Revert'),
       danger: true,
     });
@@ -4373,12 +4385,12 @@ async function openDiff(taskId, f, stat, onChange) {
     h('div', { class: 'modal-head diff-head' },
       h('h2', { title: f.path }, cut >= 0 ? h('span', { class: 'change-dir' }, f.path.slice(0, cut + 1)) : null, f.path.slice(cut + 1)),
       h('span', { class: 'change-stat' }, ...stat(f)),
-      copyDiff, revert,
+      copyDiff, scope === 'pending' ? revert : null,
       h('button', { class: 'icon-btn', onclick: closeLayer, 'aria-label': tr('Close') }, icon('x'))),
     body,
   ).classList.add('modal-diff');
   try {
-    const r = await get(`/v1/tasks/${taskId}/changes?path=${encodeURIComponent(f.path)}`);
+    const r = await get(`/v1/tasks/${taskId}/changes?path=${encodeURIComponent(f.path)}&scope=${scope}`);
     patch = r.patch || '';
     copyDiff.disabled = !patch;
     body.replaceChildren(...diffLines(r.patch || ''), r.truncated ? h('div', { class: 'changes-empty' }, tr('The diff is too long; only its beginning is shown.')) : '');

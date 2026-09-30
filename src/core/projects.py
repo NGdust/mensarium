@@ -233,7 +233,7 @@ class ProjectManager:
         main = status.data.get("default")
         return {**status.data, "main": main, "default": base if base not in (None, "snapshot", "default") else main}
 
-    async def changes(self, task: dict[str, Any], path: str | None = None) -> dict[str, Any]:
+    async def changes(self, task: dict[str, Any], path: str | None = None, scope: str = "pending") -> dict[str, Any]:
         if not task.get("project_id") or task.get("parent_id"):
             raise ProjectError("this chat is not in a project")
         if not task.get("base_sha"):
@@ -242,7 +242,7 @@ class ProjectManager:
         self._supports(await self.repo.get_target(target_id))
         if not self.can(target_id, "diff"):
             raise ProjectError("this device's client is outdated; update it to see the changes")
-        args = {"base_sha": task["base_sha"], **({"path": path} if path else {})}
+        args = {"base_sha": task["base_sha"], **({"path": path, "scope": scope} if path else {})}
         try:
             status = await self.op(target_id, str(task["project_id"]), str(task["id"]), "diff", args, DIFF_TIMEOUT_S)
         except TargetUnavailable as e:

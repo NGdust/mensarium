@@ -150,6 +150,27 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("+print('more')", patch)
         self.assertEqual(git(wt, "diff", "--cached", "--name-only"), "")
 
+    async def test_diff_leaves_out_rebased_upstream_and_shows_committed_work_apart(self) -> None:
+        base = (await self.op("checkout", "task_h", branch="mensarium/h-1", start="default"))["head_sha"]
+        wt = Path(os.environ["MENSARIUM_HOME"]) / "projects" / "prj_1" / "wt" / "task_h"
+        (wt / "app.py").write_text("print('turn')\n")
+        await self.op("commit", "task_h", message="mensarium: turn", base_sha=base)
+        git(self.repo, "checkout", "-q", "main")
+        (self.repo / "upstream.txt").write_text("up\n")
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "upstream")
+        git(wt, "rebase", "-q", "main")
+        (wt / "notes.txt").write_text("notes\n")
+        git(wt, "add", ".")
+        git(wt, "commit", "-qm", "feat: notes")
+        (wt / "wip.txt").write_text("wip\n")
+        data = (await self.op("diff", "task_h", base_sha=base))["data"]
+        self.assertEqual([f["path"] for f in data["files"]], ["wip.txt"])
+        self.assertEqual([f["path"] for f in data["committed"]["files"]], ["app.py", "notes.txt"])
+        self.assertEqual([c["subject"] for c in data["committed"]["commits"]], ["feat: notes"])
+        patch = (await self.op("diff", "task_h", base_sha=base, path="app.py", scope="committed"))["data"]["patch"]
+        self.assertIn("+print('turn')", patch)
+
     async def test_docs_reads_instruction_files_but_not_links(self) -> None:
         (self.repo / "AGENTS.md").write_text("Run make test.\n")
         (self.repo / "CLAUDE.md").symlink_to(self.repo / "app.py")
@@ -163,7 +184,7 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         wt = Path(os.environ["MENSARIUM_HOME"]) / "projects" / "prj_1" / "wt" / "task_r"
         (wt / "app.py").write_text("changed\n")
         (wt / "new.txt").write_text("new\n")
-        status = await self.op("commit", "task_r", message="turn", base_sha=base)
+        status = await self.op("commit", "task_r", message="mensarium: turn", base_sha=base)
         self.assertEqual(status["data"]["stat"], {"files": 2, "added": 2, "deleted": 1})
         (wt / "app.py").unlink()
         for path in ("app.py", "new.txt"):
