@@ -977,6 +977,7 @@ const RU = {
   'New project': 'Новый проект',
   'Create project': 'Создать проект',
   'New chat in project': 'Новый чат в проекте',
+  'Project chats': 'Чаты проекта',
   'Git repository': 'Git-репозиторий',
   'A folder on one of your devices, or a git repository cloned on the Core host. Every chat in the project works in its own copy, so chats never disturb each other or your files.': 'Папка на одном из ваших устройств или git-репозиторий, склонированный на хост Core. Каждый чат проекта работает в своей копии, поэтому чаты не мешают ни друг другу, ни вашим файлам.',
   'Choose a folder': 'Выбрать каталог',

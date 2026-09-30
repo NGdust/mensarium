@@ -319,6 +319,18 @@ a.crumb-device:hover { color: var(--text); text-decoration: none; }
 
 /* ---------- chat ---------- */
 
+.project-layout { flex: 1; min-height: 0; display: flex; }
+.project-layout-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.project-chats { flex: none; width: 250px; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+.project-chats-head { display: flex; align-items: center; gap: 4px; min-height: 50px; padding: 8px 12px 8px 14px; }
+.project-chats-name {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  color: var(--text); font-size: 13.5px; font-weight: 500; text-decoration: none;
+}
+.project-chats-name:hover { text-decoration: none; color: var(--accent-strong); }
+.project-chats-name .icon { flex: none; width: 16px; height: 16px; color: var(--muted); }
+.project-chats-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* thread and composer share one column: same width, same gutter, so every edge lines up with the input */
 .thread { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; overflow-anchor: none; scrollbar-gutter: stable both-edges; }
 .thread-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; container-type: inline-size; }
@@ -1241,6 +1253,8 @@ input.mono { font-family: var(--mono); font-size: 13px; }
 .toast.error { color: var(--danger); }
 
 /* ---------- responsive ---------- */
+
+@media (max-width: 1080px) { .project-chats { display: none; } }
 
 @media (max-width: 860px) {
   .pill.tag.branch-pill { display: none; }

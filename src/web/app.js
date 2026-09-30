@@ -750,6 +750,7 @@ function ensureAppShell() {
         h('span', { class: 'session-title' }, taskTitle(t)),
         h('button', { class: 'icon-btn session-del', title: tr('Delete chat'), 'aria-label': tr('Delete chat'), onclick: (e) => { e.preventDefault(); e.stopPropagation(); deleteChat(t); } }, icon('trash')));
     }) : [h('div', { class: 'sessions-empty' }, tr('Chats with the agent will appear here.'))]));
+    s.onSessions?.();
   }
 
   const poll = async () => {
@@ -1589,6 +1590,41 @@ function threadNav(thread, inner) {
   return { el, stop: () => { observer.disconnect(); cancelAnimationFrame(frame); } };
 }
 
+// The chats of one project in a column between the sidebar and an open project chat.
+function projectChats(project, activeId) {
+  const newChat = h('a', {
+    class: 'icon-btn nav-add', href: `#/projects/${project.id}/new`, title: tr('New chat in project'), 'aria-label': tr('New chat in project'),
+    onclick: (e) => { if (project.kind === 'repo') { e.preventDefault(); openProjectChat(project); } },
+  }, icon('plus'));
+  const list = h('div', { class: 'sessions' });
+  const el = h('aside', { class: 'project-chats', 'aria-label': tr('Project chats') },
+    h('div', { class: 'project-chats-head' },
+      h('a', { class: 'project-chats-name', href: `#/projects/${project.id}`, title: project.name }, icon(KIND_ICON[project.kind] || 'folder'), h('span', {}, project.name)),
+      newChat),
+    list);
+  let chats = [];
+  let loading = false;
+  const draw = () => {
+    list.replaceChildren(...chats.map((t) => {
+      const [label, kind, live] = statusOf(t.status);
+      const mark = kind && kind !== 'ok' ? `${kind}${live ? ' live' : ''}` : '';
+      return h('a', { class: `session${t.id === activeId ? ' active' : ''}`, href: `#/chat/${t.id}`, title: t.input },
+        h('span', { class: `dot${mark ? ` ${mark}` : ''}`, title: label }),
+        h('span', { class: 'session-title' }, taskTitle(t)),
+        h('button', { class: 'icon-btn session-del', title: tr('Delete chat'), 'aria-label': tr('Delete chat'), onclick: (e) => { e.preventDefault(); e.stopPropagation(); deleteChat(t); } }, icon('trash')));
+    }));
+  };
+  // The Core lists project chats only with their project, so the column fetches them on every shell poll.
+  const load = async () => {
+    if (loading) return;
+    loading = true;
+    try { chats = (await get(`/v1/projects/${project.id}`)).chats || []; draw(); } catch { /* the next poll retries */ }
+    finally { loading = false; }
+  };
+  load();
+  return { el, render: load };
+}
+
 async function viewChat(taskId) {
   const shell = ensureAppShell();
   shell.setActive(null);
@@ -1646,12 +1682,18 @@ async function viewChat(taskId) {
     : h('span', { class: 'crumb-device' }, icon('laptop'), task.target_name || tr('device'), h('span', { class: 'sep' }, '/'));
   const nav = threadNav(thread, inner);
   const chatBody = [h('div', { class: 'thread-wrap' }, thread, nav.el), h('div', { class: 'thread-banner' }, banner || ''), c.el];
-  shell.panel.replaceChildren(
+  const view = [
     topbar(shell,
       [crumb, h('span', { class: 'current', title: task.input }, taskTitle(task))],
       [branchPill, changes?.btn, btnDelete].filter(Boolean)),
     ...(changes ? [h('div', { class: 'chat-split' }, h('div', { class: 'chat-main' }, chatBody), changes.el)] : chatBody),
-  );
+  ];
+  const chats = project && !task.parent_id ? projectChats(project, taskId) : null;
+  if (chats) {
+    shell.onSessions = chats.render;
+    viewCleanups.push(() => { if (shell.onSessions === chats.render) shell.onSessions = null; });
+  }
+  shell.panel.replaceChildren(...(chats ? [h('div', { class: 'project-layout' }, chats.el, h('div', { class: 'project-layout-main' }, view))] : view));
 
   function setStatus(status) {
     task.status = status;
