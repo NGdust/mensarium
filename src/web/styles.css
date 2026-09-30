@@ -971,6 +971,9 @@ a.chip:hover { text-decoration: none; }
 .mm-wedge { fill: var(--c); fill-opacity: var(--wedge); stroke: var(--c); stroke-opacity: 0.1; stroke-width: 1; transition: fill-opacity 0.3s var(--ease); }
 .mm-area-label { fill: var(--c); font: 600 11px var(--mono); letter-spacing: 0.12em; text-transform: uppercase; pointer-events: auto; cursor: pointer; opacity: 0.85; transition: opacity 0.2s; }
 .mm-area-label:hover { opacity: 1; }
+.mm-section-label { fill: var(--c); font: 500 9px var(--mono); letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.6; }
+.mm-divider { fill: none; stroke: var(--c); stroke-opacity: 0.14; stroke-width: 1; stroke-dasharray: 3 4; }
+.mm-only .mm-section-label, .mm-only .mm-divider { opacity: 0.25; }
 .mm-only .mm-wedge:not(.in) { fill-opacity: 0; stroke-opacity: 0.04; }
 .mm-only .mm-node:not(.in) { opacity: 0.1; pointer-events: none; }
 .mm-only .mm-edge:not(.in), .mm-only .mm-cross:not(.in) { stroke-opacity: 0.04; }
@@ -1056,6 +1059,9 @@ a.chip:hover { text-decoration: none; }
 .graph-side-members .mm-chip { max-width: 100%; height: auto; min-height: 24px; padding: 3px 9px; text-align: left; }
 .graph-side-members .mm-chip .icon { color: var(--c); }
 .topic-pill { cursor: pointer; }
+.note-path { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.note-path .pill { height: 24px; font-size: 11.5px; padding: 0 10px; }
+.note-path-sep { color: var(--faint); }
 .mem-kind-icon { display: grid; place-items: center; flex: none; width: 28px; height: 28px; margin-top: 2px; border-radius: 9px; background: var(--surface-2); color: var(--muted); }
 .mem-kind-icon .icon { width: 15px; height: 15px; }
 .note-groups { display: flex; flex-direction: column; gap: 18px; }
@@ -1072,6 +1078,8 @@ a.chip:hover { text-decoration: none; }
 .dream-proposal details { margin-top: 4px; }
 .dream-proposal summary { cursor: pointer; font-size: 12.5px; color: var(--muted); }
 .dream-proposal-actions { display: flex; gap: 6px; flex: none; }
+.dream-proposal-batch { display: flex; align-items: center; gap: 8px; padding: 2px 0 4px; }
+.dream-proposal-batch .market-meta { flex: 1; }
 .dream-proposal.applied, .dream-proposal.dismissed { opacity: 0.6; }
 .auto-state { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
 .auto-state-list { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; font-size: 13px; }

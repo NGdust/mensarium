@@ -25,6 +25,7 @@ MAX_NEW_NOTES = 15
 TIDY_MAX_OPS = 12
 TIDY_CHARS = 16000
 AUTO_SOURCES = {"dream", "agent"}
+SAFE_ACTIONS = {"retopic"}
 
 REM_PROMPT = """You are the memory consolidation process ("dreaming") of Mensarium, an AI agent that works on the \
 user's machines. You read digests of recent chats between the user and the agent and decide what is worth \
@@ -265,19 +266,20 @@ class Dreamer:
         until the owner accepts a proposal."""
         await self.repo.update_dream(run_id, {"phase": "tidy", "stats": stats})
         groups = {t["id"] for t in await self.memory.topics()} | {None}
-        _, proposals = await self._tidy(groups, auto=False)
-        stats["proposed"] = len(proposals)
+        changes, proposals = await self._tidy(groups, auto=False)
+        stats |= {"moved": len(changes), "proposed": len(proposals)}
         await self.repo.update_dream(run_id, {"proposals": proposals})
-        await self._finish(run_id, "done", stats, [], None)
+        await self._finish(run_id, "done", stats, changes, None)
 
     async def _topic_of(self, note_id: str) -> str | None:
         row = await self.repo.get_note(note_id)
         return row.get("topic_id") if row else None
 
     async def _tidy(self, groups: set[str | None], auto: bool) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """Tidy: per topic the model proposes merges, rewrites and retirements. An operation that only touches notes
-        written by dreaming or the agent is applied at once when auto is set; anything touching the owner's own
-        notes waits for the owner as a proposal."""
+        """Tidy: per topic the model proposes merges, rewrites and retirements. Moving a note into a topic is
+        harmless and reversible, so it is applied at once; another operation is applied at once only when auto is
+        set and it touches nothing but notes written by dreaming or the agent, otherwise it waits for the owner
+        as a proposal."""
         topics = await self.memory.topics()
         names = "\n".join(f"- {t['title']}: {t['description']}" for t in topics) or "(none yet)"
         ghosts = await self.memory.ghosts()
@@ -306,7 +308,7 @@ class Dreamer:
                 for op in [o for o in data.get("ops", []) if isinstance(o, dict)][: TIDY_MAX_OPS + (len(batch) if group is None else 0)]:
                     involved = [str(op.get("title", "")), *[str(x) for x in op.get("from", [])]]
                     own = any(source.get(t.casefold(), "user") == "user" for t in involved if op.get("action") != "resolve_ghost")
-                    if auto and not own:
+                    if op.get("action") in SAFE_ACTIONS or (auto and not own):
                         try:
                             applied.append(await self.memory.apply_op(op) | {"reason": op.get("reason", "")})
                         except NoteError as e:
@@ -323,6 +325,26 @@ class Dreamer:
                 batches.append([])
             batches[-1].append(n)
         return batches
+
+    async def decide_all(self, run_id: str, apply: bool) -> int:
+        run = await self.repo.db.fetchone("SELECT * FROM dream_runs WHERE id = ?", (run_id,))
+        if not run:
+            raise DreamError("dream run not found")
+        proposals = list(run["proposals"] or [])
+        done = 0
+        for p in proposals:
+            if p.get("status") != "pending":
+                continue
+            if apply:
+                try:
+                    p["change"] = await self.memory.apply_op(p["op"])
+                except NoteError as e:
+                    p["error"] = str(e)
+                    continue
+            p["status"] = "applied" if apply else "dismissed"
+            done += 1
+        await self.repo.update_dream(run_id, {"proposals": proposals})
+        return done
 
     async def decide_proposal(self, run_id: str, index: int, apply: bool) -> dict[str, Any]:
         run = await self.repo.db.fetchone("SELECT * FROM dream_runs WHERE id = ?", (run_id,))

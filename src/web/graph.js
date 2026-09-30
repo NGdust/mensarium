@@ -60,9 +60,10 @@ const GAP = 124;
 const SECTOR_GAP = 0.12;
 
 // Areas: every topic gets a sector of the circle, wide in proportion to its notes; notes outside any topic share
-// one grey sector. Inside a sector the notes fill rings from the inside out, the pinned and important ones first,
-// so what matters most sits nearest the centre. A ghost (a title that is linked to but has no note yet) sits in
-// the sector of the note that mentions it. Topic notes themselves are not tiles: the sector is the topic.
+// one grey sector. A sector is split into sections by the tag its notes share (the server picks one per note), and
+// inside a section the notes follow their links: the most linked note nearest the centre, the notes that mention
+// it on the rings behind it, so a chain of links reads outward. A ghost (a title that is linked to but has no note
+// yet) sits in the sector of the note that mentions it. Topic notes themselves are not tiles: the sector is the topic.
 export function layoutMemory(nodes, links, centerId, topics) {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const adj = new Map(nodes.map((n) => [n.id, new Set()]));
@@ -81,7 +82,22 @@ export function layoutMemory(nodes, links, centerId, topics) {
   }
   const rank = (id) => (byId.get(id).pinned ? 50 : 0) + (byId.get(id).weight || 0) * 3 + adj.get(id).size;
   const kinds = [...topics.map((t) => t.id), NO_TOPIC].filter((k) => [...area.values()].includes(k));
-  const groups = new Map(kinds.map((k) => [k, [...area].filter(([, a]) => a === k).map(([id]) => id).sort((a, b) => rank(b) - rank(a) || byId.get(a).label.localeCompare(byId.get(b).label))]));
+  const groups = new Map(kinds.map((k) => [k, [...area].filter(([, a]) => a === k).map(([id]) => id)]));
+  // depth-first over the links inside a section: a note comes right after the note it is linked to
+  const chainOrder = (ids) => {
+    const set = new Set(ids);
+    const seen = new Set();
+    const out = [];
+    const inner = (id) => [...adj.get(id)].filter((x) => set.has(x));
+    const visit = (id) => {
+      if (seen.has(id)) return;
+      seen.add(id);
+      out.push(id);
+      inner(id).sort((a, b) => rank(b) - rank(a)).forEach(visit);
+    };
+    [...ids].sort((a, b) => inner(b).length - inner(a).length || rank(b) - rank(a) || byId.get(a).label.localeCompare(byId.get(b).label)).forEach(visit);
+    return out;
+  };
   const free = 2 * Math.PI - kinds.length * SECTOR_GAP;
   const minAngle = (GAP * 1.15) / INNER;
   const weights = kinds.map((k) => 3 + groups.get(k).length);
@@ -100,20 +116,33 @@ export function layoutMemory(nodes, links, centerId, topics) {
   kinds.forEach((kind, i) => {
     const ids = groups.get(kind);
     const angle = angles[i];
-    let ring = 0;
-    for (let placed = 0; placed < ids.length; ring++) {
-      const r = INNER + ring * STEP;
-      const take = Math.min(ids.length - placed, Math.max(1, Math.floor((angle * r) / GAP)));
-      const stepA = angle / take;
-      for (let j = 0; j < take; j++) {
-        const a = a0 + stepA * (j + 0.5);
-        pos.set(ids[placed + j], { ...polar(r, a), a, r, ring });
+    // sections by tag, the untagged rest last; each takes a slice of the sector in proportion to its notes
+    const tags = [...new Set(ids.map((id) => byId.get(id).group || ''))].sort((x, y) => (x === '') - (y === '') || x.localeCompare(y));
+    const parts = tags.map((tag) => ({ tag, ids: chainOrder(ids.filter((id) => (byId.get(id).group || '') === tag)) }));
+    const total = parts.reduce((s, p) => s + p.ids.length + 1, 0);
+    let b0 = a0;
+    let outerRing = 0;
+    const sections = [];
+    for (const p of parts) {
+      const slice = (angle * (p.ids.length + 1)) / total;
+      let ring = 0;
+      for (let placed = 0; placed < p.ids.length; ring++) {
+        const r = INNER + ring * STEP;
+        const take = Math.min(p.ids.length - placed, Math.max(1, Math.floor((slice * r) / GAP)));
+        const stepA = slice / take;
+        for (let j = 0; j < take; j++) {
+          const a = b0 + stepA * (j + 0.5);
+          pos.set(p.ids[placed + j], { ...polar(r, a), a, r, ring });
+        }
+        placed += take;
       }
-      placed += take;
+      outerRing = Math.max(outerRing, ring);
+      sections.push({ tag: p.tag, a0: b0, a1: b0 + slice, outer: INNER + (ring - 1) * STEP });
+      b0 += slice;
     }
-    ringCount = Math.max(ringCount, ring);
+    ringCount = Math.max(ringCount, outerRing);
     const topic = topics.find((t) => t.id === kind);
-    sectors.push({ kind, topic, color: topicColor(topics.indexOf(topic)), a0, a1: a0 + angle, count: ids.filter((id) => !byId.get(id).ghost).length, outer: INNER + (ring - 1) * STEP });
+    sectors.push({ kind, topic, color: topicColor(topics.indexOf(topic)), a0, a1: a0 + angle, count: ids.filter((id) => !byId.get(id).ghost).length, outer: INNER + (outerRing - 1) * STEP, sections });
     a0 += angle + SECTOR_GAP;
   });
   const rings = Array.from({ length: ringCount + 1 }, (_, i) => INNER + i * STEP);
@@ -181,23 +210,44 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerT
     const [p, q, u, v] = [polar(r1, s.a0), polar(r1, s.a1), polar(r0, s.a1), polar(r0, s.a0)];
     return `M ${p.x} ${p.y} A ${r1} ${r1} 0 ${big} 1 ${q.x} ${q.y} L ${u.x} ${u.y} A ${r0} ${r0} 0 ${big} 0 ${v.x} ${v.y} Z`;
   }
-  // the sector's name runs along its inner edge; on the lower half the arc is drawn backwards so the text stays upright
-  function areaLabel(s) {
-    const mid = (s.a0 + s.a1) / 2;
-    const lower = Math.sin(mid) > 0;
-    const r = INNER - (lower ? 44 : 78);
-    const p = polar(r, lower ? s.a1 : s.a0);
-    const q = polar(r, lower ? s.a0 : s.a1);
-    const big = s.a1 - s.a0 > Math.PI ? 1 : 0;
-    const id = `mm-arc-${s.kind}`;
+  // text along an arc; on the lower half the arc is drawn backwards so the text stays upright
+  function arcText(id, r, a0, a1, cls, content) {
+    const lower = Math.sin((a0 + a1) / 2) > 0;
+    const p = polar(r, lower ? a1 : a0);
+    const q = polar(r, lower ? a0 : a1);
+    const big = a1 - a0 > Math.PI ? 1 : 0;
     const path = svgEl('path', { id, d: `M ${p.x} ${p.y} A ${r} ${r} 0 ${big} ${lower ? 0 : 1} ${q.x} ${q.y}`, fill: 'none' });
-    const text = svgEl('text', { class: 'mm-area-label' });
-    text.style.setProperty('--c', s.color);
+    const text = svgEl('text', { class: cls });
     const tp = svgEl('textPath', { href: `#${id}`, startOffset: '50%', 'text-anchor': 'middle' });
-    tp.textContent = `${s.topic ? s.topic.title : noTopicLabel} · ${s.count}`;
+    tp.textContent = content;
     text.append(tp);
+    return [path, text, lower];
+  }
+  // the sector's name runs along its inner edge, its sections along the outer rim with thin dividers between them
+  function areaLabel(s) {
+    const lower = Math.sin((s.a0 + s.a1) / 2) > 0;
+    const [path, text] = arcText(`mm-arc-${s.kind}`, INNER - (lower ? 44 : 78), s.a0, s.a1, 'mm-area-label', `${s.topic ? s.topic.title : noTopicLabel} · ${s.count}`);
+    text.style.setProperty('--c', s.color);
     text.addEventListener('click', () => onArea?.(s.kind, s.topic || null));
-    return [path, text];
+    const rim = s.outer + STEP * 0.55;
+    const extras = s.sections.length > 1 ? s.sections.flatMap((sec, i) => {
+      const out = [];
+      if (sec.tag) {
+        const low = Math.sin((sec.a0 + sec.a1) / 2) > 0;
+        const [p, t] = arcText(`mm-sec-${s.kind}-${i}`, rim + (low ? 20 : 12), sec.a0, sec.a1, 'mm-section-label', sec.tag);
+        t.style.setProperty('--c', s.color);
+        out.push(p, t);
+      }
+      if (i) {
+        const a = polar(INNER - 50, sec.a0);
+        const b = polar(rim, sec.a0);
+        const line = svgEl('path', { class: 'mm-divider', d: `M ${a.x} ${a.y} L ${b.x} ${b.y}` });
+        line.style.setProperty('--c', s.color);
+        out.push(line);
+      }
+      return out;
+    }) : [];
+    return [path, text, ...extras];
   }
 
   function nodeEl(n) {

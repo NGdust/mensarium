@@ -41,6 +41,12 @@ class MemoryCenterTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(NoteError):
             await self.memory.create(title="Loose", body="", topic_id=note["id"])
         self.assertEqual([(t["title"], t["count"]) for t in await self.memory.topics()], [("Mensarium", 1)])
+        web = await self.memory.create(title="Light theme", body="", tags=["mensarium", "web"], topic_id=code["id"])
+        await self.memory.create(title="Mobile layout", body="", tags=["web", "css"], topic_id=code["id"])
+        rows = await self.memory.notes()
+        groups = self.memory.groups(rows)
+        self.assertEqual((groups[web["id"]], groups[note["id"]]), ("web", None))
+        self.assertEqual(self.memory.path(web, rows, groups), "Mensarium › web › Light theme")
         await self.memory.repo.delete_note(code["id"])
         self.assertIsNone((await self.memory.repo.get_note(note["id"]))["topic_id"])
 

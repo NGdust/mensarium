@@ -1288,7 +1288,8 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     async def list_notes(q: str = "", archived: bool = False, c: Core = Depends(auth)) -> dict[str, Any]:
         rows = await c.memory.search(q, 500) if q.strip() else await c.memory.notes(archived)
         center = await c.memory.center()
-        return {"notes": [Memory.view(r) for r in rows], "kinds": list(KINDS), "center": center["id"] if center else None, "topics": await c.memory.topics()}
+        groups = Memory.groups(await c.memory.notes())
+        return {"notes": [Memory.view(r) | {"group": groups.get(r["id"])} for r in rows], "kinds": list(KINDS), "center": center["id"] if center else None, "topics": await c.memory.topics()}
 
     @app.get("/v1/memory/notes/{note_id}")
     async def get_note(note_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
@@ -1358,6 +1359,15 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             raise HTTPException(409, str(e)) from e
         await c.repo.audit(c.workspace_id, "user", "memory.dream_started", {"run_id": run_id, "tidy": tidy})
         return {"id": run_id}
+
+    @app.post("/v1/memory/dreams/{run_id}/proposals")
+    async def dream_proposals(run_id: str, body: ProposalBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            done = await c.dreamer.decide_all(run_id, body.action == "apply")
+        except DreamError as e:
+            raise HTTPException(409, str(e)) from e
+        await c.repo.audit(c.workspace_id, "user", "memory.proposals_" + ("applied" if body.action == "apply" else "dismissed"), {"run_id": run_id, "count": done})
+        return {"count": done}
 
     @app.post("/v1/memory/dreams/{run_id}/proposals/{index}")
     async def dream_proposal(run_id: str, index: int, body: ProposalBody, c: Core = Depends(auth)) -> dict[str, Any]:

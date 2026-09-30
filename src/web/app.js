@@ -3137,7 +3137,8 @@ async function settingsMemory(shell) {
       } }, tr('Make central'));
       side.replaceChildren(...[
         h('div', { class: 'graph-side-head' }, h('h3', {}, n.title), close),
-        h('div', { class: 'graph-side-meta' }, isCenter ? h('span', { class: 'pill accent' }, tr('central')) : null, kindPill(n.kind), n.topic_id ? h('button', { class: 'pill topic-pill', onclick: () => previewTopic(n.topic_id, data.topics.find((t) => t.id === n.topic_id)) }, h('span', { class: 'kind-dot', style: `background:${map.color(n.id)}` }), data.topics.find((t) => t.id === n.topic_id)?.title || tr('topic')) : null, n.pinned ? h('span', { class: 'pill accent', title: tr('Always in the agent\'s context') }, icon('pin'), tr('pinned')) : null, (n.tags || []).map((t) => h('span', { class: 'pill tag' }, `#${t}`))),
+        n.topic_id ? h('div', { class: 'note-path' }, h('button', { class: 'pill topic-pill', onclick: () => previewTopic(n.topic_id, data.topics.find((t) => t.id === n.topic_id)) }, h('span', { class: 'kind-dot', style: `background:${map.color(n.id)}` }), data.topics.find((t) => t.id === n.topic_id)?.title || tr('topic')), node.group ? [h('span', { class: 'note-path-sep' }, '›'), h('span', { class: 'pill' }, `#${node.group}`)] : null) : null,
+        h('div', { class: 'graph-side-meta' }, isCenter ? h('span', { class: 'pill accent' }, tr('central')) : null, kindPill(n.kind), n.pinned ? h('span', { class: 'pill accent', title: tr('Always in the agent\'s context') }, icon('pin'), tr('pinned')) : null, (n.tags || []).map((t) => h('span', { class: 'pill tag' }, `#${t}`))),
         detached ? h('p', { class: 'market-note' }, tr('Not linked to other notes yet.')) : null,
         bodyEl,
         n.backlinks.length ? h('div', { class: 'note-backlinks' }, tr('Linked from: '), n.backlinks.map((b, i) => [i ? ', ' : '', h('a', { href: '#', onclick: (e) => { e.preventDefault(); map.select(b.id, { pan: true }); preview(data.nodes.find((x) => x.id === b.id)); } }, b.title)])) : null,
@@ -3187,8 +3188,9 @@ async function settingsMemory(shell) {
         h('div', { class: 'row-text' },
           h('div', { class: 'row-title' }, n.title, n.id === centerId ? h('span', { class: 'pill accent' }, tr('central')) : null, n.archived ? h('span', { class: 'pill' }, tr('archived')) : null, n.pinned ? h('span', { class: 'note-pin', title: tr('Always in the agent\'s context') }, icon('pin')) : null),
           h('div', { class: 'row-desc' }, n.snippet || tr('Empty')),
-          h('div', { class: 'note-item-meta' }, [MEM_KINDS[n.kind] || n.kind, MEM_SOURCES[n.source] || n.source, relTime(n.updated_at), ...(n.tags || []).map((t) => `#${t}`)].join(' · '))));
-      const groups = [...topics.map((t) => [t, shown.filter((n) => n.topic_id === t.id)]), [null, shown.filter((n) => !topics.some((t) => t.id === n.topic_id))]].filter(([t, items]) => items.length || (t && !q && !kindFilter.value));
+          h('div', { class: 'note-item-meta' }, [n.group ? `› #${n.group}` : null, MEM_KINDS[n.kind] || n.kind, MEM_SOURCES[n.source] || n.source, relTime(n.updated_at), ...(n.tags || []).map((t) => `#${t}`)].filter(Boolean).join(' · '))));
+      const bySection = (a, b) => (a.group || '\uffff').localeCompare(b.group || '\uffff') || b.importance - a.importance;
+      const groups = [...topics.map((t) => [t, shown.filter((n) => n.topic_id === t.id).sort(bySection)]), [null, shown.filter((n) => !topics.some((t) => t.id === n.topic_id)).sort(bySection)]].filter(([t, items]) => items.length || (t && !q && !kindFilter.value));
       list.replaceChildren(...(groups.length ? groups.map(([t, items]) => h('section', { class: 'note-group' },
         h('div', { class: 'note-group-head' },
           h('div', { class: 'row-text' },
@@ -3236,7 +3238,7 @@ async function settingsMemory(shell) {
       const run = h('button', { class: 'btn btn-primary', disabled: d.running, onclick: async () => {
         try { await post('/v1/memory/dreams'); toast(tr('The agent is falling asleep')); signature = ''; await load(); } catch (err) { fail(err); }
       } }, icon('moon'), d.running ? tr('Dreaming...') : tr('Run now'));
-      const tidy = h('button', { class: 'btn', disabled: d.running, title: tr('Goes through every topic and the notes without one, then proposes merges, rewrites, moves and retirements. Nothing changes until you accept a proposal.'), onclick: async () => {
+      const tidy = h('button', { class: 'btn', disabled: d.running, title: tr('Goes through every topic and the notes without one: moves notes into topics right away, and proposes merges, rewrites and retirements for you to accept.'), onclick: async () => {
         try { await post('/v1/memory/dreams?tidy=true'); toast(tr('Sorting the notes...')); signature = ''; await load(); } catch (err) { fail(err); }
       } }, icon('layers'), tr('Sort into topics'));
       const hour = h('select', { 'aria-label': tr('Run hour') }, Array.from({ length: 24 }, (_, i) => h('option', { value: String(i), selected: i === s.hour }, tr('at {0}:00', String(i).padStart(2, '0')))));
@@ -3265,7 +3267,12 @@ async function settingsMemory(shell) {
     function dreamEntry(r) {
       const st = r.stats || {};
       const status = { done: ['', ''], empty: [tr('no dreams'), ''], failed: [tr('error'), 'danger'] }[r.status] || [r.status, ''];
-      const numbers = [st.chats != null && tr('chats: {0}', st.chats), st.created && tr('new: {0}', st.created), st.updated && tr('expanded: {0}', st.updated), st.reinforced && tr('reinforced: {0}', st.reinforced), st.discarded && tr('released: {0}', st.discarded), st.tidied && tr('tidied: {0}', st.tidied), st.proposed && tr('proposals: {0}', st.proposed)].filter(Boolean).join(' · ');
+      const numbers = [st.chats != null && tr('chats: {0}', st.chats), st.created && tr('new: {0}', st.created), st.updated && tr('expanded: {0}', st.updated), st.reinforced && tr('reinforced: {0}', st.reinforced), st.discarded && tr('released: {0}', st.discarded), st.tidied && tr('tidied: {0}', st.tidied), st.moved && tr('moved: {0}', st.moved), st.proposed && tr('proposals: {0}', st.proposed)].filter(Boolean).join(' · ');
+      const decideAll = async (action) => {
+        try { const r = await post(`/v1/memory/dreams/${r.id}/proposals`, { action }); toast(action === 'apply' ? tr('Applied: {0}', r.count) : tr('Skipped: {0}', r.count)); signature = ''; await load(); } catch (err) { fail(err); }
+      };
+      const pending = (r.proposals || []).filter((p) => p.status === 'pending').length;
+      const batch = pending > 1 ? h('div', { class: 'dream-proposal-batch' }, h('span', { class: 'market-meta' }, tp('{0} proposal waiting|{0} proposals waiting', pending)), h('button', { class: 'btn btn-sm btn-primary', onclick: () => decideAll('apply') }, tr('Apply all')), h('button', { class: 'btn btn-sm', onclick: () => decideAll('dismiss') }, tr('Skip all'))) : null;
       const decide = async (i, action) => {
         try { await post(`/v1/memory/dreams/${r.id}/proposals/${i}`, { action }); toast(action === 'apply' ? tr('Applied') : tr('Dismissed')); signature = ''; await load(); } catch (err) { fail(err); }
       };
@@ -3278,8 +3285,8 @@ async function settingsMemory(shell) {
         importance: tr('Set importance of “{0}” to {1}', op.title, op.importance),
         resolve_ghost: op.into ? tr('Point links to “{0}” at “{1}”', op.title, op.into) : tr('Create the note “{0}”', op.title),
       }[op.action] || `${op.action} ${op.title}`);
-      const proposals = (r.proposals || []).length ? h('div', { class: 'dream-proposals' }, r.proposals.map((p, i) => h('div', { class: `dream-proposal ${p.status}` },
-        h('div', { class: 'row-text' }, h('div', { class: 'row-title' }, opText(p.op), p.topic ? h('span', { class: 'pill' }, p.topic) : null), h('div', { class: 'row-desc' }, p.op.reason || ''), p.op.body ? h('details', {}, h('summary', {}, tr('New text')), h('p', { class: 'row-desc' }, p.op.body)) : null),
+      const proposals = (r.proposals || []).length ? h('div', { class: 'dream-proposals' }, batch, r.proposals.map((p, i) => h('div', { class: `dream-proposal ${p.status}` },
+        h('div', { class: 'row-text' }, h('div', { class: 'row-title' }, opText(p.op), p.topic ? h('span', { class: 'pill' }, p.topic) : null), h('div', { class: 'row-desc' }, p.op.reason || ''), p.error ? h('div', { class: 'dream-error' }, p.error) : null, p.op.body ? h('details', {}, h('summary', {}, tr('New text')), h('p', { class: 'row-desc' }, p.op.body)) : null),
         p.status === 'pending'
           ? h('div', { class: 'dream-proposal-actions' }, h('button', { class: 'btn btn-sm btn-primary', onclick: () => decide(i, 'apply') }, tr('Apply')), h('button', { class: 'btn btn-sm', onclick: () => decide(i, 'dismiss') }, tr('Skip')))
           : h('span', { class: `pill${p.status === 'applied' ? ' ok' : ''}` }, p.status === 'applied' ? tr('applied') : tr('skipped'))))) : null;

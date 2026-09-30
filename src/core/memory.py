@@ -97,6 +97,32 @@ class Memory:
         rows = await self.repo.list_notes()
         return rows if archived else [r for r in rows if not r.get("archived")]
 
+    @staticmethod
+    def groups(rows: list[dict[str, Any]]) -> dict[str, str | None]:
+        """The section of a note inside its topic: the tag it shares with most notes of the same topic, when at least
+        two notes share it. Notes outside any topic are sectioned the same way among themselves."""
+        titles = {r["id"]: r["title"].casefold() for r in rows if r["kind"] == "topic"}
+        buckets: dict[str | None, list[dict[str, Any]]] = {}
+        for r in rows:
+            if r["kind"] != "topic":
+                buckets.setdefault(r.get("topic_id"), []).append(r)
+        out: dict[str, str | None] = {}
+        for topic_id, members in buckets.items():
+            skip = {titles.get(topic_id or "", "")}
+            counts: dict[str, int] = {}
+            for r in members:
+                for t in r["tags"] or []:
+                    if t.casefold() not in skip:
+                        counts[t] = counts.get(t, 0) + 1
+            for r in members:
+                best = max((t for t in r["tags"] or [] if counts.get(t, 0) >= 2), key=lambda t: (counts[t], t), default=None)
+                out[r["id"]] = best
+        return out
+
+    def path(self, row: dict[str, Any], rows: list[dict[str, Any]], groups: dict[str, str | None]) -> str:
+        topic = next((r["title"] for r in rows if r["id"] == row.get("topic_id")), None)
+        return " › ".join(x for x in (topic, groups.get(row["id"]), row["title"]) if x)
+
     # ---- topics ----
 
     async def topics(self) -> list[dict[str, Any]]:
@@ -381,6 +407,7 @@ class Memory:
         rows = await self.notes()
         topics = sorted((r for r in rows if r["kind"] == "topic"), key=lambda r: r["title"].casefold())
         rest = sorted((r for r in rows if r["kind"] != "topic"), key=lambda r: (r["pinned"], r["importance"], r["recall_count"]), reverse=True)
+        groups = self.groups(rows)
         lines: list[str] = []
         used = 0
         for r in [*topics, *rest]:
@@ -388,7 +415,8 @@ class Memory:
             if not text:
                 continue
             limit = TOPIC_CHARS if r["kind"] == "topic" else 600 if r["pinned"] else 120 if r["kind"] == "task" else 200
-            line = f"- {'[topic] ' if r['kind'] == 'topic' else ''}{r['title']}: {text[:limit]}{'…' if len(text) > limit else ''}"
+            name = f"[topic] {r['title']}" if r["kind"] == "topic" else self.path(r, rows, groups)
+            line = f"- {name}: {text[:limit]}{'…' if len(text) > limit else ''}"
             if used + len(line) > CONTEXT_BUDGET:
                 break
             lines.append(line)
@@ -398,8 +426,9 @@ class Memory:
     async def graph(self, with_tags: bool) -> dict[str, Any]:
         rows = await self.notes()
         by_title = {r["title"].lower(): r["id"] for r in rows}
+        groups = self.groups(rows)
         nodes: list[dict[str, Any]] = [
-            {"id": r["id"], "label": r["title"], "kind": r["kind"], "weight": r["importance"], "pinned": bool(r["pinned"]), "topic": r.get("topic_id")}
+            {"id": r["id"], "label": r["title"], "kind": r["kind"], "weight": r["importance"], "pinned": bool(r["pinned"]), "topic": r.get("topic_id"), "group": groups.get(r["id"])}
             for r in rows
         ]
         links: list[dict[str, str]] = []
