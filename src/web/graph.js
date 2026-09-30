@@ -178,6 +178,7 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerT
   let selected = null;
   let hovered = null;
   let only = { area: null, kind: null };
+  let focused = false;
   let token = 0;
   let moved = false;
   let files = [];
@@ -405,35 +406,65 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerT
     setTimeout(() => nodeEls.get(id)?.classList.remove('arrived'), 700);
   }
 
-  function select(id, { pan = false } = {}) {
+  // the view glides to its target; a drag, a pinch or the wheel cuts the glide short
+  let glide = 0;
+  function moveTo(target, instant = false) {
+    const my = ++glide;
+    if (instant || reduceMotion.matches) { view = target; apply(); return; }
+    const from = { ...view };
+    const t0 = performance.now();
+    const frame = (now) => {
+      if (my !== glide) return;
+      const t = Math.min(1, (now - t0) / 520);
+      const q = 1 - (1 - t) ** 3;
+      view = { k: from.k + (target.k - from.k) * q, x: from.x + (target.x - from.x) * q, y: from.y + (target.y - from.y) * q };
+      apply();
+      if (t < 1) requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }
+  // the part of the stage the side panel leaves free: to the left of it on a desktop, above it on a phone
+  const free = () => {
+    const { w, h } = size();
+    return w > 760 ? { x: 0, y: 0, w: w - 364, h } : { x: 0, y: 0, w, h: h * 0.42 };
+  };
+  // a note with its linked neighbours fills the free part of the stage, close enough to read the labels
+  function focus(ids) {
+    const pts = ids.map((id) => layout.pos.get(id)).filter(Boolean);
+    if (!pts.length) return;
+    const x0 = Math.min(...pts.map((p) => p.x)) - 110;
+    const x1 = Math.max(...pts.map((p) => p.x)) + 110;
+    const y0 = Math.min(...pts.map((p) => p.y)) - 90;
+    const y1 = Math.max(...pts.map((p) => p.y)) + 90;
+    const box = free();
+    const k = Math.max(0.5, Math.min(1.3, Math.min(box.w / (x1 - x0), box.h / (y1 - y0))));
+    focused = true;
+    moved = true;
+    moveTo({ k, x: box.x + box.w / 2 - ((x0 + x1) / 2) * k, y: box.y + box.h / 2 - ((y0 + y1) / 2) * k });
+  }
+
+  function select(id, { zoom = true } = {}) {
     selected = id && byId.has(id) ? id : null;
     light();
-    if (!selected) { token++; return; }
-    if (pan) {
-      const p = layout.pos.get(selected);
-      const { w, h } = size();
-      const sx = view.x + p.x * view.k;
-      const sy = view.y + p.y * view.k;
-      if (sx < 60 || sy < 60 || sx > w - 60 || sy > h - 60) {
-        view = { ...view, x: (w > 760 ? (w - 360) / 2 : w / 2) - p.x * view.k, y: h / 2 - p.y * view.k };
-        apply();
-      }
-    }
+    if (!selected) { token++; if (focused) fit(); return; }
+    if (zoom && selected !== centerId) focus([selected, ...(layout.adj.get(selected) || [])]);
     send(selected);
   }
 
   // the whole map in view: the areas are the point, so nothing is cropped
-  function fit() {
+  function fit(instant = false) {
     const { w, h } = size();
     if (!layout || !w) return;
     const outer = Math.max(HUB_R + 60, ...[...layout.pos.values()].map((p) => p.r + 90));
     const k = Math.max(0.3, Math.min(1.1, Math.min(w, h) / (outer * 2 + 20)));
-    view = { k, x: w / 2, y: h / 2 };
-    apply();
+    focused = false;
+    moved = false;
+    moveTo({ k, x: w / 2, y: h / 2 }, instant);
   }
 
   function zoom(factor, cx, cy) {
     moved = true;
+    glide++;
     const { w, h } = size();
     const px = cx ?? w / 2;
     const py = cy ?? h / 2;
@@ -450,6 +481,7 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerT
   stage.addEventListener('pointerdown', (e) => {
     if (e.target.closest('.mm-node, .mm-hub, .mm-ui')) return;
     stage.setPointerCapture(e.pointerId);
+    glide++;
     const [x, y] = local(e);
     pointers.set(e.pointerId, [x, y]);
     if (pointers.size === 2) {
@@ -490,7 +522,7 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerT
     zoom(Math.exp(-e.deltaY * 0.0015), x, y);
   }, { passive: false });
   // until the owner pans or zooms, the whole map follows the panel size
-  const ro = new ResizeObserver(() => { if (!moved && layout) fit(); });
+  const ro = new ResizeObserver(() => { if (!moved && layout) fit(true); });
   ro.observe(stage);
 
   return {
@@ -509,10 +541,12 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerT
       if (selected && !byId.has(selected)) selected = null;
       if (only.area && !layout.sectors.some((s) => s.kind === only.area)) only = { ...only, area: null };
       render();
-      if (!moved) fit();
+      if (!moved) fit(true);
     },
     select,
-    fit() { moved = false; fit(); },
+    fit: () => fit(),
+    focusArea(area) { const ids = nodes.filter((n) => layout?.area.get(n.id) === area).map((n) => n.id); if (ids.length) focus(ids); else fit(); },
+    unfocus() { if (focused) fit(); },
     setFiles(list) {
       files = list;
       if (layout) render();

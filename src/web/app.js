@@ -3026,7 +3026,7 @@ async function settingsMemory(shell) {
       noTopicLabel: tr('No topic'),
       onSelect: (node) => preview(node),
       onFile: (name) => previewFile(name),
-      onArea: (area, topic) => { setOnly({ area }); previewTopic(area, topic); },
+      onArea: (area, topic) => { setOnly({ area }); map.focusArea(area); previewTopic(area, topic); },
     });
     // one chip per topic with its note count and one per note kind; a chip narrows the map, the same chip again widens it
     const chips = h('div', { class: 'mm-chips mm-ui' });
@@ -3051,7 +3051,7 @@ async function settingsMemory(shell) {
       side.classList.remove('hidden');
       const close = h('button', { class: 'icon-btn', 'aria-label': tr('Close'), onclick: hideSide }, icon('x'));
       const members = map.members(area).sort((a, b) => (b.weight || 0) - (a.weight || 0));
-      const list = h('div', { class: 'graph-side-members' }, members.map((n) => h('button', { class: 'mm-chip', style: `--c:${map.color(n.id)}`, onclick: () => { map.select(n.id, { pan: true }); preview(n); } }, icon(kindIcon(n.kind)), n.label)));
+      const list = h('div', { class: 'graph-side-members' }, members.map((n) => h('button', { class: 'mm-chip', style: `--c:${map.color(n.id)}`, onclick: () => { map.select(n.id); preview(n); } }, icon(kindIcon(n.kind)), n.label)));
       const onlyBtn = h('button', { class: 'btn btn-sm', onclick: () => { setOnly({ area }); onlyBtn.textContent = map.only().area === area ? tr('Show all topics') : tr('Only this topic'); } }, map.only().area === area ? tr('Show all topics') : tr('Only this topic'));
       if (!topic) {
         side.replaceChildren(
@@ -3106,7 +3106,7 @@ async function settingsMemory(shell) {
       map.setData(data);
       renderChips();
     }
-    const hideSide = () => { side.classList.add('hidden'); map.select(null); };
+    const hideSide = () => { side.classList.add('hidden'); map.select(null); map.unfocus(); };
     async function preview(node) {
       if (!node) { hideSide(); return; }
       side.classList.remove('hidden');
@@ -3125,7 +3125,7 @@ async function settingsMemory(shell) {
         if (!link) return;
         e.preventDefault();
         const target = data.nodes.find((x) => x.label.toLowerCase() === link.dataset.title.toLowerCase());
-        if (target) { map.select(target.id, { pan: true }); preview(target); }
+        if (target) { map.select(target.id); preview(target); }
       });
       const center = data.nodes.find((x) => x.id === centerId);
       const detached = !isCenter && map.isDetached(n.id);
@@ -3141,7 +3141,7 @@ async function settingsMemory(shell) {
         h('div', { class: 'graph-side-meta' }, isCenter ? h('span', { class: 'pill accent' }, tr('central')) : null, kindPill(n.kind), n.pinned ? h('span', { class: 'pill accent', title: tr('Always in the agent\'s context') }, icon('pin'), tr('pinned')) : null, (n.tags || []).map((t) => h('span', { class: 'pill tag' }, `#${t}`))),
         detached ? h('p', { class: 'market-note' }, tr('Not linked to other notes yet.')) : null,
         bodyEl,
-        n.backlinks.length ? h('div', { class: 'note-backlinks' }, tr('Linked from: '), n.backlinks.map((b, i) => [i ? ', ' : '', h('a', { href: '#', onclick: (e) => { e.preventDefault(); map.select(b.id, { pan: true }); preview(data.nodes.find((x) => x.id === b.id)); } }, b.title)])) : null,
+        n.backlinks.length ? h('div', { class: 'note-backlinks' }, tr('Linked from: '), n.backlinks.map((b, i) => [i ? ', ' : '', h('a', { href: '#', onclick: (e) => { e.preventDefault(); map.select(b.id); preview(data.nodes.find((x) => x.id === b.id)); } }, b.title)])) : null,
         h('div', { class: 'market-meta' }, tr('source: {0} · importance {1}', MEM_SOURCES[n.source] || n.source, n.importance)),
         h('div', { class: 'graph-side-actions' },
           h('button', { class: 'btn btn-sm', onclick: () => openNoteEditor(n, { onSaved: async () => { await load(); map.select(n.id); }, onOpenTitle: openTitle, centerId }) }, tr('Edit')),
@@ -3154,7 +3154,7 @@ async function settingsMemory(shell) {
       const q = search.value.trim().toLowerCase();
       const tiles = data.nodes.filter((x) => x.kind !== 'topic');
       const node = tiles.find((x) => x.label.toLowerCase() === q) || tiles.find((x) => x.label.toLowerCase().includes(q));
-      if (node) { map.select(node.id, { pan: true }); preview(node); } else toast(tr('No such note found'));
+      if (node) { map.select(node.id); preview(node); } else toast(tr('No such note found'));
     });
     stage.append(
       h('div', { class: 'mm-tools mm-ui' }, h('div', { class: 'settings-search graph-search' }, icon('search'), search), chips, kindChips),
