@@ -227,6 +227,10 @@ class MemorySaveArgs(_Args):
     topic: str | None = Field(None, max_length=120, description="Topic the note belongs to: an existing topic title from the Memory block, or a new short name when nothing fits")
 
 
+class AutomationStateArgs(_Args):
+    values: dict[str, str | int | float | bool | None] = Field(description="Keys to set for the next run; a null value removes the key")
+
+
 class WebSearchArgs(_Args):
     query: str = Field(min_length=1, max_length=400, description="Search query")
     count: int | None = Field(None, ge=1, le=20, description="Number of results, the plugin setting by default")
@@ -332,6 +336,7 @@ CORE_TOOL_ARGS: dict[str, type[BaseModel]] = {
     "automations.create": AutomationsCreateArgs,
     "automations.delete": AutomationsDeleteArgs,
     "device.update": NoArgs,
+    "automation.state": AutomationStateArgs,
     "secrets.request": SecretsRequestArgs,
 }
 

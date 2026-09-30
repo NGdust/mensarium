@@ -2,6 +2,7 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+import json
 import logging
 import secrets as token_secrets
 import time
@@ -21,7 +22,7 @@ from mensarium.agent_core.context import (
     strip_images,
 )
 from mensarium.agent_core.profile import AgentProfile
-from mensarium.contracts.automations import AutomationCreate, AutomationError
+from mensarium.contracts.automations import AutomationCreate, AutomationError, merge_state
 from mensarium.contracts.llm import ChatRequest
 from mensarium.contracts.projects import BRANCH_PREFIX, BRANCH_RE, ProjectError, branch_name
 from mensarium.contracts.protocol import (
@@ -697,6 +698,7 @@ class Orchestrator:
                 outdated,
                 task.get("label"),
                 unattended=bool(task.get("automation_id")) and sum(s["kind"] == "user" for s in steps) == 1,
+                automation_state=await self._automation_state_text(task.get("automation_id")),
                 project=project_block,
                 mode=current["mode"] if full_access(target) == "allowed" else "ask",
                 instructions=instructions,
@@ -1227,9 +1229,28 @@ class Orchestrator:
             return await self._automations_tool(task_id, tool, args)
         if tool == "device.update":
             return await self._update_device(task_id)
+        if tool == "automation.state":
+            return await self._automation_state(task_id, args["values"])
         if tool == "secrets.request":
             return await self._request_secret(task_id, args)
         return await self.plugins.call_core(toolbox, toolbox.registry[tool], args)
+
+    async def _automation_state(self, task_id: str, values: dict[str, Any]) -> str:
+        automation = await self.repo.get_automation((await self._task(task_id)).get("automation_id") or "")
+        if not automation:
+            raise TaskError("this chat is not an automation run")
+        try:
+            state = merge_state(automation.get("state") or {}, values)
+        except ValueError as e:
+            return str(e)
+        await self.repo.update_automation(automation["id"], {"state": state})
+        return f"State for the next run: {json.dumps(state, ensure_ascii=False)}"
+
+    async def _automation_state_text(self, automation_id: str | None) -> str | None:
+        if not automation_id:
+            return None
+        row = await self.repo.get_automation(automation_id)
+        return json.dumps(row.get("state") or {}, ensure_ascii=False) if row else None
 
     async def _update_device(self, task_id: str) -> str:
         target = await self.repo.get_target((await self._task(task_id))["target_id"])

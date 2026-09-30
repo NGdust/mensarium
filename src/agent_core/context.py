@@ -35,6 +35,13 @@ UNATTENDED_BLOCK = (
     "wait for them. If there is nothing to report, answer with exactly NO_REPLY.\n"
 )
 
+STATE_BLOCK = (
+    "\n## Automation state\n"
+    "Values kept from earlier runs of this automation: {state}\n"
+    "Save what the next run needs (a last seen price, a processed id, a date) with automation.state; memory notes "
+    "are for durable knowledge, never for run-to-run state.\n"
+)
+
 PROJECT_BLOCK = (
     "\n## Project (set by the harness)\n"
     "- name: {name}\n"
@@ -136,6 +143,7 @@ def build_system_prompt(
     outdated_agent: str | None = None,
     agent_label: str | None = None,
     unattended: bool = False,
+    automation_state: str | None = None,
     project: dict[str, Any] | None = None,
     mode: AccessMode = "ask",
     instructions: list[tuple[str, str, str]] | None = None,
@@ -179,6 +187,8 @@ def build_system_prompt(
         )
     if unattended:
         prompt += UNATTENDED_BLOCK
+    if automation_state is not None:
+        prompt += STATE_BLOCK.format(state=automation_state if automation_state not in ("", "{}") else "(none yet)")
     if project:
         project = {"executor": "", "remote": False, "snapshot_at": "", **project}
         block = FOLDER_BLOCK if project["kind"] == "folder" else INPLACE_BLOCK if project.get("inplace") else PROJECT_BLOCK

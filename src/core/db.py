@@ -10,6 +10,7 @@ COLUMN_MIGRATIONS = [
     ("memory_notes", "topic_id", "TEXT"),
     ("memory_notes", "archived", "INTEGER NOT NULL DEFAULT 0"),
     ("dream_runs", "proposals", "TEXT NOT NULL DEFAULT '[]'"),
+    ("automations", "state", "TEXT NOT NULL DEFAULT '{}'"),
     ("tasks", "mode", "TEXT NOT NULL DEFAULT 'ask'"),
     ("tasks", "model", "TEXT"),
     ("targets", "disabled_tools", "TEXT NOT NULL DEFAULT '[]'"),
@@ -111,7 +112,7 @@ CREATE TABLE IF NOT EXISTS automations (
     notify INTEGER NOT NULL DEFAULT 1, delete_after_run INTEGER NOT NULL DEFAULT 0,
     created_by TEXT NOT NULL DEFAULT 'user', next_run_at TEXT, last_run_at TEXT, last_status TEXT, last_error TEXT,
     failures INTEGER NOT NULL DEFAULT 0, disabled_reason TEXT, running_run_id TEXT,
-    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, state TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS automation_runs (
     id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, task_id TEXT, trigger TEXT NOT NULL, status TEXT NOT NULL,
@@ -142,7 +143,7 @@ CREATE INDEX IF NOT EXISTS project_deliveries_target ON project_deliveries(targe
 JSON_COLUMNS = {
     "settings", "capabilities", "policy", "body", "budget", "input", "output", "params", "usage",
     "arguments", "metadata", "payload", "disabled_tools", "manifest", "tags", "stats", "changes", "proposals", "config", "status", "plan",
-    "schedule", "skipped", "diff_stat",
+    "schedule", "skipped", "diff_stat", "state",
 }
 
 

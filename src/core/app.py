@@ -1136,6 +1136,14 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             raise automation_error(e) from e
         return {"ok": True}
 
+    @app.delete("/v1/automations/{automation_id}/state")
+    async def clear_automation_state(automation_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        if not await c.repo.get_automation(automation_id):
+            raise HTTPException(404, "automation not found")
+        await c.repo.update_automation(automation_id, {"state": {}})
+        await c.repo.audit(c.workspace_id, "user", "automation.state_cleared", {"automation_id": automation_id})
+        return {"ok": True}
+
     @app.post("/v1/automations/{automation_id}/run")
     async def run_automation(automation_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
         try:

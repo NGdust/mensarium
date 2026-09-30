@@ -1,5 +1,6 @@
+import json
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, model_validator
@@ -93,3 +94,14 @@ class AutomationPatch(BaseModel):
     notify: bool | None = None
     delete_after_run: bool | None = None
     enabled: bool | None = None
+
+
+STATE_MAX = 4000
+
+
+def merge_state(state: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
+    """The few values an automation carries from run to run: a key with None is dropped, the whole thing stays small."""
+    merged = {k: v for k, v in {**state, **values}.items() if v is not None}
+    if len(json.dumps(merged, ensure_ascii=False)) > STATE_MAX:
+        raise ValueError(f"the automation state would exceed {STATE_MAX} characters; keep only what the next run needs")
+    return merged

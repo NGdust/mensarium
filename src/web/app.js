@@ -350,7 +350,7 @@ const TEMPLATES = [
   ['layers', tr('What takes up disk space'), tr('Find what takes up the most space in the home folder: the largest folders and files, caches, old downloads. Don\'t delete anything, just list them with sizes.')],
   ['link', tr('Open ports'), tr('Show which ports are listening on the device and which processes own them. Point out anything unexpected.')],
 ];
-const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'files.stat': 'file', 'files.find': 'search', 'files.write': 'file', 'files.edit': 'file', 'files.mkdir': 'folder', 'files.move': 'folder', 'files.copy': 'folder', 'files.delete': 'trash', 'git.status': 'git', 'git.diff': 'git', 'system.info': 'cpu', 'process.list': 'cpu', 'process.kill': 'ban', 'net.ports': 'link', 'net.http': 'globe', 'shell.exec': 'terminal', 'shell.bash': 'terminal', 'screen.capture': 'laptop', 'screen.windows': 'sidebar', 'input.mouse': 'cpu', 'input.type': 'cpu', 'input.key': 'cpu', 'app.open': 'bolt', 'system.volume': 'pulse', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph', 'web.search': 'globe', 'web.fetch': 'globe', 'gmail.search': 'send', 'gmail.read': 'send', 'gmail.send': 'send', 'drive.search': 'folder', 'drive.read': 'file', 'plan.update': 'list', 'agent.spawn': 'agents', 'agent.wait': 'agents' };
+const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'files.stat': 'file', 'files.find': 'search', 'files.write': 'file', 'files.edit': 'file', 'files.mkdir': 'folder', 'files.move': 'folder', 'files.copy': 'folder', 'files.delete': 'trash', 'git.status': 'git', 'git.diff': 'git', 'system.info': 'cpu', 'process.list': 'cpu', 'process.kill': 'ban', 'net.ports': 'link', 'net.http': 'globe', 'shell.exec': 'terminal', 'shell.bash': 'terminal', 'screen.capture': 'laptop', 'screen.windows': 'sidebar', 'input.mouse': 'cpu', 'input.type': 'cpu', 'input.key': 'cpu', 'app.open': 'bolt', 'system.volume': 'pulse', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph', 'automation.state': 'clock', 'web.search': 'globe', 'web.fetch': 'globe', 'gmail.search': 'send', 'gmail.read': 'send', 'gmail.send': 'send', 'drive.search': 'folder', 'drive.read': 'file', 'plan.update': 'list', 'agent.spawn': 'agents', 'agent.wait': 'agents' };
 // Plugin texts are either plain strings or {en, ru} maps.
 const txt = (v) => (typeof v === 'string' ? v : (v?.[lang] || v?.en || ''));
 // Plain text with bare https links turned into anchors; everything else stays text.
@@ -1831,6 +1831,7 @@ async function viewChat(taskId) {
       case 'memory.search': return tr('Searching memory for “{0}”', clip(a.query, 40));
       case 'memory.read': return tr('Reading note {0}', a.title);
       case 'memory.save': return tr('Remembering {0}', a.title);
+      case 'automation.state': return tr('Saving state for the next run: {0}', Object.keys(a.values || {}).join(', '));
       case 'web.search': return tr('Searching the web for “{0}”', clip(a.query, 40));
       case 'web.fetch': return tr('Reading {0}', (() => { try { return new URL(a.url).host; } catch { return clip(a.url, 40); } })());
       case 'plan.update': return tr('Updating the plan');
@@ -4334,6 +4335,13 @@ async function viewAutomationEditor(id) {
       dropLabel)),
     h('div', { class: 'auto-actions' }, remove, h('span', { class: 'spacer' }), h('a', { class: 'btn', href: '#/automations' }, tr('Cancel')), save),
     a ? section(tr('Runs'), null, runsHost) : null,
+    a && Object.keys(a.state || {}).length ? section(tr('State between runs'), tr('What the agent kept for the next run with automation.state. Clear it to start over.'),
+      h('div', { class: 'auto-state' },
+        h('dl', { class: 'auto-state-list' }, Object.entries(a.state).flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, typeof v === 'string' ? v : JSON.stringify(v))])),
+        h('button', { class: 'btn btn-sm', onclick: async () => {
+          if (!await confirmDialog({ title: tr('Clear the state?'), text: tr('The next run starts as if it were the first.'), action: tr('Clear') })) return;
+          try { await del(`/v1/automations/${a.id}/state`); toast(tr('State cleared')); go(`#/automations/${a.id}`); } catch (err) { fail(err); }
+        } }, tr('Clear')))) : null,
   );
   if (!a) name.focus();
 }

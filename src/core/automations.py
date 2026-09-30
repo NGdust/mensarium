@@ -13,6 +13,7 @@ from mensarium.contracts.automations import (
     RunStatus,
     RunTrigger,
     Schedule,
+    merge_state,
 )
 from mensarium.core.channels import ChannelManager
 from mensarium.core.orchestrator import Orchestrator, TaskError
@@ -196,6 +197,17 @@ class AutomationManager:
 
     async def runs(self, automation_id: str, limit: int = 50) -> list[dict[str, Any]]:
         return await self.repo.list_runs(automation_id, limit)
+
+    async def remember(self, automation_id: str, values: dict[str, Any]) -> dict[str, Any]:
+        row = await self.repo.get_automation(automation_id)
+        if not row:
+            raise AutomationError("automation not found")
+        try:
+            state = merge_state(row.get("state") or {}, values)
+        except ValueError as e:
+            raise AutomationError(str(e)) from e
+        await self.repo.update_automation(automation_id, {"state": state})
+        return state
 
     async def all(self) -> list[dict[str, Any]]:
         return [self.view(row) for row in await self.repo.list_automations()]

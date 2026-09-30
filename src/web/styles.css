@@ -1073,6 +1073,10 @@ a.chip:hover { text-decoration: none; }
 .dream-proposal summary { cursor: pointer; font-size: 12.5px; color: var(--muted); }
 .dream-proposal-actions { display: flex; gap: 6px; flex: none; }
 .dream-proposal.applied, .dream-proposal.dismissed { opacity: 0.6; }
+.auto-state { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.auto-state-list { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; font-size: 13px; }
+.auto-state-list dt { color: var(--muted); font-family: var(--mono); }
+.auto-state-list dd { margin: 0; overflow-wrap: anywhere; }
 .mm-zoom { position: absolute; z-index: 5; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 2px; padding: 4px; border-radius: 14px; border: 1px solid var(--line); background: rgba(var(--card), 0.88); }
 .mm-legend { position: absolute; z-index: 5; left: 16px; bottom: 16px; max-width: calc(100% - 110px); margin: 0; padding: 7px 12px; border-radius: 12px; background: rgba(var(--veil), 0.72); }
 .graph-side { z-index: 6; }

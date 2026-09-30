@@ -378,6 +378,16 @@ DEVICE_TOOLS: dict[str, ToolSpec] = {
         lambda a: "update the client",
         runs_on="core",
     ),
+    "automation.state": ToolSpec(
+        "automation.state",
+        "Keep a few values for the next run of this automation (a last seen price, a last processed id, a date). "
+        "Merges the keys into the state shown in the prompt; null removes a key. Use it instead of memory notes for "
+        "anything that changes from run to run.",
+        "read",
+        CORE_TOOL_ARGS["automation.state"],
+        lambda a: f"automation state {', '.join(a['values'])}",
+        runs_on="core",
+    ),
 }
 
 AGENT_TOOLS: dict[str, ToolSpec] = {
