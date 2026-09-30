@@ -1050,6 +1050,29 @@ a.chip:hover { text-decoration: none; }
 .mm-chip-n { color: var(--muted); }
 .mm-chip:hover { color: var(--text); border-color: var(--line-strong); }
 .mm-chip.active { color: var(--text); border-color: color-mix(in srgb, var(--c, var(--accent)) 60%, transparent); background: color-mix(in srgb, var(--c, var(--accent)) 12%, rgba(var(--card), 0.88)); }
+.mm-chip .icon { width: 13px; height: 13px; color: var(--muted); }
+.mm-chip.kind { --c: var(--accent); }
+.graph-side-members { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 12px; }
+.graph-side-members .mm-chip { max-width: 100%; height: auto; min-height: 24px; padding: 3px 9px; text-align: left; }
+.graph-side-members .mm-chip .icon { color: var(--c); }
+.topic-pill { cursor: pointer; }
+.mem-kind-icon { display: grid; place-items: center; flex: none; width: 28px; height: 28px; margin-top: 2px; border-radius: 9px; background: var(--surface-2); color: var(--muted); }
+.mem-kind-icon .icon { width: 15px; height: 15px; }
+.note-groups { display: flex; flex-direction: column; gap: 18px; }
+.note-group-head { display: flex; align-items: flex-start; gap: 6px; padding: 0 0 8px; border-bottom: 1px solid var(--line-strong); }
+.note-group-head .row-text { flex: 1; min-width: 0; }
+.note-group-head .row-title { font-size: 14.5px; font-weight: 600; }
+.note-group-head .count { margin-left: 8px; color: var(--muted); font-weight: 400; }
+.note-item.archived { opacity: 0.55; }
+.dream-proposals { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.dream-proposal { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: var(--r); border: 1px solid var(--line); background: rgba(var(--ink), 0.025); }
+.dream-proposal .row-text { flex: 1; min-width: 0; }
+.dream-proposal .row-title { font-size: 13.5px; }
+.dream-proposal .row-title .pill { margin-left: 8px; height: 20px; font-size: 11px; padding: 0 8px; }
+.dream-proposal details { margin-top: 4px; }
+.dream-proposal summary { cursor: pointer; font-size: 12.5px; color: var(--muted); }
+.dream-proposal-actions { display: flex; gap: 6px; flex: none; }
+.dream-proposal.applied, .dream-proposal.dismissed { opacity: 0.6; }
 .mm-zoom { position: absolute; z-index: 5; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 2px; padding: 4px; border-radius: 14px; border: 1px solid var(--line); background: rgba(var(--card), 0.88); }
 .mm-legend { position: absolute; z-index: 5; left: 16px; bottom: 16px; max-width: calc(100% - 110px); margin: 0; padding: 7px 12px; border-radius: 12px; background: rgba(var(--veil), 0.72); }
 .graph-side { z-index: 6; }

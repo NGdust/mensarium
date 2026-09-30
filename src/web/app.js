@@ -3,7 +3,7 @@
 import { LANGUAGES, lang, locale, setLang, t as tr, tp } from './i18n.js';
 import { MODES as COLOR_MODES, PALETTES, custom, importTweakcn, modeChoice, paletteChoice, removeCustom, setMode, setPalette, swatches } from './theme.js';
 import { createOrb } from './orb.js';
-import { createMemoryMap, graphColor } from './graph.js';
+import { createMemoryMap, graphColor, kindIcon } from './graph.js';
 
 const $app = document.getElementById('app');
 const $toasts = document.getElementById('toasts');
@@ -2732,10 +2732,11 @@ async function settingsDevices(shell) {
 
 // ---------- memory ----------
 
-const MEM_KINDS = { fact: tr('Fact'), preference: tr('Preference'), project: tr('Project'), person: tr('Person'), device: tr('Device'), howto: tr('Instruction'), note: tr('Note') };
+const MEM_KINDS = { fact: tr('Fact'), preference: tr('Preference'), project: tr('Project'), person: tr('Person'), device: tr('Device'), howto: tr('Instruction'), task: tr('Task'), topic: tr('Topic'), note: tr('Note') };
 const MEM_SOURCES = { user: tr('you'), agent: tr('agent'), dream: tr('dream') };
-const DREAM_PHASES = [['light', tr('Light sleep'), tr('gathering new chats')], ['rem', 'REM', tr('looking for what matters and connections')], ['deep', tr('Deep sleep'), tr('consolidating into memory')], ['diary', tr('Diary'), tr('writing down what I remembered')]];
-const DREAM_TRIGGER = { schedule: tr('on schedule'), manual: tr('manually') };
+const DREAM_PHASES = [['light', tr('Light sleep'), tr('gathering new chats')], ['rem', 'REM', tr('looking for what matters and connections')], ['deep', tr('Deep sleep'), tr('consolidating into memory')], ['tidy', tr('Tidying'), tr('merging duplicates, sorting into topics')], ['diary', tr('Diary'), tr('writing down what I remembered')]];
+const DREAM_TRIGGER = { schedule: tr('on schedule'), manual: tr('manually'), tidy: tr('sorting into topics') };
+const DREAM_MARKS = { created: '+', updated: '~', reinforced: '↑', merged: '⇒', retired: '−', moved: '→', relinked: '↔' };
 
 // Markdown plus [[wikilinks]]; titles arrive HTML-escaped from markdown(), so they are safe in the attribute.
 const memoryMd = (text) => markdown(text).replace(/\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g, (_, title, alias) => `<a href="#" class="wikilink" data-title="${title}">${alias || title}</a>`);
@@ -2746,7 +2747,8 @@ function kindPill(kind) {
 
 async function openNoteEditor(note, { onSaved, onOpenTitle, linkTo = null, centerId = null } = {}) {
   const full = note?.id ? await get(`/v1/memory/notes/${note.id}`) : null;
-  const others = full ? [] : (await get('/v1/memory/notes')).notes;
+  const all = await get('/v1/memory/notes');
+  const others = full ? [] : all.notes;
   const center = others.find((x) => x.id === centerId);
   const link = full ? null : h('select', { 'aria-label': tr('Linked to') },
     h('option', { value: '' }, tr('No link')),
@@ -2755,6 +2757,11 @@ async function openNoteEditor(note, { onSaved, onOpenTitle, linkTo = null, cente
   const n = full || { title: note?.title || '', body: '', kind: 'fact', tags: [], pinned: false, importance: 5 };
   const title = h('input', { type: 'text', value: n.title, placeholder: tr('Short title'), 'aria-label': tr('Title'), maxlength: '120' });
   const kind = h('select', { 'aria-label': tr('Type') }, Object.entries(MEM_KINDS).map(([k, label]) => h('option', { value: k, selected: k === n.kind }, label)));
+  const topic = h('select', { 'aria-label': tr('Topic') }, h('option', { value: '' }, tr('No topic')),
+    all.topics.filter((t) => t.id !== full?.id).map((t) => h('option', { value: t.id, selected: t.id === (n.topic_id || note?.topic_id) }, t.title)));
+  const syncTopic = () => { topic.hidden = kind.value === 'topic'; };
+  kind.addEventListener('change', syncTopic);
+  syncTopic();
   const importance = h('select', { 'aria-label': tr('Importance') }, Array.from({ length: 10 }, (_, i) => h('option', { value: String(i + 1), selected: i + 1 === n.importance }, tr('Importance {0}', i + 1))));
   let pinned = n.pinned;
   const pin = toggleSwitch(pinned, { label: tr('Always in the agent\'s context'), onChange: async (v) => { pinned = v; } });
@@ -2763,7 +2770,7 @@ async function openNoteEditor(note, { onSaved, onOpenTitle, linkTo = null, cente
   body.value = n.body || '';
   const save = h('button', { class: 'btn btn-primary' }, tr('Save'));
   save.addEventListener('click', async () => {
-    const payload = { title: title.value.trim(), body: body.value, kind: kind.value, importance: Number(importance.value), pinned, tags: tags.value.split(',').map((t) => t.trim()).filter(Boolean), ...(link?.value ? { link_to: link.value } : {}) };
+    const payload = { title: title.value.trim(), body: body.value, kind: kind.value, importance: Number(importance.value), pinned, tags: tags.value.split(',').map((t) => t.trim()).filter(Boolean), topic_id: kind.value === 'topic' ? null : topic.value || null, ...(link?.value ? { link_to: link.value } : {}) };
     if (!payload.title) { title.focus(); return; }
     save.disabled = true;
     try {
@@ -2784,7 +2791,7 @@ async function openNoteEditor(note, { onSaved, onOpenTitle, linkTo = null, cente
     meta,
     h('div', { class: 'note-form' },
       h('label', { class: 'note-field' }, h('span', {}, tr('Title')), title),
-      h('div', { class: 'note-row' }, kind, importance, h('label', { class: 'switch-label', title: tr('The note is included in every request to the model') }, pin, tr('Always in context'))),
+      h('div', { class: 'note-row' }, kind, topic, importance, h('label', { class: 'switch-label', title: tr('The note is included in every request to the model') }, pin, tr('Always in context'))),
       h('label', { class: 'note-field' }, h('span', {}, tr('Tags')), tags),
       link ? h('label', { class: 'note-field' }, h('span', {}, tr('Linked to')), link) : null,
       h('label', { class: 'note-field' }, h('span', {}, tr('Text')), body),
@@ -3015,23 +3022,54 @@ async function settingsMemory(shell) {
       icon,
       centerTitle: tr('About me'),
       countText: (n) => tp('{0} note around|{0} notes around', n),
-      kindLabel: (kind) => MEM_KINDS[kind] || kind,
+      noTopicLabel: tr('No topic'),
       onSelect: (node) => preview(node),
       onFile: (name) => previewFile(name),
-      onArea: (kind) => setOnly(kind),
+      onArea: (area, topic) => { setOnly({ area }); previewTopic(area, topic); },
     });
-    // one chip per area with its note count; a chip narrows the map to that area, the same chip again shows all
+    // one chip per topic with its note count and one per note kind; a chip narrows the map, the same chip again widens it
     const chips = h('div', { class: 'mm-chips mm-ui' });
-    function setOnly(kind) {
-      map.setOnly(kind === map.only() ? null : kind);
+    const kindChips = h('div', { class: 'mm-chips mm-ui' });
+    function setOnly(next) {
+      const only = map.only();
+      map.setOnly({ area: 'area' in next ? (next.area === only.area ? null : next.area) : only.area, kind: 'kind' in next ? (next.kind === only.kind ? null : next.kind) : only.kind });
       renderChips();
     }
     function renderChips() {
       const only = map.only();
       chips.replaceChildren(
-        h('button', { class: `mm-chip${only ? '' : ' active'}`, onclick: () => setOnly(null) }, tr('All')),
-        ...map.sectors().map((s) => h('button', { class: `mm-chip${only === s.kind ? ' active' : ''}`, style: `--c:${graphColor(s.kind)}`, onclick: () => setOnly(s.kind) },
-          h('span', { class: 'kind-dot' }), MEM_KINDS[s.kind] || s.kind, h('span', { class: 'mm-chip-n' }, String(s.count)))));
+        h('button', { class: `mm-chip${only.area ? '' : ' active'}`, onclick: () => setOnly({ area: null }) }, tr('All topics')),
+        ...map.sectors().map((s) => h('button', { class: `mm-chip${only.area === s.kind ? ' active' : ''}`, style: `--c:${s.color}`, onclick: () => setOnly({ area: s.kind }) },
+          h('span', { class: 'kind-dot' }), s.topic ? s.topic.title : tr('No topic'), h('span', { class: 'mm-chip-n' }, String(s.count)))));
+      const counts = {};
+      for (const n of data.nodes) if (!n.ghost && n.kind !== 'topic' && n.id !== centerId) counts[n.kind] = (counts[n.kind] || 0) + 1;
+      kindChips.replaceChildren(...Object.entries(MEM_KINDS).filter(([k]) => counts[k]).map(([k, label]) => h('button', { class: `mm-chip kind${only.kind === k ? ' active' : ''}`, onclick: () => setOnly({ kind: k }) }, icon(kindIcon(k)), label, h('span', { class: 'mm-chip-n' }, String(counts[k])))));
+    }
+    // the sector is the topic: its description, its notes and a way to edit or narrow the map to it
+    async function previewTopic(area, topic) {
+      side.classList.remove('hidden');
+      const close = h('button', { class: 'icon-btn', 'aria-label': tr('Close'), onclick: hideSide }, icon('x'));
+      const members = map.members(area).sort((a, b) => (b.weight || 0) - (a.weight || 0));
+      const list = h('div', { class: 'graph-side-members' }, members.map((n) => h('button', { class: 'mm-chip', style: `--c:${map.color(n.id)}`, onclick: () => { map.select(n.id, { pan: true }); preview(n); } }, icon(kindIcon(n.kind)), n.label)));
+      const onlyBtn = h('button', { class: 'btn btn-sm', onclick: () => { setOnly({ area }); onlyBtn.textContent = map.only().area === area ? tr('Show all topics') : tr('Only this topic'); } }, map.only().area === area ? tr('Show all topics') : tr('Only this topic'));
+      if (!topic) {
+        side.replaceChildren(
+          h('div', { class: 'graph-side-head' }, h('h3', {}, tr('No topic')), close),
+          h('p', { class: 'muted' }, tr('Notes that don\'t belong to a topic yet. Sorting into topics on the Dreaming tab files them; or open a note and pick its topic.')),
+          list, h('div', { class: 'graph-side-actions' }, onlyBtn));
+        return;
+      }
+      let n;
+      try { n = await get(`/v1/memory/notes/${topic.id}`); } catch (err) { fail(err); return; }
+      side.replaceChildren(
+        h('div', { class: 'graph-side-head' }, h('h3', {}, h('span', { class: 'kind-dot', style: `background:${map.color(members[0]?.id)}` }), ' ', n.title), close),
+        h('div', { class: 'graph-side-meta' }, h('span', { class: 'pill' }, tr('topic')), h('span', { class: 'pill' }, tp('{0} note|{0} notes', members.length))),
+        h('div', { class: 'prose graph-side-body', html: memoryMd(n.body || tr('_Describe this area in a few sentences: the agent reads it at the start of every chat._')) }),
+        list,
+        h('div', { class: 'graph-side-actions' },
+          h('button', { class: 'btn btn-sm', onclick: () => openNoteEditor(n, { onSaved: async () => { await load(); previewTopic(area, topic); }, onOpenTitle: openTitle, centerId }) }, tr('Edit')),
+          h('button', { class: 'btn btn-sm', onclick: () => openNoteEditor({ title: '', topic_id: topic.id }, { onSaved: load, onOpenTitle: openTitle, centerId }) }, icon('plus'), tr('Note in topic')),
+          onlyBtn));
     }
 
     async function loadFiles() {
@@ -3098,7 +3136,7 @@ async function settingsMemory(shell) {
       } }, tr('Make central'));
       side.replaceChildren(...[
         h('div', { class: 'graph-side-head' }, h('h3', {}, n.title), close),
-        h('div', { class: 'graph-side-meta' }, isCenter ? h('span', { class: 'pill accent' }, tr('central')) : null, kindPill(n.kind), n.pinned ? h('span', { class: 'pill accent', title: tr('Always in the agent\'s context') }, icon('pin'), tr('pinned')) : null, (n.tags || []).map((t) => h('span', { class: 'pill tag' }, `#${t}`))),
+        h('div', { class: 'graph-side-meta' }, isCenter ? h('span', { class: 'pill accent' }, tr('central')) : null, kindPill(n.kind), n.topic_id ? h('button', { class: 'pill topic-pill', onclick: () => previewTopic(n.topic_id, data.topics.find((t) => t.id === n.topic_id)) }, h('span', { class: 'kind-dot', style: `background:${map.color(n.id)}` }), data.topics.find((t) => t.id === n.topic_id)?.title || tr('topic')) : null, n.pinned ? h('span', { class: 'pill accent', title: tr('Always in the agent\'s context') }, icon('pin'), tr('pinned')) : null, (n.tags || []).map((t) => h('span', { class: 'pill tag' }, `#${t}`))),
         detached ? h('p', { class: 'market-note' }, tr('Not linked to other notes yet.')) : null,
         bodyEl,
         n.backlinks.length ? h('div', { class: 'note-backlinks' }, tr('Linked from: '), n.backlinks.map((b, i) => [i ? ', ' : '', h('a', { href: '#', onclick: (e) => { e.preventDefault(); map.select(b.id, { pan: true }); preview(data.nodes.find((x) => x.id === b.id)); } }, b.title)])) : null,
@@ -3112,11 +3150,12 @@ async function settingsMemory(shell) {
     search.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter') return;
       const q = search.value.trim().toLowerCase();
-      const node = data.nodes.find((x) => x.label.toLowerCase() === q) || data.nodes.find((x) => x.label.toLowerCase().includes(q));
+      const tiles = data.nodes.filter((x) => x.kind !== 'topic');
+      const node = tiles.find((x) => x.label.toLowerCase() === q) || tiles.find((x) => x.label.toLowerCase().includes(q));
       if (node) { map.select(node.id, { pan: true }); preview(node); } else toast(tr('No such note found'));
     });
     stage.append(
-      h('div', { class: 'mm-tools mm-ui' }, h('div', { class: 'settings-search graph-search' }, icon('search'), search), chips),
+      h('div', { class: 'mm-tools mm-ui' }, h('div', { class: 'settings-search graph-search' }, icon('search'), search), chips, kindChips),
       h('div', { class: 'mm-zoom mm-ui' },
         h('button', { class: 'icon-btn', title: tr('Zoom in'), 'aria-label': tr('Zoom in'), onclick: () => map.zoom(1.25) }, icon('plus')),
         h('button', { class: 'icon-btn', title: tr('Show all'), 'aria-label': tr('Show all'), onclick: () => map.fit() }, icon('layers')),
@@ -3132,19 +3171,31 @@ async function settingsMemory(shell) {
   async function memoryNotes() {
     const search = h('input', { type: 'search', placeholder: tr('Search notes'), 'aria-label': tr('Search notes') });
     const kindFilter = h('select', { 'aria-label': tr('Note type') }, h('option', { value: '' }, tr('All types')), Object.entries(MEM_KINDS).map(([k, label]) => h('option', { value: k }, label)));
-    const list = h('div', { class: 'rows' }, h('div', { class: 'empty' }, tr('Loading...')));
+    const list = h('div', { class: 'note-groups' }, h('div', { class: 'empty' }, tr('Loading...')));
+    let showArchived = false;
+    const archivedToggle = h('label', { class: 'switch-label' }, toggleSwitch(false, { label: tr('Archive'), onChange: (v) => { showArchived = v; load().catch(fail); } }), tr('Archive'));
     let timer = 0;
+    // notes sit under their topic, the topic's own note is the group head; notes outside any topic come last
     async function load() {
       const q = search.value.trim();
-      const { notes, center: centerNote } = await get(`/v1/memory/notes${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+      const { notes, center: centerNote, topics } = await get(`/v1/memory/notes?q=${encodeURIComponent(q)}${showArchived ? '&archived=true' : ''}`);
       centerId = centerNote;
-      const shown = notes.filter((n) => !kindFilter.value || n.kind === kindFilter.value);
-      list.replaceChildren(...(shown.length ? shown.map((n) => h('button', { class: 'note-item', onclick: () => openNoteEditor(n, { onSaved: load, onOpenTitle: openTitle, centerId }) },
-        h('span', { class: 'kind-dot', style: `background:${graphColor(n.kind)}` }),
+      const shown = notes.filter((n) => n.kind !== 'topic' && (!kindFilter.value || n.kind === kindFilter.value));
+      const item = (n) => h('button', { class: `note-item${n.archived ? ' archived' : ''}`, onclick: () => openNoteEditor(n, { onSaved: load, onOpenTitle: openTitle, centerId }) },
+        h('span', { class: 'mem-kind-icon' }, icon(kindIcon(n.kind))),
         h('div', { class: 'row-text' },
-          h('div', { class: 'row-title' }, n.title, n.id === centerId ? h('span', { class: 'pill accent' }, tr('central')) : null, n.pinned ? h('span', { class: 'note-pin', title: tr('Always in the agent\'s context') }, icon('pin')) : null),
+          h('div', { class: 'row-title' }, n.title, n.id === centerId ? h('span', { class: 'pill accent' }, tr('central')) : null, n.archived ? h('span', { class: 'pill' }, tr('archived')) : null, n.pinned ? h('span', { class: 'note-pin', title: tr('Always in the agent\'s context') }, icon('pin')) : null),
           h('div', { class: 'row-desc' }, n.snippet || tr('Empty')),
-          h('div', { class: 'note-item-meta' }, [MEM_KINDS[n.kind] || n.kind, MEM_SOURCES[n.source] || n.source, relTime(n.updated_at), ...(n.tags || []).map((t) => `#${t}`)].join(' · ')))))
+          h('div', { class: 'note-item-meta' }, [MEM_KINDS[n.kind] || n.kind, MEM_SOURCES[n.source] || n.source, relTime(n.updated_at), ...(n.tags || []).map((t) => `#${t}`)].join(' · '))));
+      const groups = [...topics.map((t) => [t, shown.filter((n) => n.topic_id === t.id)]), [null, shown.filter((n) => !topics.some((t) => t.id === n.topic_id))]].filter(([t, items]) => items.length || (t && !q && !kindFilter.value));
+      list.replaceChildren(...(groups.length ? groups.map(([t, items]) => h('section', { class: 'note-group' },
+        h('div', { class: 'note-group-head' },
+          h('div', { class: 'row-text' },
+            h('div', { class: 'row-title' }, t ? t.title : tr('No topic'), h('span', { class: 'count' }, String(items.length))),
+            t ? h('div', { class: 'row-desc' }, t.description || tr('No description yet: the agent reads it at the start of every chat.')) : null),
+          t ? h('button', { class: 'icon-btn', title: tr('Edit topic'), 'aria-label': tr('Edit topic'), onclick: () => openNoteEditor(t, { onSaved: load, onOpenTitle: openTitle, centerId }) }, icon('sliders')) : null,
+          h('button', { class: 'icon-btn', title: tr('Note in topic'), 'aria-label': tr('Note in topic'), onclick: () => openNoteEditor({ title: '', topic_id: t?.id || null }, { onSaved: load, onOpenTitle: openTitle, centerId }) }, icon('plus'))),
+        h('div', { class: 'rows' }, items.length ? items.map(item) : h('div', { class: 'empty' }, tr('No notes in this topic yet.')))))
         : [h('div', { class: 'empty' }, q || kindFilter.value ? tr('Nothing found.') : tr('No notes yet. The agent will save what matters on its own, and dreaming will gather from chats.'))]));
     }
     search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => load().catch(fail), 200); });
@@ -3160,7 +3211,7 @@ async function settingsMemory(shell) {
     }
     host.append(h('div', { class: 'page' }, h('div', { class: 'page-inner page-wide' },
       section(tr('Instruction files'), tr('The agent reads these at the start of every chat: how to work, its persona and name, who you are. Each has a default until you write your own.'), filesBox),
-      section(tr('Notes'), null, h('div', { class: 'graph-toolbar' }, h('div', { class: 'settings-search graph-search' }, icon('search'), search), kindFilter), list))));
+      section(tr('Notes'), null, h('div', { class: 'graph-toolbar' }, h('div', { class: 'settings-search graph-search' }, icon('search'), search), kindFilter, h('span', { class: 'spacer' }), archivedToggle, h('button', { class: 'btn btn-sm', onclick: () => openNoteEditor({ title: '', kind: 'topic' }, { onSaved: load, onOpenTitle: openTitle, centerId }) }, icon('plus'), tr('New topic'))), list))));
     loadFiles().catch(fail);
     await load();
     return () => clearTimeout(timer);
@@ -3184,6 +3235,9 @@ async function settingsMemory(shell) {
       const run = h('button', { class: 'btn btn-primary', disabled: d.running, onclick: async () => {
         try { await post('/v1/memory/dreams'); toast(tr('The agent is falling asleep')); signature = ''; await load(); } catch (err) { fail(err); }
       } }, icon('moon'), d.running ? tr('Dreaming...') : tr('Run now'));
+      const tidy = h('button', { class: 'btn', disabled: d.running, title: tr('Goes through every topic and the notes without one, then proposes merges, rewrites, moves and retirements. Nothing changes until you accept a proposal.'), onclick: async () => {
+        try { await post('/v1/memory/dreams?tidy=true'); toast(tr('Sorting the notes...')); signature = ''; await load(); } catch (err) { fail(err); }
+      } }, icon('layers'), tr('Sort into topics'));
       const hour = h('select', { 'aria-label': tr('Run hour') }, Array.from({ length: 24 }, (_, i) => h('option', { value: String(i), selected: i === s.hour }, tr('at {0}:00', String(i).padStart(2, '0')))));
       hour.addEventListener('change', () => put({ hour: Number(hour.value) }));
       const threshold = h('select', { 'aria-label': tr('Importance threshold') }, Array.from({ length: 10 }, (_, i) => h('option', { value: String(i + 1), selected: i + 1 === s.min_importance }, tr('importance from {0}', i + 1))));
@@ -3197,7 +3251,7 @@ async function settingsMemory(shell) {
             h('p', {}, tr('At night the agent goes through new chats: in light sleep it gathers what you said and what it did, in REM it looks for what matters and connections to what it already knows, in deep sleep it consolidates into memory only what passed the importance threshold, and in the morning it leaves an entry in the diary.')),
             h('div', { class: 'dream-controls' },
               h('label', { class: 'switch-label' }, toggleSwitch(s.dreaming, { label: tr('Every night'), onChange: (v) => put({ dreaming: v }) }), tr('Every night')),
-              hour, threshold, h('span', { class: 'spacer' }), run))),
+              hour, threshold, h('span', { class: 'spacer' }), tidy, run))),
         current ? h('div', { class: 'dream-phases' }, DREAM_PHASES.map(([k, label, desc], i) => h('div', { class: `dream-phase${i < phaseIdx ? ' done' : i === phaseIdx ? ' current' : ''}` },
           h('span', { class: 'dream-phase-dot' }, i < phaseIdx ? icon('check') : String(i + 1)), h('div', {}, h('div', { class: 'dream-phase-title' }, label), h('div', { class: 'row-desc' }, desc))))) : null,
         h('div', { class: 'section-head dream-diary-head' }, h('div', {}, h('h2', {}, tr('Dream diary')))),
@@ -3210,16 +3264,35 @@ async function settingsMemory(shell) {
     function dreamEntry(r) {
       const st = r.stats || {};
       const status = { done: ['', ''], empty: [tr('no dreams'), ''], failed: [tr('error'), 'danger'] }[r.status] || [r.status, ''];
-      const numbers = [st.chats != null && tr('chats: {0}', st.chats), st.created && tr('new: {0}', st.created), st.updated && tr('expanded: {0}', st.updated), st.reinforced && tr('reinforced: {0}', st.reinforced), st.discarded && tr('released: {0}', st.discarded)].filter(Boolean).join(' · ');
+      const numbers = [st.chats != null && tr('chats: {0}', st.chats), st.created && tr('new: {0}', st.created), st.updated && tr('expanded: {0}', st.updated), st.reinforced && tr('reinforced: {0}', st.reinforced), st.discarded && tr('released: {0}', st.discarded), st.tidied && tr('tidied: {0}', st.tidied), st.proposed && tr('proposals: {0}', st.proposed)].filter(Boolean).join(' · ');
+      const decide = async (i, action) => {
+        try { await post(`/v1/memory/dreams/${r.id}/proposals/${i}`, { action }); toast(action === 'apply' ? tr('Applied') : tr('Dismissed')); signature = ''; await load(); } catch (err) { fail(err); }
+      };
+      const opText = (op) => ({
+        merge: tr('Merge {0} into “{1}”', (op.from || []).map((x) => `“${x}”`).join(', '), op.title),
+        rewrite: tr('Rewrite “{0}”', op.title) + (op.new_title ? ` → “${op.new_title}”` : ''),
+        retire: tr('Archive “{0}”', op.title),
+        retopic: tr('Move “{0}” to topic “{1}”', op.title, op.topic),
+        rekind: tr('Change the type of “{0}” to {1}', op.title, MEM_KINDS[op.kind] || op.kind),
+        importance: tr('Set importance of “{0}” to {1}', op.title, op.importance),
+        resolve_ghost: op.into ? tr('Point links to “{0}” at “{1}”', op.title, op.into) : tr('Create the note “{0}”', op.title),
+      }[op.action] || `${op.action} ${op.title}`);
+      const proposals = (r.proposals || []).length ? h('div', { class: 'dream-proposals' }, r.proposals.map((p, i) => h('div', { class: `dream-proposal ${p.status}` },
+        h('div', { class: 'row-text' }, h('div', { class: 'row-title' }, opText(p.op), p.topic ? h('span', { class: 'pill' }, p.topic) : null), h('div', { class: 'row-desc' }, p.op.reason || ''), p.op.body ? h('details', {}, h('summary', {}, tr('New text')), h('p', { class: 'row-desc' }, p.op.body)) : null),
+        p.status === 'pending'
+          ? h('div', { class: 'dream-proposal-actions' }, h('button', { class: 'btn btn-sm btn-primary', onclick: () => decide(i, 'apply') }, tr('Apply')), h('button', { class: 'btn btn-sm', onclick: () => decide(i, 'dismiss') }, tr('Skip')))
+          : h('span', { class: `pill${p.status === 'applied' ? ' ok' : ''}` }, p.status === 'applied' ? tr('applied') : tr('skipped'))))) : null;
       return h('article', { class: 'dream-entry' },
         h('div', { class: 'dream-entry-head' }, h('span', { class: 'dream-date' }, new Date(r.started_at).toLocaleString(locale, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })), h('span', { class: 'market-meta' }, DREAM_TRIGGER[r.trigger] || r.trigger), status[0] ? h('span', { class: `pill ${status[1]}` }, status[0]) : null),
         numbers ? h('div', { class: 'market-meta' }, numbers) : null,
         r.status === 'empty' ? h('p', { class: 'muted' }, tr('There were no new conversations, slept without dreaming.')) : null,
         r.error ? h('p', { class: 'dream-error' }, r.error) : null,
         r.diary ? h('div', { class: 'prose dream-diary' }, h('p', {}, r.diary)) : null,
+        r.trigger === 'tidy' && r.status === 'done' && !(r.proposals || []).length ? h('p', { class: 'muted' }, tr('Nothing to tidy: the notes are already in order.')) : null,
+        proposals,
         (st.themes || []).length ? h('div', { class: 'market-tags' }, st.themes.map((t) => h('span', { class: 'pill tag-kind' }, t))) : null,
         (r.changes || []).length ? h('div', { class: 'dream-changes' }, r.changes.map((c) => h('button', { class: `dream-change ${c.action}`, onclick: () => openNoteEditor({ id: c.id }, { onSaved: () => show(), onOpenTitle: openTitle, centerId }).catch(() => toast(tr('Note already deleted'), true)) },
-          { created: '+', updated: '~', reinforced: '↑' }[c.action] || '', ` ${c.title}`))) : null);
+          DREAM_MARKS[c.action] || '', ` ${c.title}`))) : null);
     }
     host.append(h('div', { class: 'page' }, h('div', { class: 'page-inner page-wide' }, box)));
     await load();

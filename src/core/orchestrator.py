@@ -1193,11 +1193,11 @@ class Orchestrator:
 
     async def _core_tool(self, task_id: str, tool: str, args: dict[str, Any], toolbox: Toolbox) -> str:
         if tool == "memory.search":
-            return await self.memory.agent_search(args["query"], args["limit"])
+            return await self.memory.agent_search(args["query"], args["limit"], args.get("topic"))
         if tool == "memory.read":
             return await self.memory.agent_read(args["title"])
         if tool == "memory.save":
-            return await self.memory.agent_save(args["title"], args["content"], args["kind"], args["tags"], task_id)
+            return await self.memory.agent_save(args["title"], args["content"], args["kind"], args["tags"], task_id, args.get("topic"))
         if tool == "skills.read":
             skill = next((s for s in toolbox.skills if s.name == args["name"]), None)
             if skill is None:

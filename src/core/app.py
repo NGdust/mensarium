@@ -204,6 +204,7 @@ class NoteBody(BaseModel):
     pinned: bool = False
     importance: int = Field(5, ge=1, le=10)
     link_to: str | None = Field(None, min_length=1, max_length=120)
+    topic_id: str | None = None
 
 
 class CenterBody(BaseModel):
@@ -218,6 +219,12 @@ class NotePatch(BaseModel):
     tags: list[str] | None = None
     pinned: bool | None = None
     importance: int | None = Field(None, ge=1, le=10)
+    topic_id: str | None = None
+    archived: bool | None = None
+
+
+class ProposalBody(BaseModel):
+    action: Literal["apply", "dismiss"]
 
 
 class DreamSettings(BaseModel):
@@ -1270,10 +1277,10 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         return HTTPException(404 if "not found" in str(e) else 409, str(e))
 
     @app.get("/v1/memory/notes")
-    async def list_notes(q: str = "", c: Core = Depends(auth)) -> dict[str, Any]:
-        rows = await c.memory.search(q, 500) if q.strip() else await c.repo.list_notes()
+    async def list_notes(q: str = "", archived: bool = False, c: Core = Depends(auth)) -> dict[str, Any]:
+        rows = await c.memory.search(q, 500) if q.strip() else await c.memory.notes(archived)
         center = await c.memory.center()
-        return {"notes": [Memory.view(r) for r in rows], "kinds": list(KINDS), "center": center["id"] if center else None}
+        return {"notes": [Memory.view(r) for r in rows], "kinds": list(KINDS), "center": center["id"] if center else None, "topics": await c.memory.topics()}
 
     @app.get("/v1/memory/notes/{note_id}")
     async def get_note(note_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
@@ -1294,7 +1301,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     @app.patch("/v1/memory/notes/{note_id}")
     async def update_note(note_id: str, body: NotePatch, c: Core = Depends(auth)) -> dict[str, Any]:
         try:
-            row = await c.memory.update(note_id, body.model_dump(exclude_none=True))
+            row = await c.memory.update(note_id, body.model_dump(exclude_unset=True))
         except NoteError as e:
             raise note_error(e) from e
         await c.repo.audit(c.workspace_id, "user", "memory.note_updated", {"note_id": note_id, "title": row["title"]})
@@ -1336,13 +1343,22 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         return settings
 
     @app.post("/v1/memory/dreams")
-    async def start_dream(c: Core = Depends(auth)) -> dict[str, str]:
+    async def start_dream(tidy: bool = False, c: Core = Depends(auth)) -> dict[str, str]:
         try:
-            run_id = await c.dreamer.start("manual")
+            run_id = await c.dreamer.start("tidy" if tidy else "manual")
         except DreamError as e:
             raise HTTPException(409, str(e)) from e
-        await c.repo.audit(c.workspace_id, "user", "memory.dream_started", {"run_id": run_id})
+        await c.repo.audit(c.workspace_id, "user", "memory.dream_started", {"run_id": run_id, "tidy": tidy})
         return {"id": run_id}
+
+    @app.post("/v1/memory/dreams/{run_id}/proposals/{index}")
+    async def dream_proposal(run_id: str, index: int, body: ProposalBody, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            proposal = await c.dreamer.decide_proposal(run_id, index, body.action == "apply")
+        except (DreamError, NoteError) as e:
+            raise HTTPException(409, str(e)) from e
+        await c.repo.audit(c.workspace_id, "user", "memory.proposal_" + ("applied" if body.action == "apply" else "dismissed"), {"run_id": run_id, "index": index, "op": proposal.get("op")})
+        return proposal
 
     def task_view(t: dict[str, Any]) -> dict[str, Any]:
         keys = (

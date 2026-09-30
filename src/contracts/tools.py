@@ -212,6 +212,7 @@ TOOL_ARGS: dict[str, type[_Args]] = {
 class MemorySearchArgs(_Args):
     query: str = Field(min_length=1, description="Words to look for in memory note titles, tags and text")
     limit: int = Field(8, ge=1, le=20)
+    topic: str | None = Field(None, max_length=120, description="Only notes of this topic (a topic title from the Memory block)")
 
 
 class MemoryReadArgs(_Args):
@@ -220,9 +221,10 @@ class MemoryReadArgs(_Args):
 
 class MemorySaveArgs(_Args):
     title: str = Field(min_length=1, max_length=120, description="Short noun phrase; reuse an existing title to add to it")
-    content: str = Field(min_length=1, max_length=4000, description="What to remember, 1-4 sentences; may link [[Other note]]")
-    kind: Literal["fact", "preference", "project", "person", "device", "howto"] = "fact"
+    content: str = Field(min_length=1, max_length=1500, description="What to remember, 1-4 sentences of knowledge, not a report; may link [[Other note]]")
+    kind: Literal["fact", "preference", "project", "person", "device", "howto", "task"] = "fact"
     tags: list[str] = Field(default_factory=list, max_length=8)
+    topic: str | None = Field(None, max_length=120, description="Topic the note belongs to: an existing topic title from the Memory block, or a new short name when nothing fits")
 
 
 class WebSearchArgs(_Args):

@@ -437,6 +437,7 @@ class Repo:
         await self.db.update("memory_notes", note_id, {**values, "updated_at": now_iso()})
 
     async def delete_note(self, note_id: str) -> None:
+        await self.db.execute("UPDATE memory_notes SET topic_id = NULL WHERE topic_id = ?", (note_id,))
         await self.db.execute("DELETE FROM memory_notes WHERE id = ?", (note_id,))
 
     async def mark_recalled(self, note_ids: list[str]) -> None:

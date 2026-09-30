@@ -1,6 +1,7 @@
-// Memory map: the central note in the middle, every other note in the sector of its type around it, the important
-// ones nearest the centre, drawn like the product's diagrams: a lit hub, tiles on a dotted field, lines in the colour
-// of a note's type. Drag the background to pan, zoom with the wheel or a pinch; picking a note lights its links.
+// Memory map: the central note in the middle, every other note in the sector of its topic around it, the important
+// ones nearest the centre, drawn like the product's diagrams: a lit hub, tiles on a dotted field, the sector and its
+// lines in the topic's colour, the tile's icon by the note's kind. Drag the background to pan, zoom with the wheel
+// or a pinch; picking a note lights its links.
 
 import { createOrb } from './orb.js';
 
@@ -30,9 +31,14 @@ const KIND_COLORS = light
     tag: '#6fd3c9',
     ghost: '#6c6778',
   };
-const KIND_ICONS = { fact: 'book', preference: 'sliders', project: 'folder', person: 'user', device: 'laptop', howto: 'list', note: 'file' };
-const KIND_ORDER = ['person', 'preference', 'project', 'device', 'howto', 'fact', 'note'];
+// Topics get their colour by position in the topic list, so it holds until a topic is added or removed.
+const TOPIC_COLORS = light
+  ? ['#4560cf', '#a2701a', '#12855f', '#7445f0', '#cf3b80', '#127f78', '#a93bc9', '#b3541e']
+  : ['#96aaff', '#f2b867', '#5ad49a', '#a47bff', '#ff86c4', '#6fd3c9', '#d66cf0', '#f0a06c'];
+const KIND_ICONS = { fact: 'book', preference: 'sliders', project: 'folder', person: 'user', device: 'laptop', howto: 'list', task: 'check', topic: 'layers', note: 'file' };
+export const NO_TOPIC = 'topic:none';
 export const graphColor = (kind) => KIND_COLORS[kind] || KIND_COLORS.note;
+export const topicColor = (i) => (i < 0 ? KIND_COLORS.ghost : TOPIC_COLORS[i % TOPIC_COLORS.length]);
 export const kindIcon = (kind) => KIND_ICONS[kind] || 'file';
 
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -53,22 +59,19 @@ const STEP = 124;
 const GAP = 124;
 const SECTOR_GAP = 0.12;
 
-// Areas: every note kind gets a sector of the circle, wide in proportion to its notes. Inside a sector the notes
-// fill rings from the inside out, the pinned and important ones first, so what matters most sits nearest the centre.
-// A ghost (a title that is linked to but has no note yet) sits in the sector of the note that mentions it.
-export function layoutMemory(nodes, links, centerId) {
+// Areas: every topic gets a sector of the circle, wide in proportion to its notes; notes outside any topic share
+// one grey sector. Inside a sector the notes fill rings from the inside out, the pinned and important ones first,
+// so what matters most sits nearest the centre. A ghost (a title that is linked to but has no note yet) sits in
+// the sector of the note that mentions it. Topic notes themselves are not tiles: the sector is the topic.
+export function layoutMemory(nodes, links, centerId, topics) {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const adj = new Map(nodes.map((n) => [n.id, new Set()]));
   for (const l of links) {
     if (l.source !== l.target && adj.has(l.source) && adj.has(l.target)) { adj.get(l.source).add(l.target); adj.get(l.target).add(l.source); }
   }
+  const topicIds = new Set(topics.map((t) => t.id));
   const area = new Map();
-  for (const n of nodes) if (n.id !== centerId && !n.ghost) area.set(n.id, n.kind);
-  for (const n of nodes) {
-    if (n.id === centerId || area.has(n.id)) continue;
-    const host = [...adj.get(n.id)].find((x) => area.has(x));
-    area.set(n.id, host ? area.get(host) : 'note');
-  }
+  for (const n of nodes) if (n.id !== centerId && n.kind !== 'topic') area.set(n.id, topicIds.has(n.topic) ? n.topic : NO_TOPIC);
   // shortest path from the centre over links: the lit trail and the packet follow it
   const parent = new Map();
   const seen = new Set([centerId]);
@@ -77,7 +80,7 @@ export function layoutMemory(nodes, links, centerId) {
     for (const x of adj.get(cur)) if (!seen.has(x)) { seen.add(x); parent.set(x, cur); queue.push(x); }
   }
   const rank = (id) => (byId.get(id).pinned ? 50 : 0) + (byId.get(id).weight || 0) * 3 + adj.get(id).size;
-  const kinds = [...new Set([...KIND_ORDER, ...area.values()])].filter((k) => [...area.values()].includes(k));
+  const kinds = [...topics.map((t) => t.id), NO_TOPIC].filter((k) => [...area.values()].includes(k));
   const groups = new Map(kinds.map((k) => [k, [...area].filter(([, a]) => a === k).map(([id]) => id).sort((a, b) => rank(b) - rank(a) || byId.get(a).label.localeCompare(byId.get(b).label))]));
   const free = 2 * Math.PI - kinds.length * SECTOR_GAP;
   const minAngle = (GAP * 1.15) / INNER;
@@ -109,7 +112,8 @@ export function layoutMemory(nodes, links, centerId) {
       placed += take;
     }
     ringCount = Math.max(ringCount, ring);
-    sectors.push({ kind, a0, a1: a0 + angle, count: ids.filter((id) => !byId.get(id).ghost).length, outer: INNER + (ring - 1) * STEP });
+    const topic = topics.find((t) => t.id === kind);
+    sectors.push({ kind, topic, color: topicColor(topics.indexOf(topic)), a0, a1: a0 + angle, count: ids.filter((id) => !byId.get(id).ghost).length, outer: INNER + (ring - 1) * STEP });
     a0 += angle + SECTOR_GAP;
   });
   const rings = Array.from({ length: ringCount + 1 }, (_, i) => INNER + i * STEP);
@@ -125,7 +129,7 @@ export function layoutMemory(nodes, links, centerId) {
   return { pos, sectors, rings, parent, adj, area, edges };
 }
 
-export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerTitle, countText, kindLabel }) {
+export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerTitle, countText, noTopicLabel }) {
   const world = el('div', 'mm-world');
   const svg = svgEl('svg', { class: 'mm-lines', width: '1', height: '1' });
   const areasG = svgEl('g');
@@ -144,7 +148,7 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerT
   let edges = [];
   let selected = null;
   let hovered = null;
-  let only = null;
+  let only = { area: null, kind: null };
   let token = 0;
   let moved = false;
   let files = [];
@@ -188,11 +192,11 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerT
     const id = `mm-arc-${s.kind}`;
     const path = svgEl('path', { id, d: `M ${p.x} ${p.y} A ${r} ${r} 0 ${big} ${lower ? 0 : 1} ${q.x} ${q.y}`, fill: 'none' });
     const text = svgEl('text', { class: 'mm-area-label' });
-    text.style.setProperty('--c', graphColor(s.kind));
+    text.style.setProperty('--c', s.color);
     const tp = svgEl('textPath', { href: `#${id}`, startOffset: '50%', 'text-anchor': 'middle' });
-    tp.textContent = `${kindLabel(s.kind)} · ${s.count}`;
+    tp.textContent = `${s.topic ? s.topic.title : noTopicLabel} · ${s.count}`;
     text.append(tp);
-    text.addEventListener('click', () => onArea?.(s.kind));
+    text.addEventListener('click', () => onArea?.(s.kind, s.topic || null));
     return [path, text];
   }
 
@@ -202,7 +206,7 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerT
     b.type = 'button';
     b.style.left = `${p.x}px`;
     b.style.top = `${p.y}px`;
-    b.style.setProperty('--c', graphColor(n.ghost ? 'ghost' : n.kind));
+    b.style.setProperty('--c', n.ghost ? graphColor('ghost') : sectorOf(n.id).color);
     b.setAttribute('aria-label', n.label);
     const tile = el('span', 'mm-tile');
     tile.append(icon(kindIcon(n.kind)));
@@ -247,11 +251,13 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerT
     return hub;
   }
 
+  const sectorOf = (id) => layout.sectors.find((s) => s.kind === layout.area.get(id)) || layout.sectors[0];
+
   function render() {
     world.querySelectorAll('.mm-node, .mm-hub, .mm-packet').forEach((x) => x.remove());
     areasG.replaceChildren(...layout.sectors.flatMap((s) => {
       const wedge = svgEl('path', { class: 'mm-wedge', d: wedgePath(s), 'data-area': s.kind });
-      wedge.style.setProperty('--c', graphColor(s.kind));
+      wedge.style.setProperty('--c', s.color);
       return [wedge, ...areaLabel(s)];
     }));
     ringsG.replaceChildren(...[...layout.rings, layout.rings.at(-1) + STEP].map((r, i, all) => svgEl('circle', { class: i === all.length - 1 ? 'mm-ring faint' : 'mm-ring', cx: 0, cy: 0, r })));
@@ -263,7 +269,7 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerT
     edges = [];
     for (const e of layout.edges) {
       const path = svgEl('path', { class: e.tree ? 'mm-edge' : 'mm-cross', d: edgePath(e) });
-      if (e.tree) path.style.setProperty('--c', graphColor(byId.get(e.to).kind));
+      if (e.tree) path.style.setProperty('--c', sectorOf(e.to).color);
       (e.tree ? treeG : crossG).append(path);
       edges.push({ ...e, path });
     }
@@ -286,11 +292,12 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerT
   const touches = (e, a, b) => (e.from === a && e.to === b) || (e.from === b && e.to === a);
 
   // one note in focus: its neighbours and its path to the centre stay lit, everything else steps back;
-  // with one area chosen, the other areas fade
+  // with one area or kind chosen, the rest fades
+  const shown = (id) => id === centerId || ((!only.area || layout.area.get(id) === only.area) && (!only.kind || byId.get(id)?.kind === only.kind));
   function light() {
     const focus = hovered || selected;
     stage.classList.toggle('mm-focus', !!focus && focus !== centerId);
-    stage.classList.toggle('mm-only', !!only);
+    stage.classList.toggle('mm-only', !!(only.area || only.kind));
     const lit = new Set();
     const trail = new Set();
     if (focus && focus !== centerId) {
@@ -303,14 +310,14 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerT
     for (const [id, b] of nodeEls) {
       b.classList.toggle('lit', lit.has(id));
       b.classList.toggle('sel', id === selected);
-      b.classList.toggle('in', !only || id === centerId || layout.area.get(id) === only);
+      b.classList.toggle('in', shown(id));
     }
     for (const e of edges) {
       const near = !!focus && (e.from === focus || e.to === focus);
       e.path.classList.toggle('on', near || trail.has([e.from, e.to].sort().join('|')));
-      e.path.classList.toggle('in', !only || (layout.area.get(e.from) ?? only) === only && (layout.area.get(e.to) ?? only) === only);
+      e.path.classList.toggle('in', shown(e.from) && shown(e.to));
     }
-    for (const w of areasG.querySelectorAll('.mm-wedge')) w.classList.toggle('in', !only || w.dataset.area === only);
+    for (const w of areasG.querySelectorAll('.mm-wedge')) w.classList.toggle('in', !only.area || w.dataset.area === only.area);
   }
 
   // a signal runs from the centre along the lit path, the way requests travel in the diagrams
@@ -318,7 +325,7 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerT
     const my = ++token;
     world.querySelectorAll('.mm-packet').forEach((x) => x.remove());
     if (reduceMotion.matches || !layout.parent.has(id)) return;
-    const color = graphColor(byId.get(id)?.kind);
+    const color = sectorOf(id).color;
     let prev = centerId;
     for (const step of chain(id)) {
       const e = edges.find((x) => touches(x, prev, step));
@@ -438,16 +445,19 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerT
 
   return {
     setData(data) {
-      nodes = data.nodes.filter((n) => n.kind !== 'tag');
       centerId = data.center;
+      // topics are sectors, not tiles; the centre stays a tile-less card even if it is a topic
+      nodes = data.nodes.filter((n) => n.kind !== 'tag' && (n.kind !== 'topic' || n.id === centerId));
+      const topics = (data.topics || []).filter((t) => t.id !== centerId);
       if (!nodes.some((n) => n.id === centerId)) {
         centerId = 'center:none';
         nodes.push({ id: centerId, label: centerTitle, kind: 'person', weight: 0, virtual: true });
       }
       byId = new Map(nodes.map((n) => [n.id, n]));
       const links = data.links.filter((l) => byId.has(l.source) && byId.has(l.target));
-      layout = layoutMemory(nodes, links, centerId);
+      layout = layoutMemory(nodes, links, centerId, topics);
       if (selected && !byId.has(selected)) selected = null;
+      if (only.area && !layout.sectors.some((s) => s.kind === only.area)) only = { ...only, area: null };
       render();
       if (!moved) fit();
     },
@@ -457,9 +467,11 @@ export function createMemoryMap(stage, { icon, onSelect, onFile, onArea, centerT
       files = list;
       if (layout) render();
     },
-    setOnly(kind) { only = kind; if (layout) light(); },
+    setOnly(next) { only = { ...only, ...next }; if (layout) light(); },
     only: () => only,
     sectors: () => layout?.sectors || [],
+    members: (area) => nodes.filter((n) => layout?.area.get(n.id) === (area || NO_TOPIC) && !n.ghost),
+    color: (id) => (layout && layout.area.has(id) ? sectorOf(id).color : graphColor('note')),
     zoom: (f) => zoom(f),
     isDetached: (id) => !layout?.adj.get(id)?.size,
     destroy() { ro.disconnect(); token++; },

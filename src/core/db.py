@@ -4,9 +4,12 @@ from typing import Any
 
 import aiosqlite
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 COLUMN_MIGRATIONS = [
+    ("memory_notes", "topic_id", "TEXT"),
+    ("memory_notes", "archived", "INTEGER NOT NULL DEFAULT 0"),
+    ("dream_runs", "proposals", "TEXT NOT NULL DEFAULT '[]'"),
     ("tasks", "mode", "TEXT NOT NULL DEFAULT 'ask'"),
     ("tasks", "model", "TEXT"),
     ("targets", "disabled_tools", "TEXT NOT NULL DEFAULT '[]'"),
@@ -88,12 +91,13 @@ CREATE TABLE IF NOT EXISTS memory_notes (
     id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'note',
     tags TEXT NOT NULL DEFAULT '[]', pinned INTEGER NOT NULL DEFAULT 0, importance INTEGER NOT NULL DEFAULT 5,
     source TEXT NOT NULL DEFAULT 'user', source_task_id TEXT, recall_count INTEGER NOT NULL DEFAULT 0,
-    last_recalled_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    last_recalled_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, topic_id TEXT,
+    archived INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS dream_runs (
     id TEXT PRIMARY KEY, trigger TEXT NOT NULL, status TEXT NOT NULL, phase TEXT, model TEXT,
     started_at TEXT NOT NULL, finished_at TEXT, stats TEXT NOT NULL DEFAULT '{}',
-    changes TEXT NOT NULL DEFAULT '[]', diary TEXT, error TEXT
+    changes TEXT NOT NULL DEFAULT '[]', diary TEXT, error TEXT, proposals TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS plugins (
     id TEXT PRIMARY KEY, version TEXT NOT NULL, source TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
@@ -137,7 +141,7 @@ CREATE INDEX IF NOT EXISTS project_deliveries_target ON project_deliveries(targe
 
 JSON_COLUMNS = {
     "settings", "capabilities", "policy", "body", "budget", "input", "output", "params", "usage",
-    "arguments", "metadata", "payload", "disabled_tools", "manifest", "tags", "stats", "changes", "config", "status", "plan",
+    "arguments", "metadata", "payload", "disabled_tools", "manifest", "tags", "stats", "changes", "proposals", "config", "status", "plan",
     "schedule", "skipped", "diff_stat",
 }
 

@@ -34,29 +34,52 @@ class MemoryCenterTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(NoteError):
             await self.memory.set_center("mem_missing")
 
-    async def test_new_notes_without_known_links_attach_to_the_center(self):
-        await self.memory.ensure_center("About me")
-        await self.memory.create(title="atlas", body="Core host.")
-        self.assertEqual(wikilinks(await self.memory.attach("forge", "Linux workstation.")), ["About me"])
-        self.assertEqual(wikilinks(await self.memory.attach("forge", "Backups go to [[atlas]].")), ["atlas"])
-        self.assertEqual(wikilinks(await self.memory.attach("forge", "See [[nowhere]].")), ["nowhere", "About me"])
-        self.assertEqual(await self.memory.attach("About me", "Owner."), "Owner.")
+    async def test_notes_join_topics_and_leave_them_when_the_topic_goes(self):
+        code = await self.memory.ensure_topic("Mensarium", "The harness itself.")
+        self.assertEqual((await self.memory.ensure_topic("Mensarium"))["id"], code["id"])
+        note = await self.memory.create(title="Release flow", body="Bump, push, CI tags.", kind="howto", topic_id=code["id"])
+        with self.assertRaises(NoteError):
+            await self.memory.create(title="Loose", body="", topic_id=note["id"])
+        self.assertEqual([(t["title"], t["count"]) for t in await self.memory.topics()], [("Mensarium", 1)])
+        await self.memory.repo.delete_note(code["id"])
+        self.assertIsNone((await self.memory.repo.get_note(note["id"]))["topic_id"])
 
-    async def test_agent_save_links_an_orphan_note_to_the_center(self):
-        await self.memory.ensure_center("About me")
-        await self.memory.agent_save("Editor", "Uses vim.", "preference", [], "task_1")
-        note = await self.memory.repo.get_note_by_title("Editor")
-        self.assertEqual(wikilinks(note["body"]), ["About me"])
+    async def test_agent_save_files_under_a_topic_and_refuses_reports(self):
+        await self.memory.ensure_topic("MySky")
+        self.assertIn("Saved", await self.memory.agent_save("MT-1 alerts", "Slack alert on bad prices.", "task", [], "task_1", topic="MySky"))
+        note = await self.memory.repo.get_note_by_title("MT-1 alerts")
+        self.assertEqual(note["topic_id"], (await self.memory.repo.get_note_by_title("MySky"))["id"])
+        self.assertIn("Too long", await self.memory.agent_save("MT-1 alerts", "x" * 1501, "task", [], "task_1"))
+        self.assertEqual(await self.memory.agent_save("Editor", "Uses vim.", "preference", [], "task_1", topic="Habits"), "Saved new note 'Editor'.")
+        self.assertEqual([t["title"] for t in await self.memory.topics()], ["Habits", "MySky"])
+
+    async def test_tidy_ops_merge_retire_and_resolve_ghosts(self):
+        keep = await self.memory.create(title="Releases", body="Push to main. [[Old releases]]", source="dream")
+        await self.memory.create(title="Old releases", body="Tag by hand.", source="dream", tags=["git"])
+        await self.memory.create(title="Log", body="Sees [[Old releases]] and [[Nowhere]].", source="dream")
+        self.assertEqual((await self.memory.apply_op({"action": "merge", "title": "Releases", "from": ["Old releases"], "body": "CI tags after a push to main."}))["action"], "merged")
+        merged = await self.memory.repo.get_note(keep["id"])
+        self.assertEqual((merged["body"], merged["tags"]), ("CI tags after a push to main.", ["git"]))
+        self.assertIsNone(await self.memory.repo.get_note_by_title("Old releases"))
+        self.assertEqual(wikilinks((await self.memory.repo.get_note_by_title("Log"))["body"]), ["Releases", "Nowhere"])
+        self.assertEqual(await self.memory.ghosts(), {"Nowhere": ["Log"]})
+        await self.memory.apply_op({"action": "resolve_ghost", "title": "Nowhere", "into": "Releases"})
+        self.assertEqual(await self.memory.ghosts(), {})
+        await self.memory.apply_op({"action": "retire", "title": "Log"})
+        self.assertEqual([n["title"] for n in await self.memory.notes()], ["Releases"])
+        self.assertEqual(len(await self.memory.notes(archived=True)), 2)
 
     async def test_create_with_link_to_adds_the_link_once(self):
         a = await self.memory.create(title="forge", body="", link_to="atlas")
         b = await self.memory.create(title="pi", body="Near [[atlas]].", link_to="atlas")
         self.assertEqual((wikilinks(a["body"]), wikilinks(b["body"])), (["atlas"], ["atlas"]))
 
-    async def test_empty_center_stays_out_of_the_prompt(self):
+    async def test_empty_center_stays_out_of_the_prompt_and_topics_come_first(self):
         await self.memory.ensure_center("About me")
         await self.memory.create(title="Shell", body="zsh", pinned=True)
         self.assertEqual(await self.memory.context(), "- Shell: zsh")
+        await self.memory.ensure_topic("Mac", "The owner's laptop.")
+        self.assertEqual(await self.memory.context(), "- [topic] Mac: The owner's laptop.\n- Shell: zsh")
 
 
 if __name__ == "__main__":
