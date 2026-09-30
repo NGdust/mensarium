@@ -129,6 +129,29 @@ class OAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((self.paths.secrets / "plugin-google-gmail-oauth").exists())
         self.assertIn("_oauth", (await self.manager.get("google-gmail")).missing())
 
+    async def test_slack_token_without_lifetime_does_not_expire(self):
+        calls: list[dict[str, str]] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            calls.append({k: v[0] for k, v in parse_qs(req.content.decode()).items()})
+            return httpx.Response(200, json={"ok": True, "access_token": "xoxp-1", "token_type": "user"})
+
+        self.manager.oauth = OAuthFlow(transport=httpx.MockTransport(handler))
+        await self.manager.install(CATALOG["mcp-slack"], "catalog")
+        await self.manager.configure("mcp-slack", values={"client_id": "1.2", "send": True}, secrets={"client_secret": "ssecret"})
+
+        url = (await self.manager.oauth_start("mcp-slack", ORIGIN))["url"]
+        q = {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
+        self.assertTrue(url.startswith("https://slack.com/oauth/v2_user/authorize?"))
+        self.assertIn("chat:write", q["scope"].split())
+        await self.manager.oauth_finish(q["state"], "the-code")
+
+        inst = await self.manager.get("mcp-slack")
+        self.assertEqual(calls[0]["client_secret"], "ssecret")
+        self.assertIsNone(json.loads((self.paths.secrets / "plugin-mcp-slack-oauth").read_text())["expires_at"])
+        self.assertEqual(await self.manager.access_token(inst), "xoxp-1")
+        self.assertEqual(len(calls), 1)
+
 
 class BuiltinToolTests(unittest.TestCase):
     def test_builtin_tools_follow_scope_and_switches(self):

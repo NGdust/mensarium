@@ -1,25 +1,75 @@
 id: mcp-slack
 name: Slack
-version: 1.0.0
-author: Community
+version: 2.0.0
+author: Slack
 summary:
-  en: Read channels, threads and search Slack messages through the community slack-mcp-server.
-  ru: Чтение каналов, тредов и поиск по сообщениям Slack через community-сервер slack-mcp-server.
+  en: Search and read Slack channels, threads, files and canvases through Slack's official MCP server.
+  ru: Поиск и чтение каналов, тредов, файлов и канвасов Slack через официальный MCP-сервер Slack.
 description:
-  en: Runs slack-mcp-server with npx and a bot token (xoxb). Message posting is disabled on the server by default; enabling it is a separate setting on the server side, not exposed here. The token stays in the Core.
-  ru: Запускает slack-mcp-server через npx с bot-токеном (xoxb). Отправка сообщений по умолчанию отключена на стороне сервера; включение этой возможности не вынесено в настройки плагина. Токен хранится в Core.
+  en: >-
+    Connects to Slack's hosted MCP server and signs in with your Slack account. Slack does not let apps register
+    themselves, so you create your own Slack app once. At https://api.slack.com/apps press "Create New App" → "From a
+    manifest", pick your workspace and paste
+    {"display_information":{"name":"Mensarium"},"oauth_config":{"scopes":{"user":["search:read.public","search:read.private","search:read.mpim","search:read.im","search:read.files","search:read.users","channels:history","groups:history","mpim:history","im:history","channels:read","groups:read","mpim:read","im:read","files:read","users:read","users:read.email","canvases:read","lists:read","reactions:read","emoji:read","chat:write"]}}}.
+    Then in "OAuth & Permissions" add the redirect URL shown in this plugin's settings, and copy the client id and
+    client secret from "Basic Information" here. Keep the app internal to your workspace: Slack lets only internal
+    and Marketplace apps use MCP. Press Connect. Sending messages is off by default. Turn on "Allow sending" and
+    reconnect. The tokens stay in the Core.
+  ru: >-
+    Подключается к облачному MCP-серверу Slack и входит под вашим аккаунтом Slack. Slack не даёт приложениям
+    регистрироваться самим, поэтому один раз создайте своё Slack-приложение. На https://api.slack.com/apps нажмите
+    "Create New App" → "From a manifest", выберите рабочее пространство и вставьте
+    {"display_information":{"name":"Mensarium"},"oauth_config":{"scopes":{"user":["search:read.public","search:read.private","search:read.mpim","search:read.im","search:read.files","search:read.users","channels:history","groups:history","mpim:history","im:history","channels:read","groups:read","mpim:read","im:read","files:read","users:read","users:read.email","canvases:read","lists:read","reactions:read","emoji:read","chat:write"]}}}.
+    Затем в "OAuth & Permissions" добавьте redirect URL из настроек этого плагина, а client id и client secret
+    скопируйте сюда из "Basic Information". Приложение должно оставаться внутренним для вашего пространства: MCP в
+    Slack доступен только внутренним приложениям и приложениям из Marketplace. Нажмите Connect. Отправка сообщений
+    выключена по умолчанию. Включите "Allow sending" и переподключитесь. Токены хранятся в Core.
 tags: [mcp, slack, communication]
 category: communication
-homepage: https://github.com/korotovsky/slack-mcp-server
+homepage: https://docs.slack.dev/ai/mcp-server
 config:
-  bot_token:
+  client_id:
+    required: true
+    title: {en: Slack app client id, ru: Client ID Slack-приложения}
+    placeholder: "1234567890.1234567890123"
+  client_secret:
     secret: true
     required: true
-    title: {en: Bot token (xoxb), ru: Bot-токен (xoxb)}
-    help: {en: "https://api.slack.com/apps", ru: "https://api.slack.com/apps"}
+    title: {en: Slack app client secret, ru: Client secret Slack-приложения}
+  send:
+    type: boolean
+    default: false
+    title: {en: Allow sending messages, ru: Разрешить отправку сообщений}
+    help: {en: "Asks Slack for chat:write; reconnect after changing this", ru: "Запрашивает у Slack chat:write; после изменения переподключите аккаунт"}
 mcp:
-  command: npx
-  args: ["-y", "slack-mcp-server@latest", "--transport", "stdio"]
-  env:
-    SLACK_MCP_XOXB_TOKEN: "{bot_token}"
+  transport: http
+  url: https://mcp.slack.com/mcp
   risk: write
+oauth:
+  authorize_url: https://slack.com/oauth/v2_user/authorize
+  token_url: https://slack.com/api/oauth.v2.user.access
+  client_id: "{client_id}"
+  client_secret: "{client_secret}"
+  scopes:
+    - search:read.public
+    - search:read.private
+    - search:read.mpim
+    - search:read.im
+    - search:read.files
+    - search:read.users
+    - channels:history
+    - groups:history
+    - mpim:history
+    - im:history
+    - channels:read
+    - groups:read
+    - mpim:read
+    - im:read
+    - files:read
+    - users:read
+    - users:read.email
+    - canvases:read
+    - lists:read
+    - reactions:read
+    - emoji:read
+  optional_scopes: {send: "chat:write"}

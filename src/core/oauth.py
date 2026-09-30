@@ -188,12 +188,15 @@ class OAuthFlow:
         if resp.status_code != 200 or not data.get("access_token"):
             err = str(data.get("error_description") or data.get("error") or f"HTTP {resp.status_code}")
             raise InvalidGrant(err) if data.get("error") == "invalid_grant" else OAuthError(err)
+        refresh_token = data.get("refresh_token") or form.get("refresh_token") or ""
+        expires_in = data.get("expires_in")
         return {
             "access_token": data["access_token"],
-            "refresh_token": data.get("refresh_token") or form.get("refresh_token") or "",
+            "refresh_token": refresh_token,
             "token_type": data.get("token_type") or "Bearer",
             "scope": data.get("scope") or form.get("scope", ""),
-            "expires_at": time.time() + float(data.get("expires_in") or DEFAULT_EXPIRES_S),
+            # a token with neither lifetime nor refresh token (Slack without rotation) lives until revoked
+            "expires_at": time.time() + float(expires_in or DEFAULT_EXPIRES_S) if expires_in or refresh_token else None,
         }
 
     async def exchange(self, p: Pending, code: str) -> dict[str, Any]:

@@ -560,7 +560,8 @@ class PluginManager:
             tokens = self._tokens(inst)
             if not tokens:
                 raise PluginError(f"{name} is not connected: open Settings -> Plugins -> {name} and press Connect")
-            if not force and float(tokens.get("expires_at") or 0) - 60 > time.time():
+            expires_at = tokens.get("expires_at", 0)
+            if not force and (expires_at is None or float(expires_at) - 60 > time.time()):
                 return str(tokens["access_token"])
             if not tokens.get("refresh_token"):
                 await self._forget_oauth(inst, "sign in again")
