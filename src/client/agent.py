@@ -20,6 +20,7 @@ from mensarium.client.config import ClientConfig, ClientPaths
 from mensarium.client.mcp_host import McpHost
 from mensarium.client.projects import ProjectHost
 from mensarium.client.tools import ExecTimeout, Executor, ToolError
+from mensarium.client.undo import UndoSlot, prune
 from mensarium.contracts.projects import (
     PROJECT_FEATURES,
     ProjectOp,
@@ -54,8 +55,9 @@ log = logging.getLogger(__name__)
 TOOLS = [
     "files.list", "files.read", "files.search", "files.stat", "files.find",
     "files.write", "files.edit", "files.mkdir", "files.move", "files.copy", "files.delete",
-    "git.status", "git.diff", "system.info", "process.list", "process.kill", "net.ports", "net.http", "shell.exec",
+    "git.status", "git.diff", "system.info", "process.list", "process.kill", "net.ports", "net.http", "shell.exec", "undo.apply",
 ]  # fmt: skip
+UNDOABLE = {"files.write", "files.edit", "files.mkdir", "files.move", "files.copy", "files.delete", "shell.bash", "shell.exec"}
 APPROVAL_REQUIRED = {
     "files.write", "files.edit", "files.mkdir", "files.move", "files.copy", "files.delete", "process.kill", "net.http",
     "shell.exec", "shell.bash", "screen.capture", "input.mouse", "input.type", "input.key", "app.open", "system.volume",
@@ -99,6 +101,8 @@ class ClientAgent:
         self.paths = paths
         self.key = key
         self.executor = Executor(cfg)
+        self.executor.undo_root = paths.undo
+        prune(paths.undo)  # never raises
         self.audit = AuditLog(paths)
         self.mcp = McpHost(cfg, self.executor.roots, paths.plugins)
         self.executor.mcp = self.mcp
@@ -390,12 +394,14 @@ class ClientAgent:
         else:
             try:
                 workdir = self.executor.workdir(req.workdir) if req.workdir else None
-                output = await self.executor.run(req.tool, req.arguments, workdir, mode=req.mode, secrets=req.secrets)
+                undo = UndoSlot(self.executor.undo_root, req.task_id, req.tool_call_id, req.tool, req.mode) if req.tool in UNDOABLE else None
+                output = await self.executor.run(req.tool, req.arguments, workdir, mode=req.mode, secrets=req.secrets, undo=undo)
                 status = "succeeded" if output.exit_code in (0, None) else "failed"
             except ToolError as e:
                 status, error = "failed", str(e)
             except ExecTimeout as e:
                 status, error = "timeout", str(e)
+                output.undo = bool(undo and undo.committed)
             except asyncio.CancelledError:
                 status, error = "canceled", "canceled by core"
             except Exception as e:

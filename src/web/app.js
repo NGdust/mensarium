@@ -158,6 +158,7 @@ const ICONS = {
   download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
   external: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/>',
   agents: '<circle cx="9" cy="8" r="3.2"/><path d="M3 19c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><circle cx="17" cy="9" r="2.5"/><path d="M16.5 13.6c2.7.3 4.5 2.3 4.5 5.4"/>',
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
 };
 
 function icon(name) {
@@ -1861,7 +1862,7 @@ async function viewChat(taskId) {
     return entry;
   }
 
-  function toolResult(p) {
+  function toolResult(p, undoable = true) {
     const e = toolCard(p.tool_call_id, p.tool, '');
     const ok = p.status === 'succeeded';
     const label = { succeeded: tr('done'), failed: tr('error'), timeout: tr('timeout'), canceled: tr('canceled'), rejected: tr('rejected by the device') }[p.status] || p.status;
@@ -1872,6 +1873,25 @@ async function viewChat(taskId) {
     if (p.truncated || p.artifact_id) {
       e.noteEl.replaceChildren(p.truncated ? tr('Output truncated. ') : '', p.artifact_id ? h('a', { href: `/v1/artifacts/${p.artifact_id}`, target: '_blank', rel: 'noopener' }, tr('Full output')) : '');
     }
+    if (p.undo && undoable) {
+      const btn = h('button', { class: 'btn btn-sm tool-undo' }, icon('undo'), tr('Roll back'));
+      btn.addEventListener('click', async () => {
+        if (!confirm(tr('Files will return to the state before this action. Later changes to these files will be lost too. Roll back?'))) return;
+        btn.disabled = true;
+        try { await post(`/v1/tasks/${taskId}/tool_calls/${p.tool_call_id}/undo`); }
+        catch (err) { fail(err); btn.disabled = false; }
+      });
+      e.noteEl.append(btn);
+    }
+  }
+
+  function toolUndone(p) {
+    const e = tools.get(p.tool_call_id);
+    if (!e) return;
+    e.card.classList.add('undone');
+    e.stateEl.className = 'tool-state muted';
+    e.stateEl.replaceChildren(icon('undo'), tr('rolled back'));
+    e.noteEl.querySelector('.tool-undo')?.remove();
   }
 
   function approvalCard(p, agent = null) {
@@ -2012,7 +2032,11 @@ async function viewChat(taskId) {
         toolCard(p.tool_call_id, p.tool, p.display, into);
         break;
       case 'tool_call.result':
-        toolResult(p);
+        toolResult(p, false);
+        if (live) changes?.later();
+        break;
+      case 'tool_call.undone':
+        toolUndone(p);
         if (live) changes?.later();
         break;
       case 'task.final':
@@ -2158,6 +2182,10 @@ async function viewChat(taskId) {
       case 'tool_call.result':
         stamp(ev);
         toolResult(p);
+        if (live) changes?.later();
+        break;
+      case 'tool_call.undone':
+        toolUndone(p);
         if (live) changes?.later();
         break;
       case 'task.final': {

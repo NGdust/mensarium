@@ -106,6 +106,11 @@ class SystemInfoArgs(_Args):
     pass
 
 
+class UndoApplyArgs(_Args):
+    task_id: str
+    tool_call_id: str
+
+
 class ProcessListArgs(_Args):
     filter: str | None = Field(None, max_length=200, description="Only processes whose command line contains this text")
     limit: int = Field(100, ge=1, le=500)

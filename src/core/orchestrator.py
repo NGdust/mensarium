@@ -84,6 +84,8 @@ def _brief(arguments: dict[str, Any]) -> dict[str, Any]:
 
 OPTIONAL_DEVICE_TOOLS = {"shell.bash", "screen.capture", "screen.windows", "input.mouse", "input.type", "input.key", "app.open", "system.volume"}
 RECENT_IMAGES = 2
+UNDO_TIMEOUT_S = 120
+UNDONE_NOTE = "The user rolled back your action `{tool} {display}` on the device, so its changes are gone. Device report:\n{output}"
 CHECK_ROUNDS = 2
 CHECK_OUTPUT_CHARS = 3000
 CHECKS_FAILED = (
@@ -174,7 +176,7 @@ class Orchestrator:
         self.artifacts_dir = artifacts_dir
         self.attachments = AttachmentStore(repo, artifacts_dir, workspace_id)
         self.runners: dict[str, asyncio.Task[None]] = {}
-        self.checking: set[str] = set()
+        self.busy: set[str] = set()
         self.preparing: dict[str, asyncio.Task[None]] = {}
         self.controls: dict[str, str] = {}
         self.approval_waiters: dict[str, asyncio.Future[str]] = {}
@@ -326,8 +328,8 @@ class Orchestrator:
         task = await self._task(task_id)
         if task_id in self.runners or task["status"] not in TERMINAL_STATUSES:
             raise TaskError("task is running; wait for it to finish or pause it first")
-        if task_id in self.checking:
-            raise TaskError("checks are running; wait for them to finish")
+        if task_id in self.busy:
+            raise TaskError("checks or a rollback are running; wait for them to finish")
         files = await self._bind_attachments(task_id, attachments)
         if not task["input"]:
             await self.repo.update_task(task_id, {"input": text or ", ".join(f"[{a.name}]" for a in files)})
@@ -376,7 +378,7 @@ class Orchestrator:
 
     async def resume(self, task_id: str) -> dict[str, Any]:
         task = await self._task(task_id)
-        if task_id in self.runners:
+        if task_id in self.runners or task_id in self.busy:
             raise TaskError("task is already running")
         if task["status"] not in ("PAUSED", "FAILED_RECOVERABLE"):
             raise TaskError(f"cannot resume a task in status {task['status']}")
@@ -582,6 +584,60 @@ class Orchestrator:
         await self.repo.audit(self.workspace_id, "user", "project.revert", {"task_id": task_id, "path": path})
         await self._commit_turn(task_id, f"mensarium: revert {path}"[:120], {"kind": "revert", "path": path})
 
+    async def undo(self, task_id: str, tool_call_id: str) -> dict[str, Any]:
+        """Roll one tool call back on its device from the slot the client saved before running it."""
+        task = await self._task(task_id)
+        if task_id in self.runners or task_id in self.busy:
+            raise TaskError("the agent is working; wait for it to finish or pause it first")
+        tc = await self.repo.get_tool_call(tool_call_id)
+        if not tc or tc["task_id"] != task_id:
+            raise TaskError("tool call not found")
+        if tc.get("undo") != "ready":
+            raise TaskError("this action cannot be rolled back")
+        hello = self.hub.hello(task["target_id"])
+        if hello is None:
+            raise TaskError("the device is offline")
+        self.busy.add(task_id)
+        try:
+            return await self._undo(task, tc, hello)
+        finally:
+            self.busy.discard(task_id)
+
+    async def _undo(self, task: dict[str, Any], tc: dict[str, Any], hello: Any) -> dict[str, Any]:
+        task_id, tool_call_id = task["id"], str(tc["id"])
+        request = ExecutionRequest(
+            request_id=new_id("req"),
+            trace_id=task["trace_id"],
+            workspace_id=self.workspace_id,
+            task_id=task_id,
+            target_id=task["target_id"],
+            tool_call_id=tool_call_id,
+            issued_at=now_iso(),
+            expires_at=iso_in(self.cfg.execution.request_ttl_s),
+            nonce=token_secrets.token_hex(32),
+            policy_snapshot_hash=policy_snapshot_hash(hello.policy, hello.capabilities.tools),
+            tool="undo.apply",
+            arguments={"task_id": task_id, "tool_call_id": tool_call_id},
+            approval_ref=None,
+            mode="ask",
+            workdir=None,
+            secrets={},
+        )
+        try:
+            result = await self.hub.execute(request, UNDO_TIMEOUT_S)
+        except TargetUnavailable as e:
+            raise TaskError(str(e)) from e
+        if result.status != "succeeded":
+            raise TaskError(result.error or result.result.stderr or "rollback failed")
+        output = result.result.stdout
+        await self.repo.update_tool_call(tool_call_id, {"undo": "done"})
+        await self.bus.emit(task_id, "tool_call.undone", {"tool_call_id": tool_call_id, "tool": tc["tool_name"], "output": output})
+        await self.repo.audit(self.workspace_id, "user", "tool_call.undone", {"task_id": task_id, "tool_call_id": tool_call_id, "tool": tc["tool_name"]})
+        note = UNDONE_NOTE.format(tool=tc["tool_name"], display=tc.get("display") or "", output=output[:2000])
+        await self.repo.add_step(task_id, "user", {"input": {"text": note, "harness": True}})
+        await self._commit_turn(task_id, f"mensarium: undo {tc['tool_name']}"[:120], {"kind": "undo", "tool_call_id": tool_call_id})
+        return {"tool_call_id": tool_call_id, "output": output}
+
     async def run_checks(self, task: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
         """Run the project's checks on the chat's device and keep the receipt on the task; `ok` is None when they could not run."""
         assert self.projects
@@ -602,17 +658,17 @@ class Orchestrator:
 
     async def check_now(self, task_id: str) -> dict[str, Any]:
         task = await self._task(task_id)
-        if task_id in self.runners or task_id in self.checking:
+        if task_id in self.runners or task_id in self.busy:
             raise TaskError("the agent is working; wait for it to finish or pause it first")
         project = await self._project_of(task)
         if not project or not parse_checks(project.get("checks")):
             raise TaskError("this project has no checks configured")
-        self.checking.add(task_id)
+        self.busy.add(task_id)
         try:
             await self._commit_turn(task_id)
             return await self.run_checks(await self._task(task_id), project)
         finally:
-            self.checking.discard(task_id)
+            self.busy.discard(task_id)
 
     @staticmethod
     def checks_report(receipt: dict[str, Any]) -> str:
@@ -1195,7 +1251,7 @@ class Orchestrator:
             half = OBSERVATION_LIMIT // 2
             observation = observation[:half] + "\n...[output truncated]...\n" + observation[-half:]
             truncated = True
-        await self.repo.update_tool_call(tc_id, {"status": result.status, "result_ref": artifact_id or image_id})
+        await self.repo.update_tool_call(tc_id, {"status": result.status, "result_ref": artifact_id or image_id, **({"undo": "ready"} if result.result.undo else {})})
         await self._observe(
             task_id,
             call,
@@ -1215,6 +1271,7 @@ class Orchestrator:
                 "truncated": truncated,
                 "artifact_id": artifact_id,
                 "image_artifact_id": image_id,
+                "undo": result.result.undo,
             },
         )
         await self.repo.audit(

@@ -471,6 +471,9 @@ a.crumb-device:hover { color: var(--text); text-decoration: none; }
 .tool.open .tool-out { display: block; }
 .tool-note { display: none; padding: 0 14px 10px; font-size: 12px; color: var(--muted); background: var(--frame); }
 .tool.open .tool-note { display: block; }
+.tool.undone .tool-head { opacity: .6; }
+.tool-undo { margin-top: 6px; }
+.tool-state.muted { color: var(--muted); }
 
 .check-card { border: 1px solid var(--line); border-radius: var(--r); background: rgba(var(--card), 0.7); padding: 10px 12px; margin: 6px 0; }
 .check-card.ok { border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); }

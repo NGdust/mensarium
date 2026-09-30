@@ -62,6 +62,7 @@ class ClientPaths:
         self.gateway_token = self.secrets / "gateway-token"
         self.gateway_link = self.secrets / "gateway-link"
         self.backups = self.root / "backups"
+        self.undo = self.root / "undo"
 
     def ensure(self) -> None:
         ensure_private_dir(self.root)

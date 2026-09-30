@@ -24,7 +24,7 @@ class PlanLifecycleTests(unittest.IsolatedAsyncioTestCase):
                                      "plan": self.plan, "trace_id": "trace", "created_at": now_iso(), "updated_at": now_iso()})
         self.core = Orchestrator.__new__(Orchestrator)
         self.core.repo, self.core.bus = self.repo, EventBus(self.repo)
-        self.core.runners, self.core.checking, self.core._start = {}, set(), Mock()
+        self.core.runners, self.core.busy, self.core._start = {}, set(), Mock()
 
     async def test_new_request_clears_saved_plan_before_start(self):
         result = await self.core.post_message("chat", "A different request")

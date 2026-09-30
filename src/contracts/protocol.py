@@ -196,6 +196,7 @@ class ToolOutput(BaseModel):
     truncated: bool = False
     artifacts: list[str] = []
     images: list[dict[str, Any]] = Field(default_factory=list, description="Screenshots: {mime, data (base64), width, height}")
+    undo: bool = False
 
 
 class ExecutionResult(BaseModel):

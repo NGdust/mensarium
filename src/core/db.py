@@ -4,7 +4,7 @@ from typing import Any
 
 import aiosqlite
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 COLUMN_MIGRATIONS = [
     ("memory_notes", "topic_id", "TEXT"),
@@ -35,6 +35,7 @@ COLUMN_MIGRATIONS = [
     ("project_deliveries", "branch", "TEXT"),
     ("projects", "checks", "TEXT"),
     ("tasks", "checks", "TEXT"),
+    ("tool_calls", "undo", "TEXT"),
 ]
 
 SCHEMA = """

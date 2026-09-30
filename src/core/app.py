@@ -1520,6 +1520,13 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
             raise task_error(e) from e
         return {"ok": True}
 
+    @app.post("/v1/tasks/{task_id}/tool_calls/{tc_id}/undo")
+    async def undo_tool_call(task_id: str, tc_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return await c.orchestrator.undo(task_id, tc_id)
+        except TaskError as e:
+            raise task_error(e) from e
+
     @app.post("/v1/tasks/{task_id}/checks")
     async def run_task_checks(task_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
         try:

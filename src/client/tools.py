@@ -1,6 +1,7 @@
 import asyncio
 import difflib
 import fnmatch
+import logging
 import os
 import platform
 import re
@@ -8,6 +9,7 @@ import shlex
 import shutil
 import signal
 import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -23,6 +25,7 @@ from mensarium import __version__
 from mensarium.client import desktop
 from mensarium.client.config import ClientConfig
 from mensarium.client.desktop import DesktopError
+from mensarium.client.undo import UndoError, UndoSlot, apply_undo
 from mensarium.contracts.protocol import AccessMode, ToolOutput
 from mensarium.contracts.tools import (
     AppOpenArgs,
@@ -49,9 +52,10 @@ from mensarium.contracts.tools import (
     ShellBashArgs,
     ShellExecArgs,
     SystemVolumeArgs,
+    UndoApplyArgs,
 )
 from mensarium.shared.gitflags import GIT_SAFE_FLAGS
-from mensarium.shared.paths import ensure_private_dir, projects_dir
+from mensarium.shared.paths import client_dir, ensure_private_dir, projects_dir
 from mensarium.shared.redaction import GIT_DIRS, SECRET_DIRS, SECRET_FILE_PATTERNS, is_secret_path, redact
 from mensarium.shared.secret_refs import mask_secrets
 from mensarium.tool_runtime.mcp import McpError
@@ -62,13 +66,28 @@ if TYPE_CHECKING:
 MAX_READ_BYTES = 2_000_000
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".ruff_cache", ".pytest_cache", "dist", "build", ".next", ".idea"}  # fmt: skip
 SECRET_ENV = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|PRIVATE|CREDENTIAL|_KEY$)", re.I)
+log = logging.getLogger(__name__)
+
 _FULL_ACCESS: ContextVar[bool] = ContextVar("mensarium_full_access", default=False)
 _WORKDIR: ContextVar[Path | None] = ContextVar("mensarium_workdir", default=None)
 _SECRETS: ContextVar[dict[str, str] | None] = ContextVar("mensarium_secrets", default=None)
+_UNDO: ContextVar[UndoSlot | None] = ContextVar("mensarium_undo", default=None)
 
 
 class ToolError(Exception):
     pass
+
+
+def _remember(action: Callable[[UndoSlot], None]) -> None:
+    """Save the pre-state for the undo slot of this call; a slot that cannot be written only makes the call non-undoable."""
+    slot = _UNDO.get()
+    if slot is None or slot.disabled:
+        return
+    try:
+        action(slot)
+    except (OSError, UndoError, subprocess.SubprocessError) as e:
+        log.warning("undo slot not saved", extra={"tool": slot.tool, "error": str(e)})
+        slot.disabled = True
 
 
 class Executor:
@@ -79,6 +98,7 @@ class Executor:
         if not any(self.projects_root == r or self.projects_root.is_relative_to(r) for r in self.roots):
             self.roots.append(self.projects_root)
         self.mcp: McpHost | None = None
+        self.undo_root = client_dir() / "undo"
 
     def _path(self, value: str) -> Path:
         p = Path(value).expanduser()
@@ -120,12 +140,14 @@ class Executor:
         *,
         mode: AccessMode = "ask",
         secrets: dict[str, str] | None = None,
+        undo: UndoSlot | None = None,
     ) -> ToolOutput:
         if mode == "full" and not self.cfg.allow_full_access:
             raise ToolError("full access is disabled on this device")
         access_token = _FULL_ACCESS.set(mode == "full")
         token = _WORKDIR.set(workdir)
         secrets_token = _SECRETS.set(secrets or {})
+        undo_token = _UNDO.set(undo)
         try:
             handler = {
                 "files.list": self.files_list,
@@ -156,24 +178,34 @@ class Executor:
                 "app.open": self.app_open,
                 "system.volume": self.system_volume,
                 "mcp.call": self.mcp_call,
+                "undo.apply": self.undo_apply,
             }.get(tool)
             if handler is None:
                 raise ToolError(f"unsupported tool {tool!r}")
             try:
                 output = await handler(args)
             except (DesktopError, ToolError) as e:
+                if undo:
+                    undo.discard()
                 raise ToolError(mask_secrets(str(e), secrets or {})) from None
             except (ExecTimeout, asyncio.CancelledError):
+                if undo:
+                    undo.commit()  # the command may have changed things halfway; keep what we saved
                 raise
             except Exception as e:
+                if undo:
+                    undo.discard()
                 if not secrets:
                     raise
                 raise ToolError(f"{type(e).__name__}: details hidden because the request carries secrets") from None
+            if undo:
+                output.undo = undo.commit()
             if secrets:
                 output.stdout = mask_secrets(output.stdout, secrets)
                 output.stderr = mask_secrets(output.stderr, secrets)
             return output
         finally:
+            _UNDO.reset(undo_token)
             _SECRETS.reset(secrets_token)
             _WORKDIR.reset(token)
             _FULL_ACCESS.reset(access_token)
@@ -391,6 +423,7 @@ class Executor:
         path = self._writable(a.path)
         if path.is_dir():
             raise ToolError(f"{a.path} is a directory")
+        _remember(lambda slot: slot.file(path))
         before = None
         if path.exists():
             before = await asyncio.to_thread(self._read_text, path)
@@ -417,6 +450,7 @@ class Executor:
         if count > 1 and not a.replace_all:
             raise ToolError(f"`old` appears {count} times; include more surrounding lines to make it unique, or set replace_all")
         updated = text.replace(a.old, a.new) if a.replace_all else text.replace(a.old, a.new, 1)
+        _remember(lambda slot: slot.file(path))
         await asyncio.to_thread(self._write_atomic, path, updated)
         diff = "".join(difflib.unified_diff(text.splitlines(True), updated.splitlines(True), str(path), str(path), n=2))
         out, truncated = self._limit(self._redact(diff))
@@ -428,6 +462,7 @@ class Executor:
         if path.exists() and not path.is_dir():
             raise ToolError(f"{a.path} exists and is not a directory")
         existed = path.is_dir()
+        _remember(lambda slot: slot.dir(path))
         path.mkdir(parents=True, exist_ok=True)
         return ToolOutput(exit_code=0, stdout=f"{'already exists' if existed else 'created'} {path}")
 
@@ -448,6 +483,7 @@ class Executor:
     async def files_move(self, raw: dict[str, Any]) -> ToolOutput:
         a = FilesMoveArgs.model_validate(raw)
         src, dst = self._pair(a.source, a.destination, a.overwrite)
+        _remember(lambda slot: slot.move(src, dst))
         dst.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(shutil.move, str(src), str(dst))
         return ToolOutput(exit_code=0, stdout=f"moved {src} -> {dst}")
@@ -455,6 +491,7 @@ class Executor:
     async def files_copy(self, raw: dict[str, Any]) -> ToolOutput:
         a = FilesCopyArgs.model_validate(raw)
         src, dst = self._pair(a.source, a.destination, a.overwrite)
+        _remember(lambda slot: slot.copy(src, dst))
         dst.parent.mkdir(parents=True, exist_ok=True)
         if src.is_dir():
             await asyncio.to_thread(shutil.copytree, src, dst, dirs_exist_ok=a.overwrite, ignore=None if _FULL_ACCESS.get() else shutil.ignore_patterns(*SECRET_FILE_PATTERNS, *SECRET_DIRS))
@@ -465,6 +502,7 @@ class Executor:
     async def files_delete(self, raw: dict[str, Any]) -> ToolOutput:
         a = FilesDeleteArgs.model_validate(raw)
         path = self._writable(a.path)
+        _remember(lambda slot: slot.dir(path) if path.is_dir() and not path.is_symlink() else slot.file(path))
         if path.is_symlink() or path.is_file():
             path.unlink()
         elif path.is_dir():
@@ -594,10 +632,20 @@ class Executor:
         if not shell:
             raise ToolError("no bash or sh on this device")
         timeout = min(a.timeout_s, self.cfg.limits.max_exec_seconds)
+        await asyncio.to_thread(_remember, lambda slot: slot.tree(cwd))
         code, out, err = await _run([shell, "-c", a.script], cwd=cwd, timeout=timeout, stdin=a.stdin, env=self._env())
+        await asyncio.to_thread(_remember, lambda slot: slot.after())
         out, t1 = self._limit(self._redact(out))
         err, t2 = self._limit(self._redact(err))
         return ToolOutput(exit_code=code, stdout=out, stderr=err, truncated=t1 or t2)
+
+    async def undo_apply(self, raw: dict[str, Any]) -> ToolOutput:
+        a = UndoApplyArgs.model_validate(raw)
+        try:
+            restored = await asyncio.to_thread(apply_undo, self.undo_root, a.task_id, a.tool_call_id)
+        except (UndoError, OSError, subprocess.SubprocessError) as e:
+            raise ToolError(f"rollback failed: {e}") from None
+        return ToolOutput(exit_code=0, stdout="restored:\n" + "\n".join(restored))
 
     # ---- desktop -----------------------------------------------------------------
 
@@ -649,7 +697,9 @@ class Executor:
         if program is None and "/" not in argv[0]:
             raise ToolError(f"program {argv[0]!r} not found on PATH")
         timeout = min(a.timeout_s, self.cfg.limits.max_exec_seconds)
+        await asyncio.to_thread(_remember, lambda slot: slot.tree(cwd))
         code, out, err = await _run([program or argv[0], *argv[1:]], cwd=cwd, timeout=timeout, stdin=a.stdin, env=self._env())
+        await asyncio.to_thread(_remember, lambda slot: slot.after())
         out, t1 = self._limit(self._redact(out))
         err, t2 = self._limit(self._redact(err))
         return ToolOutput(exit_code=code, stdout=out, stderr=err, truncated=t1 or t2)
