@@ -17,6 +17,7 @@ from mensarium.contracts.projects import (
     ProjectOpStatus,
     ProjectPatch,
     ProjectSnapshot,
+    parse_checks,
 )
 from mensarium.core.client_hub import ClientHub, TargetUnavailable
 from mensarium.core.mirror import Mirror, MirrorError
@@ -29,6 +30,7 @@ log = logging.getLogger(__name__)
 
 OP_TIMEOUT_S = 600
 BROWSE_TIMEOUT_S = 30
+CHECK_TIMEOUT_S = 600
 DIFF_TIMEOUT_S = 60
 
 
@@ -76,7 +78,7 @@ class ProjectManager:
         keys = (
             "id", "name", "kind", "source_target_id", "source_name", "source_path", "default_executor_id", "default_base",
             "git_url", "include_remotes", "fetch_origin", "size_limit_mb", "file_limit_mb", "head_sha", "snapshot_sha",
-            "default_branch", "main_branch", "last_sync_at", "size_bytes", "status", "error", "created_at", "updated_at", "chats", "instructions",
+            "default_branch", "main_branch", "last_sync_at", "size_bytes", "status", "error", "created_at", "updated_at", "chats", "instructions", "checks",
         )
         return {k: p.get(k) for k in keys} | {
             "skipped": p.get("skipped") or [],
@@ -389,6 +391,8 @@ class ProjectManager:
         values = {k: (int(v) if isinstance(v, bool) else v) for k, v in body.model_dump(exclude_none=True).items()}
         if body.instructions is not None:
             values["instructions"] = body.instructions.strip() or None
+        if body.checks is not None:
+            values["checks"] = body.checks.strip() or None
         if body.default_executor_id is not None:
             # A setting: the device may be off now, but it must be able to run project chats.
             target = await self.repo.get_target(body.default_executor_id)
@@ -488,6 +492,14 @@ class ProjectManager:
         except ProjectError as e:
             return status, str(e)
         return status, None
+
+    async def check(self, project: dict[str, Any], task: dict[str, Any]) -> ProjectOpStatus:
+        """The project's check commands run on the chat's device, in its worktree or the project folder."""
+        target_id, commands = str(task["target_id"]), parse_checks(project.get("checks"))
+        if not self.can(target_id, "check"):
+            raise ProjectError("this device's client does not run checks; update it")
+        args = {"commands": commands, "inplace": not task.get("branch"), "source_path": project["source_path"], "git_url": project.get("git_url")}
+        return await self.op(target_id, str(project["id"]), str(task["id"]), "check", args, CHECK_TIMEOUT_S * len(commands) + 30)
 
     async def remove(self, project: dict[str, Any], task: dict[str, Any]) -> None:
         target_id, project_id, task_id = str(task["target_id"]), str(project["id"]), str(task["id"])

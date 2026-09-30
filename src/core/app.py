@@ -1381,7 +1381,7 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
     def task_view(t: dict[str, Any]) -> dict[str, Any]:
         keys = (
             "id", "profile_id", "target_id", "target_name", "input", "status", "status_reason", "result", "mode", "model", "provider", "parent_id", "label",
-            "automation_id", "project_id", "branch", "base_ref", "base_sha", "head_sha", "diff_stat",
+            "automation_id", "project_id", "branch", "base_ref", "base_sha", "head_sha", "diff_stat", "checks",
         )
         return {k: t.get(k) for k in keys} | {"plan": t.get("plan") or [], "created_at": t["created_at"], "updated_at": t["updated_at"]}
 
@@ -1519,6 +1519,13 @@ def create_app(paths: CorePaths | None = None) -> FastAPI:
         except TaskError as e:
             raise task_error(e) from e
         return {"ok": True}
+
+    @app.post("/v1/tasks/{task_id}/checks")
+    async def run_task_checks(task_id: str, c: Core = Depends(auth)) -> dict[str, Any]:
+        try:
+            return await c.orchestrator.check_now(task_id)
+        except TaskError as e:
+            raise task_error(e) from e
 
     @app.post("/v1/tasks/{task_id}/mode")
     async def set_mode(task_id: str, body: ModeBody, c: Core = Depends(auth)) -> dict[str, Any]:

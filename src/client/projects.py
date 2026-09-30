@@ -46,6 +46,8 @@ GIT_ENV = {
 SECRET_GLOBS = [f"**/{pat}" for pat in SECRET_EXCLUDES] + [f"**/{d}/**" for d in SECRET_DIRS]
 SECRET_PATHSPECS = [f":(exclude,glob){g}" for g in SECRET_GLOBS]
 GIT_TIMEOUT = 600
+CHECK_TIMEOUT = 600
+CHECK_TAIL = 4000
 DIFF_FILES = 2000
 PATCH_BYTES = 400_000
 SHA_RE = re.compile(r"[0-9a-f]{7,64}")
@@ -357,8 +359,9 @@ class ProjectHost:
         handler = {
             "browse": self._browse, "checkout": self._checkout, "commit": self._commit, "status": self._status, "remove": self._remove,
             "branches": self._branches, "diff": self._diff, "docs": self._docs, "revert": self._revert, "fetch": self._fetch,
+            "check": self._check,
         }[req.op]
-        lock = contextlib.nullcontext() if req.op in ("browse", "branches", "diff", "docs") else self._lock(req.project_id)
+        lock = contextlib.nullcontext() if req.op in ("browse", "branches", "diff", "docs", "check") else self._lock(req.project_id)
         self.incoming.pop(req.request_id, None)
         self._expire()
         self.active.add(req.request_id)
@@ -626,6 +629,31 @@ class ProjectHost:
         await self._git("add", "-A", "--", spec, cwd=wt)
         await self._git("restore", f"--source={last or start}", "--staged", "--worktree", "--", spec, cwd=wt)
         return {"head_sha": (await self._git("rev-parse", "HEAD", cwd=wt)).strip()}
+
+    # The project's check commands, run by the Core after the agent's final answer: user-configured, so no approval,
+    # but only where the device allows shell at all.
+    async def _check(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
+        if not self.executor.cfg.allow_shell:
+            raise ToolError("shell is off on this device; enable it to run checks")
+        cwd = self._source(str(a["source_path"]), project_id, a.get("git_url")) if a.get("inplace") else self._worktree(project_id, task_id)
+        if not cwd.is_dir():
+            raise ToolError("the worktree for this chat is missing on this device")
+        env = self.executor._env()
+        checks: list[dict[str, Any]] = []
+        failed = False
+        for command in [str(c) for c in a["commands"]]:
+            if failed:
+                checks.append({"command": command, "skipped": True})
+                continue
+            started = time.monotonic()
+            try:
+                code, out, err = await _run(["/bin/sh", "-c", command], cwd=cwd, timeout=CHECK_TIMEOUT, env=env)
+                output = self.executor._redact(out + err)
+            except ExecTimeout:
+                code, output = -1, f"timed out after {CHECK_TIMEOUT} s"
+            checks.append({"command": command, "code": code, "output": output[-CHECK_TAIL:], "duration_ms": int((time.monotonic() - started) * 1000)})
+            failed = code != 0
+        return {"data": {"ok": not failed, "checks": checks}}
 
     async def _remove(self, project_id: str, task_id: str, a: dict[str, Any], send: Send | None, request_id: str) -> dict[str, Any]:
         executor = str(a.get("role") or "source") == "executor"

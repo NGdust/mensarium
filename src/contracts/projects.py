@@ -6,9 +6,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from mensarium.shared.redaction import SECRET_FILE_PATTERNS
 
 ProjectKind = Literal["repo", "folder"]
-ProjectOpName = Literal["browse", "checkout", "commit", "status", "remove", "branches", "diff", "docs", "revert", "fetch"]
+ProjectOpName = Literal["browse", "checkout", "commit", "status", "remove", "branches", "diff", "docs", "revert", "fetch", "check"]
 # Ops a client lists in capabilities.project_ops; a client without them rejects the frame and never answers.
-EXTRA_OPS: tuple[ProjectOpName, ...] = ("branches", "diff", "docs", "revert", "fetch")
+EXTRA_OPS: tuple[ProjectOpName, ...] = ("branches", "diff", "docs", "revert", "fetch", "check")
 # Also listed in capabilities.project_ops: "inplace" means the client takes a workdir anywhere in its allowed roots,
 # so a repo chat without a workspace can work right in the project folder; "bundle" means it ships git bundles
 # with its snapshot and commit answers and takes them back with the fetch op (phase 2 mirror on the Core);
@@ -28,6 +28,14 @@ KIND_LABELS = {"repo": "git repository", "folder": "folder"}
 # Instruction files other agents keep at a project root; shown in the project info, never put into prompts.
 DOC_FILES = ("AGENTS.md", "CLAUDE.md")
 INSTRUCTIONS_LIMIT = 20_000
+CHECKS_LIMIT = 2000
+CHECKS_MAX = 10
+
+
+def parse_checks(text: str | None) -> list[str]:
+    """Check commands from the project setting: one per line, blank and commented lines skipped."""
+    lines = (line.strip() for line in (text or "").splitlines())
+    return [line for line in lines if line and not line.startswith("#")]
 # Only network transports: local paths, file:// and ext:: would let a clone reach into the device.
 # A conservative subset of git-check-ref-format; the device checks the name with git itself as well.
 BRANCH_RE = re.compile(r"(?![-/.])(?!.*\.\.)(?!.*//)(?!.*/\.)(?!.*@\{)(?!.*\.lock(/|$))[A-Za-z0-9._/+-]+(?<![./])")
@@ -131,6 +139,14 @@ class ProjectPatch(BaseModel):
     file_limit_mb: int | None = Field(None, ge=1, le=2048)
     instructions: str | None = Field(None, max_length=INSTRUCTIONS_LIMIT)
     default_executor_id: str | None = Field(None, max_length=100)
+    checks: str | None = Field(None, max_length=CHECKS_LIMIT)
+
+    @field_validator("checks")
+    @classmethod
+    def _check_count(cls, value: str | None) -> str | None:
+        if value is not None and len(parse_checks(value)) > CHECKS_MAX:
+            raise ValueError(f"at most {CHECKS_MAX} check commands")
+        return value
 
     @field_validator("default_base")
     @classmethod

@@ -76,6 +76,10 @@ FOLDER_BLOCK = (
     "Edit files in place inside the working copy. If the user later brings in a newer folder state and a binary "
     "file (documents, images) was changed on both sides, keep both versions (`<name> (device).<ext>`) and say so.\n"
 )
+CHECKS_NOTE = (
+    "- checks the harness runs when you answer with a final result: {checks}; a failed check comes back to you "
+    "with its output, fix it and finish again\n"
+)
 REMOTE_NOTE = (
     "The source device is not this machine: your copy comes from the device snapshot{taken}. Changes the "
     "user made on the device since then are not here; your {work} the device when it is online.\n"
@@ -190,13 +194,15 @@ def build_system_prompt(
     if automation_state is not None:
         prompt += STATE_BLOCK.format(state=automation_state if automation_state not in ("", "{}") else "(none yet)")
     if project:
-        project = {"executor": "", "remote": False, "snapshot_at": "", **project}
+        project = {"executor": "", "remote": False, "snapshot_at": "", "checks": "", **project}
         block = FOLDER_BLOCK if project["kind"] == "folder" else INPLACE_BLOCK if project.get("inplace") else PROJECT_BLOCK
         if unrestricted:
             block = block.replace("work only here;", "default directory;")
             block = block.replace("Do not switch branches, do not touch other ", "Keep project edits in this copy by default. Do not switch branches or touch other ")
             block = block.replace("say so plainly instead of installing toolchains.", "install dependencies or toolchains when needed to complete the user’s task.")
         prompt += block.format(**project)
+        if project["checks"]:
+            prompt += CHECKS_NOTE.format(checks=project["checks"])
         if project["remote"]:
             taken = f" taken {project['snapshot_at']}" if project["snapshot_at"] else ""
             prompt += REMOTE_NOTE.format(taken=taken, work="changes reach" if project["kind"] == "folder" else "branch reaches")

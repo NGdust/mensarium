@@ -129,6 +129,22 @@ class ProjectOpsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(git(self.repo, "symbolic-ref", "--short", "HEAD"), "feature/login")
         self.assertIn("feat-x", git(self.repo, "branch", "--list", "feat-x"))
 
+    async def test_check_runs_commands_in_the_worktree_and_stops_at_the_first_failure(self) -> None:
+        await self.op("checkout", "task_chk", branch="mensarium/chk-1", start="default")
+        with patch.dict(os.environ, {"FAKE_API_KEY": "hunter2-fixture"}):
+            status = await self.op("check", "task_chk", commands=["echo hi && cat app.py && echo key=$FAKE_API_KEY", "exit 3", "echo never"])
+        self.assertEqual(status["state"], "ok", status["detail"])
+        checks = status["data"]["checks"]
+        self.assertFalse(status["data"]["ok"])
+        self.assertEqual([c["code"] for c in checks[:2]], [0, 3])
+        self.assertEqual(checks[0]["output"], "hi\nprint('hi')\nkey=\n")
+        self.assertTrue(checks[2]["skipped"])
+        cfg = self.host.executor.cfg.model_copy(update={"allow_shell": False})
+        status = (await ProjectHost(Executor(cfg)).op(ProjectOp(request_id="r", target_id="device", project_id="prj_1", task_id="task_chk", op="check",
+                                                            args={**self.args, "commands": ["true"]}, issued_at="", expires_at="", nonce=""))).model_dump()
+        self.assertEqual(status["state"], "error")
+        self.assertIn("shell", status["detail"])
+
     async def test_checkout_refuses_bad_names_and_missing_bases(self) -> None:
         for branch, start in (("bad..name", "default"), ("-x", "default"), ("mensarium/c-1", "nope")):
             with self.subTest(branch=branch, start=start):

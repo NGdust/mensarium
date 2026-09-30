@@ -1635,7 +1635,7 @@ async function viewChat(taskId) {
     setStatus(t.status);
   };
   const btnDelete = h('button', { class: 'icon-btn', title: tr('Delete chat'), 'aria-label': tr('Delete chat'), onclick: () => deleteChat(task) }, icon('trash'));
-  const changes = task.project_id && task.branch && !task.parent_id ? changesPanel(taskId) : null;
+  const changes = task.project_id && task.branch && !task.parent_id ? changesPanel(taskId, task) : null;
   const inRepo = state.projects.find((p) => p.id === task.project_id)?.kind === 'repo';
   const branchPill = !inRepo ? null : task.branch
     ? h('span', { class: 'pill tag branch-pill', title: baseName(task.base_ref) ? `${task.branch} · ${tr('from {0}', task.base_ref)}` : task.branch }, icon('git'), h('span', {}, task.branch))
@@ -2018,6 +2018,9 @@ async function viewChat(taskId) {
       case 'task.final':
         a.result.replaceChildren(h('div', { class: 'agent-result-title' }, tr('Report')), h('div', { class: 'prose', html: markdown(p.text) }), ...(p.image_artifact_id ? [shot(p.image_artifact_id, 'msg-shot')] : []));
         break;
+      case 'task.check':
+        into(checkCard(p, task));
+        break;
       case 'task.error':
         anote('alert', p.message, 'error');
         break;
@@ -2084,12 +2087,17 @@ async function viewChat(taskId) {
         if (!past) plan.set(p.items || []);
         break;
       case 'task.project':
+        if (live && p.head_sha) task.head_sha = p.head_sha;
         if (live) changes?.later(true);
         if (p.kind === 'revert') note('refresh', tr('Changes to {0} reverted', p.path));
         else if (p.kind === 'checkout' && p.error) note('alert', tr('Could not prepare the working copy: {0}', reasonText(p.error)), 'error');
         else if (p.kind === 'checkout') note(KIND_ICON[project?.kind] || 'folder', project?.kind === 'repo' && p.branch ? [tr('Working copy ready'), p.branch, p.base && p.base !== 'snapshot' ? tr('from {0}', p.base) : null].filter(Boolean).join(' · ') : tr('Working copy ready'));
         else if (p.error != null) note('alert', tr('Could not save this turn: {0}', p.error || tr('error')), 'error');
         else if (p.changed) note('file', tp('{0} file changed|{0} files changed', p.changed));
+        break;
+      case 'task.check':
+        if (live && p.head_sha) task.head_sha = p.head_sha;
+        step(checkCard(p, task));
         break;
       case 'agent.spawned':
         stamp(ev);
@@ -4362,8 +4370,39 @@ const diffStat = (s) => (s?.files
   ? h('span', { class: 'change-stat', title: tp('{0} file|{0} files', s.files) }, h('span', { class: 'add' }, `+${s.added}`), h('span', { class: 'del' }, `−${s.deleted}`))
   : null);
 
+// The receipt from running a project's checks after the agent's final answer, shown as a card in the chat.
+const checkStatus = (c) => (c.ok === true ? [tr('Checks passed'), 'ok'] : c.ok === false ? [tr('Checks failed'), 'fail'] : [tr('Checks did not run: {0}', c.error || ''), 'warn']);
+
+function checkCard(p, task) {
+  const [text, cls] = checkStatus(p);
+  const marker = cls === 'ok' ? '✅' : cls === 'fail' ? '❌' : '⚠';
+  const row = (c) => {
+    const codeCls = c.skipped ? 'skip' : c.code === 0 ? 'ok' : 'fail';
+    const codeText = c.skipped ? tr('skipped') : tr('exit {0}', c.code);
+    const out = h('pre', { class: 'check-output hidden' }, c.output || '');
+    const toggle = !c.skipped && c.output ? h('button', { class: 'btn btn-sm', onclick: () => {
+      out.classList.toggle('hidden');
+      toggle.textContent = out.classList.contains('hidden') ? tr('Show output') : tr('Hide');
+    } }, tr('Show output')) : null;
+    return h('div', { class: 'check-row' },
+      h('span', { class: `check-code ${codeCls}` }, codeText),
+      h('code', { class: 'check-cmd' }, c.command),
+      toggle,
+      !c.skipped && c.output ? out : null);
+  };
+  const stale = task?.head_sha && p.head_sha && task.head_sha !== p.head_sha;
+  return h('div', { class: `check-card ${cls}` },
+    h('div', { class: 'check-head' },
+      h('span', { class: 'check-marker' }, marker),
+      h('span', {}, text),
+      p.head_sha ? h('code', { class: 'check-sha' }, p.head_sha.slice(0, 7)) : null,
+      h('span', { class: 'check-time' }, relTime(p.ran_at))),
+    h('div', { class: 'check-rows' }, (p.checks || []).map(row)),
+    stale ? h('div', { class: 'check-stale' }, tr('outdated: the code changed after this run')) : null);
+}
+
 // The files a project chat changed since it started, in a side panel behind a topbar button; each opens its diff.
-function changesPanel(taskId) {
+function changesPanel(taskId, task) {
   // On a phone the panel covers the chat, so it opens only by hand there.
   let open = localStorageGet('changesOpen') === '1' && matchMedia('(min-width: 861px)').matches;
   let data = null;
@@ -4376,8 +4415,15 @@ function changesPanel(taskId) {
   const btn = h('button', { class: 'icon-btn changes-btn', title: tr('Changes'), 'aria-label': tr('Changes'), onclick: () => toggle() }, icon('panelRight'), count);
   const sum = h('div', { class: 'changes-sum' });
   const list = h('div', { class: 'changes-list' });
+  const hasChecks = !!state.projects.find((p) => p.id === task.project_id)?.checks;
+  const checkBtn = h('button', { class: 'btn btn-sm', onclick: async () => {
+    checkBtn.disabled = true;
+    try { await post(`/v1/tasks/${taskId}/checks`); } catch (err) { fail(err); }
+    checkBtn.disabled = false;
+  } }, icon('refresh'), tr('Run checks'));
   const el = h('aside', { class: 'changes', 'aria-label': tr('Changes') },
     h('div', { class: 'changes-head' }, h('h2', {}, tr('Changes')),
+      hasChecks ? checkBtn : null,
       h('button', { class: 'icon-btn', title: tr('Refresh'), 'aria-label': tr('Refresh'), onclick: () => load() }, icon('refresh')),
       h('button', { class: 'icon-btn', title: tr('Close'), 'aria-label': tr('Close'), onclick: () => toggle(false) }, icon('x'))),
     sum, list);
@@ -4861,6 +4907,27 @@ async function viewProject(id) {
       sync();
     });
     sync();
+    const checksLimit = 2000;
+    const checksText = h('textarea', { class: 'market-yaml project-instructions', rows: 3, maxlength: checksLimit, spellcheck: 'false', 'aria-label': tr('Checks'),
+      placeholder: 'make test' });
+    checksText.value = p.checks || '';
+    const checksCount = h('span', { class: 'row-desc' });
+    const checksSave = h('button', { class: 'btn btn-sm btn-primary', disabled: true }, tr('Save'));
+    const checksSync = () => {
+      checksCount.textContent = tr('{0} / {1} characters', checksText.value.length.toLocaleString(locale), checksLimit.toLocaleString(locale));
+      checksSave.disabled = checksText.value.trim() === (p.checks || '');
+    };
+    checksText.addEventListener('input', checksSync);
+    checksSave.addEventListener('click', async () => {
+      checksSave.disabled = true;
+      try {
+        show({ ...(await api(`/v1/projects/${id}`, { method: 'PUT', body: JSON.stringify({ checks: checksText.value }) })), chats: p.chats });
+        checksText.value = p.checks || '';
+        toast(tr('Saved'));
+      } catch (err) { fail(err); }
+      checksSync();
+    });
+    checksSync();
     const docs = h('div', { class: 'rows' }, h('div', { class: 'empty rows' }, tr('Loading...')));
     const docRow = (f) => {
       const body = h('pre', { class: 'project-doc hidden' }, f.text, f.truncated ? '\n…' : '');
@@ -4908,6 +4975,11 @@ async function viewProject(id) {
         text,
         h('div', { class: 'info-foot' }, count, save)),
       h('div', { class: 'info-section' },
+        h('h3', {}, tr('Checks')),
+        h('p', { class: 'row-desc' }, tr('One shell command per line. They run in the chat\'s working copy after the agent\'s final answer; a failed check goes back to the agent. They run code from the working copy without confirmation, like CI.')),
+        checksText,
+        h('div', { class: 'info-foot' }, checksCount, checksSave)),
+      h('div', { class: 'info-section' },
         h('h3', {}, tr('Instruction files in the project')),
         h('p', { class: 'row-desc' }, tr('The agent reads them from its working copy on its own; they are shown here for reference.')),
         docs),
@@ -4928,7 +5000,7 @@ async function viewProject(id) {
         h('div', { class: 'row-title' }, h('span', { class: `dot ${cls}${live ? ' live' : ''}`, title: label }), taskTitle(t)),
         p.kind !== 'repo' ? null : t.branch ? h('div', { class: 'row-desc mono' }, [t.branch, baseName(t.base_ref) ? tr('from {0}', t.base_ref) : null].filter(Boolean).join(' · '))
           : h('div', { class: 'row-desc' }, tr('project folder, no workspace'))),
-      h('div', { class: 'row-value' }, diffStat(t.diff_stat), relTime(t.updated_at)));
+      h('div', { class: 'row-value' }, t.checks ? h('span', { class: 'check-badge', title: checkStatus(t.checks)[0] }, t.checks.ok ? '✅' : t.checks.ok === false ? '❌' : '⚠') : null, diffStat(t.diff_stat), relTime(t.updated_at)));
   };
 
   // The Core host comes first and is the default; a device without project support can still be the current choice.

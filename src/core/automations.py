@@ -109,6 +109,15 @@ def _after_run(
     return {"next_run_at": iso_in(BACKOFF_S[min(failures - 1, len(BACKOFF_S) - 1)])}
 
 
+def checks_line(receipt: dict[str, Any] | None) -> str:
+    if not receipt or receipt.get("ok") is None:
+        return ""
+    if receipt["ok"]:
+        return f"Checks ✅ on {str(receipt.get('head_sha') or '')[:7]}"
+    failed = next((c for c in receipt.get("checks") or [] if not c.get("skipped") and c.get("code")), None)
+    return f"Checks ❌: {failed['command']} (exit {failed['code']})" if failed else "Checks ❌"
+
+
 class AutomationManager:
     def __init__(
         self,
@@ -363,6 +372,8 @@ class AutomationManager:
             elif final["status"] == "SUCCEEDED":
                 text = (final.get("result") or "").strip()
                 status, result = "ok", (text if text and text != NO_REPLY else None)
+                if result and (line := checks_line(final.get("checks"))):
+                    result += f"\n\n{line}"
             elif final["status"] == "CANCELED":
                 status, error = "canceled", final.get("status_reason")
             else:

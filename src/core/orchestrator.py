@@ -24,7 +24,7 @@ from mensarium.agent_core.context import (
 from mensarium.agent_core.profile import AgentProfile
 from mensarium.contracts.automations import AutomationCreate, AutomationError, merge_state
 from mensarium.contracts.llm import ChatRequest
-from mensarium.contracts.projects import BRANCH_PREFIX, BRANCH_RE, ProjectError, branch_name
+from mensarium.contracts.projects import BRANCH_PREFIX, BRANCH_RE, ProjectError, branch_name, parse_checks
 from mensarium.contracts.protocol import (
     AccessMode,
     ExecutionRequest,
@@ -84,6 +84,11 @@ def _brief(arguments: dict[str, Any]) -> dict[str, Any]:
 
 OPTIONAL_DEVICE_TOOLS = {"shell.bash", "screen.capture", "screen.windows", "input.mouse", "input.type", "input.key", "app.open", "system.volume"}
 RECENT_IMAGES = 2
+CHECK_ROUNDS = 2
+CHECK_OUTPUT_CHARS = 3000
+CHECKS_FAILED = (
+    "The harness ran the project checks after your answer and they failed. Fix the problem, then answer with a final result again.\n\n{report}"
+)
 IMAGE_MIMES = {".jpg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp"}
 
 
@@ -169,6 +174,7 @@ class Orchestrator:
         self.artifacts_dir = artifacts_dir
         self.attachments = AttachmentStore(repo, artifacts_dir, workspace_id)
         self.runners: dict[str, asyncio.Task[None]] = {}
+        self.checking: set[str] = set()
         self.preparing: dict[str, asyncio.Task[None]] = {}
         self.controls: dict[str, str] = {}
         self.approval_waiters: dict[str, asyncio.Future[str]] = {}
@@ -320,6 +326,8 @@ class Orchestrator:
         task = await self._task(task_id)
         if task_id in self.runners or task["status"] not in TERMINAL_STATUSES:
             raise TaskError("task is running; wait for it to finish or pause it first")
+        if task_id in self.checking:
+            raise TaskError("checks are running; wait for them to finish")
         files = await self._bind_attachments(task_id, attachments)
         if not task["input"]:
             await self.repo.update_task(task_id, {"input": text or ", ".join(f"[{a.name}]" for a in files)})
@@ -574,6 +582,51 @@ class Orchestrator:
         await self.repo.audit(self.workspace_id, "user", "project.revert", {"task_id": task_id, "path": path})
         await self._commit_turn(task_id, f"mensarium: revert {path}"[:120], {"kind": "revert", "path": path})
 
+    async def run_checks(self, task: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
+        """Run the project's checks on the chat's device and keep the receipt on the task; `ok` is None when they could not run."""
+        assert self.projects
+        receipt: dict[str, Any] = {"ok": None, "head_sha": task.get("head_sha"), "ran_at": now_iso(), "checks": []}
+        try:
+            status = await self.projects.check(project, task)
+        except (TargetUnavailable, ProjectError) as e:
+            receipt["error"] = str(e)
+        else:
+            if status.state == "ok":
+                receipt |= {"ok": bool(status.data.get("ok")), "checks": list(status.data.get("checks") or [])}
+            else:
+                receipt["error"] = status.detail or "checks failed to run"
+        await self.repo.update_task(task["id"], {"checks": receipt})
+        await self.bus.emit(task["id"], "task.check", receipt)
+        await self.repo.audit(self.workspace_id, "core", "task.checks", {"task_id": task["id"], "ok": receipt["ok"], "head_sha": receipt["head_sha"]})
+        return receipt
+
+    async def check_now(self, task_id: str) -> dict[str, Any]:
+        task = await self._task(task_id)
+        if task_id in self.runners or task_id in self.checking:
+            raise TaskError("the agent is working; wait for it to finish or pause it first")
+        project = await self._project_of(task)
+        if not project or not parse_checks(project.get("checks")):
+            raise TaskError("this project has no checks configured")
+        self.checking.add(task_id)
+        try:
+            await self._commit_turn(task_id)
+            return await self.run_checks(await self._task(task_id), project)
+        finally:
+            self.checking.discard(task_id)
+
+    @staticmethod
+    def checks_report(receipt: dict[str, Any]) -> str:
+        lines = []
+        for c in receipt.get("checks") or []:
+            if c.get("skipped"):
+                lines.append(f"$ {c['command']}\n(skipped)")
+                continue
+            output = str(c.get("output") or "").strip()
+            if len(output) > CHECK_OUTPUT_CHARS:
+                output = "...\n" + output[-CHECK_OUTPUT_CHARS:]
+            lines.append(f"$ {c['command']}\nexit code: {c.get('code')}\n{output}")
+        return "\n\n".join(lines) or str(receipt.get("error") or "")
+
     async def _commit_turn(self, task_id: str, message: str | None = None, event: dict[str, Any] | None = None) -> None:
         task = await self.repo.get_task(task_id)
         if not task or not task.get("project_id") or task.get("parent_id") or not task.get("base_sha") or not self.projects:
@@ -584,7 +637,7 @@ class Orchestrator:
         if not project:
             return
         steps = await self.repo.list_steps(task_id)
-        last = next((s for s in reversed(steps) if s["kind"] == "user"), None)
+        last = next((s for s in reversed(steps) if s["kind"] == "user" and not (s.get("input") or {}).get("harness")), None)
         text = str(((last or {}).get("input") or {}).get("text") or "agent turn").strip().splitlines()[0][:72]
         try:
             status, unpublished = await self.projects.commit(project, task, message or f"mensarium: {text}")
@@ -618,6 +671,7 @@ class Orchestrator:
         llm_steps = 0
         memory_notes: str | None = None
         asked_again = False
+        check_rounds = 0
 
         while True:
             self._check_control(task_id)
@@ -652,6 +706,7 @@ class Orchestrator:
                     "branch": task.get("branch") or "",
                     "base": base,
                     "instructions": project.get("instructions") or "",
+                    "checks": ", ".join(f"`{c}`" for c in parse_checks(project.get("checks"))),
                     "inplace": not task.get("branch"),
                     "executor": str(target["name"]),
                     "remote": target["id"] != project["source_target_id"],
@@ -697,7 +752,7 @@ class Orchestrator:
                 memory,
                 outdated,
                 task.get("label"),
-                unattended=bool(task.get("automation_id")) and sum(s["kind"] == "user" for s in steps) == 1,
+                unattended=bool(task.get("automation_id")) and sum(s["kind"] == "user" and not (s.get("input") or {}).get("harness") for s in steps) == 1,
                 automation_state=await self._automation_state_text(task.get("automation_id")),
                 project=project_block,
                 mode=current["mode"] if full_access(target) == "allowed" else "ask",
@@ -795,6 +850,13 @@ class Orchestrator:
             asked_again = False
 
             if action.is_final:
+                if project and not task.get("parent_id") and parse_checks(project.get("checks")):
+                    await self._commit_turn(task_id)
+                    receipt = await self.run_checks(await self._task(task_id), project)
+                    if receipt["ok"] is False and check_rounds < CHECK_ROUNDS:
+                        check_rounds += 1
+                        await self.repo.add_step(task_id, "user", {"input": {"text": CHECKS_FAILED.format(report=self.checks_report(receipt)), "harness": True}})
+                        continue
                 text = action.text or "(empty answer)"
                 await self._set_status(task_id, "SUCCEEDED", "", result=text)
                 await self.bus.emit(task_id, "task.final", {"text": text, "image_artifact_id": _turn_image(steps)})

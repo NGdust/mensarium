@@ -4,7 +4,7 @@ from typing import Any
 
 import aiosqlite
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 COLUMN_MIGRATIONS = [
     ("memory_notes", "topic_id", "TEXT"),
@@ -33,6 +33,8 @@ COLUMN_MIGRATIONS = [
     ("tasks", "diff_stat", "TEXT"),
     ("projects", "main_branch", "TEXT"),
     ("project_deliveries", "branch", "TEXT"),
+    ("projects", "checks", "TEXT"),
+    ("tasks", "checks", "TEXT"),
 ]
 
 SCHEMA = """
@@ -143,7 +145,7 @@ CREATE INDEX IF NOT EXISTS project_deliveries_target ON project_deliveries(targe
 JSON_COLUMNS = {
     "settings", "capabilities", "policy", "body", "budget", "input", "output", "params", "usage",
     "arguments", "metadata", "payload", "disabled_tools", "manifest", "tags", "stats", "changes", "proposals", "config", "status", "plan",
-    "schedule", "skipped", "diff_stat", "state",
+    "schedule", "skipped", "diff_stat", "state", "checks",
 }
 
 
