@@ -1040,7 +1040,6 @@ const RU = {
   'No changes yet.': 'Изменений пока нет.',
   'Not committed': 'Не закоммичено',
   'Committed': 'Закоммичено',
-  'Everything is committed.': 'Всё закоммичено.',
   'and {0} more commit|and {0} more commits': 'и ещё {0} коммит|и ещё {0} коммита|и ещё {0} коммитов',
   'The file goes back to its last committed version.': 'Файл вернётся к последней закоммиченной версии.',
   'Only the first {0} files are shown.': 'Показаны только первые {0} файлов.',

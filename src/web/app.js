@@ -4332,8 +4332,8 @@ function changesPanel(taskId) {
     // Committed work leaves the list of changes and shows up below it, with the commits that took it.
     const done = data.committed;
     list.replaceChildren(
-      done ? h('div', { class: 'changes-group' }, tr('Not committed')) : '',
-      ...(files.length ? rows(data, 'pending') : [h('div', { class: 'changes-empty' }, done ? tr('Everything is committed.') : tr('No changes yet.'))]),
+      done && files.length ? h('div', { class: 'changes-group' }, tr('Not committed')) : '',
+      ...(files.length ? rows(data, 'pending') : done ? [] : [h('div', { class: 'changes-empty' }, tr('No changes yet.'))]),
       ...(done ? [
         h('div', { class: 'changes-group' }, tr('Committed')),
         ...done.commits.map((c) => h('div', { class: 'change-commit', title: c.subject }, h('code', {}, c.sha.slice(0, 7)), h('span', {}, c.subject))),
