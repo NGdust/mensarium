@@ -349,8 +349,6 @@ const TEMPLATES = [
   ['pulse', tr('What is slowing it down'), tr('The device is slow. Find the processes that load the CPU and memory the most and suggest what can be closed. Don\'t stop any process without asking.')],
   ['layers', tr('What takes up disk space'), tr('Find what takes up the most space in the home folder: the largest folders and files, caches, old downloads. Don\'t delete anything, just list them with sizes.')],
   ['link', tr('Open ports'), tr('Show which ports are listening on the device and which processes own them. Point out anything unexpected.')],
-  ['terminal', tr('Why tests are failing'), tr('Run the project\'s tests, find why they\'re failing, and explain it. Don\'t change files yet.')],
-  ['git', tr('What changed'), tr('Show what changed in the repository since the last commit, and briefly describe the changes.')],
 ];
 const TOOL_ICON = { 'files.list': 'folder', 'files.read': 'file', 'files.search': 'search', 'files.stat': 'file', 'files.find': 'search', 'files.write': 'file', 'files.edit': 'file', 'files.mkdir': 'folder', 'files.move': 'folder', 'files.copy': 'folder', 'files.delete': 'trash', 'git.status': 'git', 'git.diff': 'git', 'system.info': 'cpu', 'process.list': 'cpu', 'process.kill': 'ban', 'net.ports': 'link', 'net.http': 'globe', 'shell.exec': 'terminal', 'shell.bash': 'terminal', 'screen.capture': 'laptop', 'screen.windows': 'sidebar', 'input.mouse': 'cpu', 'input.type': 'cpu', 'input.key': 'cpu', 'app.open': 'bolt', 'system.volume': 'pulse', 'skills.read': 'book', 'memory.search': 'graph', 'memory.read': 'graph', 'memory.save': 'graph', 'web.search': 'globe', 'web.fetch': 'globe', 'gmail.search': 'send', 'gmail.read': 'send', 'gmail.send': 'send', 'drive.search': 'folder', 'drive.read': 'file', 'plan.update': 'list', 'agent.spawn': 'agents', 'agent.wait': 'agents' };
 // Plugin texts are either plain strings or {en, ru} maps.
@@ -1396,16 +1394,14 @@ async function viewNewChat(projectId = null) {
   const hint = h('p', { class: 'welcome-hint' });
   if (!state.system) { try { state.system = await get('/v1/system'); } catch { /* shown without version info */ } }
   const banner = h('div', { class: 'welcome-banner' }, outdatedBanner(selected) || '');
-  const hintText = (mode = modeCtl.effective()) => {
+  const hintText = () => {
     if (project && projectChatProblem(project)) return projectChatProblem(project);
     if (!project && !online.length) return tr('All devices are currently offline. Run mensarium client run on the machine you need.');
-    return mode === 'full'
-      ? tr('Full access: the agent runs commands and changes files on its own, without asking.')
-      : tr('The agent will explore the project on its own and ask permission before running commands or changing files.');
+    return '';
   };
   const modeCtl = modeSwitch(localStorageGet('mode') === 'full' ? 'full' : 'ask', {
     target: () => selected,
-    onPick: async (value) => { localStorageSet('mode', value); hint.textContent = hintText(value); },
+    onPick: async (value) => { localStorageSet('mode', value); },
   });
   hint.textContent = hintText();
   if (project) {
